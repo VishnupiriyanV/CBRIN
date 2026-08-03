@@ -42,73 +42,85 @@ export const Header: React.FC<HeaderProps> = ({
   }, [exportOpen]);
 
   return (
-    <header className="border-b border-hairline bg-canvas sticky top-0 z-40 backdrop-blur-xl bg-canvas/90">
-      <div className="max-w-5xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between">
+    <header className="border-b border-hairline/80 sticky top-0 z-40 backdrop-blur-xl bg-canvas/85">
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between gap-4">
         
-        {/* Brand Header */}
-        <div className="flex items-center gap-3">
+        {/* Left: Brand Header */}
+        <div className="flex items-center gap-3 shrink-0">
           <div className="flex items-center gap-2">
-            <Database className="w-4 h-4 text-accent-sunset" />
+            <div className="w-7 h-7 rounded-lg bg-canvas-soft border border-hairline flex items-center justify-center text-accent-sunset">
+              <Database className="w-4 h-4" />
+            </div>
             <h1 className="text-base font-semibold tracking-tight text-ink">Vault</h1>
           </div>
-          <span className="hidden sm:inline-block eyebrow-mono text-[9px] text-ink-mute px-2 py-0.5 rounded-full border border-hairline bg-canvas-soft">
-            CREATORBRAIN // LAYER 1
+          <span className="hidden lg:inline-block eyebrow-mono text-[9px] text-ink-mute px-2.5 py-0.5 rounded-full border border-hairline bg-canvas-soft">
+            CREATORBRAIN // L1
           </span>
         </div>
 
-        {/* Dynamic Indexing Status & Stats */}
-        <div className="flex items-center gap-2 sm:gap-3">
-          
-          {/* Indexing Health Indicator */}
-          {totalVideos > 0 && (
-            <div className="hidden md:flex items-center gap-1.5 px-2.5 py-0.5 rounded-full border border-hairline bg-canvas-soft text-[10px] font-mono">
-              {failedCount > 0 ? (
-                <div className="flex items-center gap-1 text-red-400">
-                  <AlertTriangle className="w-3 h-3 text-red-400" />
-                  <span>{failedCount} FAILED INGESTION{failedCount > 1 ? 'S' : ''}</span>
-                </div>
-              ) : isFullyIndexed ? (
-                <div className="flex items-center gap-1 text-emerald-400">
-                  <CheckCircle2 className="w-3 h-3 text-emerald-400" />
-                  <span>100% FULLY INDEXED</span>
-                </div>
-              ) : (
-                <div className="flex items-center gap-1 text-amber-400">
-                  <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
-                  <span>INDEXING IN PROGRESS</span>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Counters */}
-          <div className="hidden sm:flex items-center gap-3 text-[11px] font-mono text-ink-mute">
-            <div className="flex items-center gap-1">
-              <FileVideo className="w-3.5 h-3.5 text-ink-mute" />
-              <span>{totalVideos} MEDIA</span>
-            </div>
-            <div className="flex items-center gap-1">
-              <Sparkles className="w-3.5 h-3.5 text-accent-sunset" />
-              <span>{totalChunks} CHUNKS</span>
-            </div>
-            {/* Visual index coverage */}
-            {totalChunks > 0 && (
-              <div className="flex items-center gap-1" title={`${visualIndexedCount} of ${totalChunks} chunks have visual (CLIP) embeddings`}>
-                <Eye className="w-3.5 h-3.5 text-ink-mute" />
-                <span>{visualIndexedCount}/{totalChunks} VISUAL</span>
+        {/* Center: Consolidated Library Telemetry Capsule */}
+        {totalVideos > 0 && (
+          <div className="hidden md:flex items-center gap-3 px-3.5 py-1 rounded-full border border-hairline/80 bg-canvas-card/80 backdrop-blur-md text-[11px] font-mono shadow-sm">
+            {/* Status indicator */}
+            {failedCount > 0 ? (
+              <div className="flex items-center gap-1.5 text-red-400">
+                <AlertTriangle className="w-3 h-3 shrink-0" />
+                <span>{failedCount} FAILED</span>
+              </div>
+            ) : isFullyIndexed ? (
+              <div className="flex items-center gap-1.5 text-emerald-400">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                <span>INDEXED</span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1.5 text-amber-400">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
+                <span>INDEXING</span>
               </div>
             )}
-          </div>
 
-          {/* Highlights Button */}
+            <span className="text-hairline-bright">•</span>
+
+            {/* Media count */}
+            <div className="flex items-center gap-1 text-ink-mute">
+              <FileVideo className="w-3 h-3 text-ink-mute" />
+              <span>{totalVideos} MEDIA</span>
+            </div>
+
+            <span className="text-hairline-bright">•</span>
+
+            {/* Chunk count */}
+            <div className="flex items-center gap-1 text-ink-mute">
+              <Sparkles className="w-3 h-3 text-accent-sunset" />
+              <span>{totalChunks} CHUNKS</span>
+            </div>
+
+            {/* Visual coverage */}
+            {totalChunks > 0 && (
+              <>
+                <span className="text-hairline-bright">•</span>
+                <div className="flex items-center gap-1 text-ink-mute" title={`${visualIndexedCount} of ${totalChunks} chunks have visual (CLIP) embeddings`}>
+                  <Eye className="w-3 h-3 text-ink-mute" />
+                  <span>{visualIndexedCount}/{totalChunks} VISUAL</span>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Right: Actions */}
+        <div className="flex items-center gap-2 shrink-0">
+          
+          {/* Highlights / Bookmarks Button */}
           <button
             onClick={onOpenHighlights}
-            className="relative px-3 py-1.5 rounded-full border border-hairline bg-canvas-card hover:bg-canvas-soft hover:border-hairline-bright text-xs font-medium text-ink transition-all flex items-center gap-1.5"
+            className="relative p-2 sm:px-3 sm:py-1.5 rounded-full border border-hairline bg-canvas-card hover:bg-canvas-soft hover:border-hairline-bright text-xs font-medium text-ink transition-all flex items-center gap-1.5"
+            title="View bookmarked moments"
           >
             <Bookmark className={`w-3.5 h-3.5 ${highlightCount > 0 ? 'text-accent-sunset fill-current' : 'text-ink-mute'}`} />
-            <span className="hidden sm:inline">{highlightCount > 0 ? highlightCount : ''}</span>
+            <span className="hidden sm:inline">Saved</span>
             {highlightCount > 0 && (
-              <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-accent-sunset text-black text-[9px] font-mono flex items-center justify-center">
+              <span className="w-4 h-4 rounded-full bg-accent-sunset text-black text-[9px] font-mono font-bold flex items-center justify-center">
                 {highlightCount}
               </span>
             )}
@@ -127,17 +139,17 @@ export const Header: React.FC<HeaderProps> = ({
               </button>
 
               {exportOpen && (
-                <div className="absolute right-0 mt-2 w-48 bg-canvas-card border border-hairline-bright rounded-lg shadow-2xl overflow-hidden z-50 animate-fade-in">
+                <div className="absolute right-0 mt-2 w-48 bg-canvas-card border border-hairline-bright rounded-xl shadow-2xl overflow-hidden z-50 animate-fade-in py-1">
                   <button
                     onClick={() => { exportLibraryJSON(); setExportOpen(false); }}
-                    className="w-full px-4 py-2.5 text-left text-xs text-ink hover:bg-canvas-soft transition-colors flex items-center gap-2"
+                    className="w-full px-4 py-2 text-left text-xs text-ink hover:bg-canvas-soft transition-colors flex items-center gap-2"
                   >
                     <FileDown className="w-3.5 h-3.5 text-ink-mute" />
                     Library (JSON)
                   </button>
                   <button
                     onClick={() => { exportLibraryZIP(); setExportOpen(false); }}
-                    className="w-full px-4 py-2.5 text-left text-xs text-ink hover:bg-canvas-soft transition-colors flex items-center gap-2 border-t border-hairline/40"
+                    className="w-full px-4 py-2 text-left text-xs text-ink hover:bg-canvas-soft transition-colors flex items-center gap-2 border-t border-hairline/40"
                   >
                     <FileDown className="w-3.5 h-3.5 text-ink-mute" />
                     Library (ZIP)
@@ -145,7 +157,7 @@ export const Header: React.FC<HeaderProps> = ({
                   {highlightCount > 0 && (
                     <button
                       onClick={() => { exportHighlightsJSON(); setExportOpen(false); }}
-                      className="w-full px-4 py-2.5 text-left text-xs text-ink hover:bg-canvas-soft transition-colors flex items-center gap-2 border-t border-hairline/40"
+                      className="w-full px-4 py-2 text-left text-xs text-ink hover:bg-canvas-soft transition-colors flex items-center gap-2 border-t border-hairline/40"
                     >
                       <Bookmark className="w-3.5 h-3.5 text-accent-sunset" />
                       Highlights (JSON)
@@ -168,7 +180,7 @@ export const Header: React.FC<HeaderProps> = ({
           {/* Index New Action */}
           <button
             onClick={onOpenIngest}
-            className="px-3 py-1.5 rounded-full border border-hairline-bright bg-canvas-card hover:bg-accent-sunset hover:text-black hover:border-accent-sunset text-xs font-medium text-ink transition-all flex items-center gap-1.5"
+            className="px-3.5 py-1.5 rounded-full border border-accent-sunset/40 bg-accent-sunset/10 hover:bg-accent-sunset hover:text-black hover:border-accent-sunset text-xs font-medium text-accent-sunset hover:text-black transition-all flex items-center gap-1.5 shadow-sm"
           >
             <Plus className="w-3.5 h-3.5" />
             <span>Index New</span>

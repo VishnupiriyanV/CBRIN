@@ -8,7 +8,7 @@ import { HighlightsPanel } from './components/HighlightsPanel';
 import { EmptyState } from './components/EmptyState';
 import { ChunkResult, VideoItem, SearchResponse, LibraryStats, Highlight } from './types';
 import { performSearch, fetchLibraryVideos, fetchLibraryStats, checkBackendHealth, fetchSuggestedQueries, addHighlight, removeHighlight, fetchHighlights, exportSearchJSON, exportSearchCSV } from './services/api';
-import { Zap, Plus, Video, WifiOff, FileDown, ChevronDown } from 'lucide-react';
+import { Zap, Plus, Video, WifiOff, FileDown, ChevronDown, Clock, Eye, Layers } from 'lucide-react';
 
 export const App: React.FC = () => {
   const [query, setQuery] = useState('');
@@ -97,11 +97,9 @@ export const App: React.FC = () => {
       } else {
         await addHighlight(result.id, "");
       }
-      // Refresh highlights
       const updated = await fetchHighlights();
       setHighlights(updated);
 
-      // Update search results to reflect highlight status change
       if (searchResponse) {
         setSearchResponse({
           ...searchResponse,
@@ -120,7 +118,6 @@ export const App: React.FC = () => {
       await removeHighlight(chunkId);
       const updated = await fetchHighlights();
       setHighlights(updated);
-      // Also update search results if visible
       if (searchResponse) {
         setSearchResponse({
           ...searchResponse,
@@ -163,21 +160,21 @@ export const App: React.FC = () => {
 
         {/* Hero Section */}
         <div className="text-center space-y-3 max-w-2xl mx-auto">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-hairline bg-canvas-card text-[11px] font-mono text-ink-mute">
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-hairline bg-canvas-card text-[11px] font-mono text-ink-mute shadow-sm">
             <Zap className="w-3 h-3 text-accent-sunset" />
             <span>MULTIMODAL SEMANTIC & VISUAL SEARCH (WHISPER + CLIP)</span>
           </div>
           <h1 className="text-3xl sm:text-4xl lg:text-5xl font-medium tracking-tight text-ink leading-tight">
             Search your spoken content library in plain language.
           </h1>
-          <p className="text-sm sm:text-base text-ink-body font-sans">
+          <p className="text-sm sm:text-base text-ink-body font-sans max-w-xl mx-auto">
             Search what was spoken or shown on screen. Vault indexes your audio/video back-catalog and jumps to the exact moment.
           </p>
         </div>
 
         {/* Empty Library Onboarding Banner */}
         {videos.length === 0 ? (
-          <div className="bg-canvas-soft border border-hairline rounded-lg p-10 text-center max-w-2xl mx-auto space-y-4">
+          <div className="bg-canvas-soft/80 border border-hairline rounded-2xl p-10 text-center max-w-2xl mx-auto space-y-4 shadow-xl">
             <div className="w-12 h-12 rounded-full border border-hairline-bright bg-canvas-card mx-auto flex items-center justify-center text-accent-sunset">
               <Video className="w-5 h-5" />
             </div>
@@ -193,14 +190,14 @@ export const App: React.FC = () => {
             <button
               onClick={() => setIsLibraryOpen(true)}
               disabled={!backendOnline}
-              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full border border-hairline-bright bg-canvas-card hover:bg-accent-sunset hover:text-black hover:border-accent-sunset text-xs font-medium text-ink transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full border border-hairline-bright bg-canvas-card hover:bg-accent-sunset hover:text-black hover:border-accent-sunset text-xs font-medium text-ink transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-sm"
             >
               <Plus className="w-4 h-4" />
               <span>Ingest Local Files, Folder, YouTube URL or Import Backup</span>
             </button>
           </div>
         ) : (
-          /* Search Bar Input */
+          /* Search Bar Input Console */
           <SearchBar
             query={query}
             setQuery={setQuery}
@@ -215,21 +212,21 @@ export const App: React.FC = () => {
 
         {/* Search Error */}
         {searchError && (
-          <div className="bg-red-950/40 border border-red-800/30 rounded-lg p-4 text-xs text-red-300 font-mono text-center animate-fade-in">
+          <div className="bg-red-950/40 border border-red-800/30 rounded-xl p-4 text-xs text-red-300 font-mono text-center animate-fade-in">
             {searchError}
           </div>
         )}
 
-        {/* Results Section */}
-        {videos.length > 0 && (
-          <div className="space-y-6 pt-4 border-t border-hairline">
+        {/* Results Section (only displayed when a search has been executed) */}
+        {hasSearched && (
+          <div className="space-y-6 pt-4 border-t border-hairline animate-fade-in">
 
             {/* Meta Header */}
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <span className="eyebrow-mono">RESULTS</span>
+                <span className="eyebrow-mono">SEARCH RESULTS</span>
                 {searchResponse && (
-                  <span className="text-[10px] font-mono px-2 py-0.5 rounded-full border border-hairline bg-canvas-soft text-ink-mute">
+                  <span className="text-[10px] font-mono px-2.5 py-0.5 rounded-full border border-hairline bg-canvas-soft text-accent-sunset">
                     {searchResponse.results.length} MOMENTS FOUND
                   </span>
                 )}
@@ -241,14 +238,14 @@ export const App: React.FC = () => {
                   <div className="relative">
                     <button
                       onClick={() => setExportResultsOpen(!exportResultsOpen)}
-                      className="px-2.5 py-1 rounded-full border border-hairline bg-canvas-soft hover:border-hairline-bright text-[10px] font-mono text-ink-mute transition-all flex items-center gap-1"
+                      className="px-3 py-1 rounded-full border border-hairline bg-canvas-soft hover:border-hairline-bright text-[10px] font-mono text-ink-mute hover:text-ink transition-all flex items-center gap-1"
                     >
                       <FileDown className="w-3 h-3" />
                       <span>EXPORT</span>
                       <ChevronDown className={`w-2.5 h-2.5 transition-transform ${exportResultsOpen ? 'rotate-180' : ''}`} />
                     </button>
                     {exportResultsOpen && (
-                      <div className="absolute right-0 mt-1 w-36 bg-canvas-card border border-hairline-bright rounded-lg shadow-2xl overflow-hidden z-50 animate-fade-in">
+                      <div className="absolute right-0 mt-1.5 w-36 bg-canvas-card border border-hairline-bright rounded-xl shadow-2xl overflow-hidden z-50 animate-fade-in py-1">
                         <button
                           onClick={() => { exportSearchJSON(query, searchMode); setExportResultsOpen(false); }}
                           className="w-full px-3 py-2 text-left text-[11px] text-ink hover:bg-canvas-soft transition-colors"
@@ -287,10 +284,56 @@ export const App: React.FC = () => {
                   />
                 ))}
               </div>
-            ) : hasSearched && !isSearching ? (
+            ) : !isSearching ? (
               /* Empty State */
               <EmptyState query={query} />
             ) : null}
+          </div>
+        )}
+
+        {/* Initial Library Snapshot Cards (displayed before searching) */}
+        {!hasSearched && videos.length > 0 && (
+          <div className="space-y-4 pt-6 border-t border-hairline/60">
+            <div className="flex items-center justify-between">
+              <span className="eyebrow-mono">INDEXED CONTENT IN YOUR VAULT</span>
+              <button
+                onClick={() => setIsLibraryOpen(true)}
+                className="text-[11px] font-mono text-accent-sunset hover:underline"
+              >
+                VIEW ALL ({videos.length}) →
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {videos.slice(0, 3).map((vid) => (
+                <div
+                  key={vid.id}
+                  onClick={() => setIsLibraryOpen(true)}
+                  className="bg-[#121215] border border-hairline hover:border-hairline-bright rounded-xl p-4 space-y-3 cursor-pointer group transition-all"
+                >
+                  <div className="relative aspect-video rounded-lg overflow-hidden border border-hairline/60 bg-black/60">
+                    <img
+                      src={vid.thumbnail_url || 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 90"><rect fill="%23191919" width="160" height="90"/><text x="80" y="50" fill="%237d8187" font-size="12" text-anchor="middle">No Thumbnail</text></svg>'}
+                      alt={vid.title}
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                    />
+                    <div className="absolute bottom-1.5 right-1.5 px-2 py-0.5 bg-black/80 rounded text-[10px] font-mono text-white">
+                      {vid.duration_formatted}
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between text-[10px] font-mono text-accent-sunset">
+                      <span className="uppercase">{vid.channel}</span>
+                      <span className="text-ink-mute">{vid.chunk_count} CHUNKS</span>
+                    </div>
+                    <h4 className="text-xs font-semibold text-ink line-clamp-1 group-hover:text-accent-sunset transition-colors">
+                      {vid.title}
+                    </h4>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         )}
       </main>
