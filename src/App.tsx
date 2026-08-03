@@ -415,7 +415,7 @@ export const App: React.FC = () => {
         {!hasSearched && videos.length > 0 && (
           <div className="space-y-4 pt-6 border-t border-hairline/60">
             <div className="flex items-center justify-between">
-              <span className="eyebrow-mono">INDEXED CONTENT IN YOUR VAULT</span>
+              <span className="eyebrow-mono">INDEXED CONTENT IN YOUR CBRIN</span>
               <div className="flex items-center gap-3">
                 <button
                   onClick={() => setIsProgressOpen(true)}
@@ -470,7 +470,7 @@ export const App: React.FC = () => {
 
       {/* Minimal Footer */}
       <footer className="border-t border-hairline py-6 bg-canvas text-center text-xs font-mono text-ink-mute">
-        <p>© Vault</p>
+        <p>© CBRIN</p>
       </footer>
 
       {/* Jump to Moment Video Modal */}

@@ -2,7 +2,7 @@
  * Recent search history, persisted in localStorage (IMPROVEMENT-PLAN.md 3.6).
  * Most-recent-first, deduplicated case-insensitively, capped at MAX_HISTORY.
  */
-const STORAGE_KEY = 'vault_query_history';
+const STORAGE_KEY = 'cbrin_query_history';
 const MAX_HISTORY = 8;
 
 export function getQueryHistory(): string[] {

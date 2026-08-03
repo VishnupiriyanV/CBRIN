@@ -32,7 +32,7 @@ export const EmptyState: React.FC<EmptyStateProps> = ({ query, nearMisses = [], 
         </div>
 
         <p className="text-xs sm:text-sm text-ink-body max-w-md mx-auto leading-relaxed font-sans">
-          {message || 'Vault filters out low-confidence results to ensure accuracy. Try rephrasing your topic, asking a direct question, or switching search modes above.'}
+          {message || 'CBRIN filters out low-confidence results to ensure accuracy. Try rephrasing your topic, asking a direct question, or switching search modes above.'}
         </p>
       </div>
 
