@@ -1,6 +1,23 @@
 import { SearchResponse, VideoItem, LibraryStats, Highlight } from '../types';
 
-const API_BASE_URL = 'http://localhost:8000/api';
+// Configurable via VITE_API_URL so changing the backend's port/host doesn't require a code
+// change — and, critically, doesn't strand every already-persisted chunk whose keyframe_url
+// was baked in as an absolute URL under the old hardcoded value (IMPROVEMENT-PLAN.md hygiene:
+// "Hardcoded URLs"). Set it in a .env.local (see .env.example) if the backend isn't on
+// http://localhost:8000.
+export const API_ORIGIN = (import.meta.env.VITE_API_URL || 'http://localhost:8000').replace(/\/$/, '');
+const API_BASE_URL = `${API_ORIGIN}/api`;
+
+/**
+ * Resolve a possibly-relative media URL (keyframe_url, local media path) against the
+ * configured API origin. Absolute URLs (YouTube thumbnails, old persisted chunks that still
+ * carry a baked-in absolute keyframe_url) pass through unchanged.
+ */
+export function resolveMediaUrl(path?: string | null): string | undefined {
+  if (!path) return undefined;
+  if (/^https?:\/\//i.test(path)) return path;
+  return `${API_ORIGIN}${path.startsWith('/') ? '' : '/'}${path}`;
+}
 
 /**
  * Check if the backend API is reachable.
@@ -21,7 +38,7 @@ export async function checkBackendHealth(): Promise<{ healthy: boolean; details?
 /**
  * Multimodal semantic search via backend with search mode selection.
  */
-export async function performSearch(query: string, searchMode: string = 'hybrid'): Promise<SearchResponse> {
+export async function performSearch(query: string, searchMode: string = 'spoken'): Promise<SearchResponse> {
   const response = await fetch(`${API_BASE_URL}/search`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -44,7 +61,11 @@ export async function fetchSuggestedQueries(): Promise<string[]> {
     const response = await fetch(`${API_BASE_URL}/suggested_queries`);
     if (!response.ok) return [];
     return await response.json();
-  } catch {
+  } catch (err) {
+    // Swallowed to an empty list so the UI degrades gracefully, but logged so a real
+    // backend failure doesn't silently look identical to "no suggestions yet" (hygiene:
+    // "Silent excepts" in IMPROVEMENT-PLAN.md).
+    console.error('fetchSuggestedQueries failed:', err);
     return [];
   }
 }
@@ -179,7 +200,8 @@ export async function fetchHighlights(): Promise<Highlight[]> {
     const response = await fetch(`${API_BASE_URL}/highlights`);
     if (!response.ok) return [];
     return await response.json();
-  } catch {
+  } catch (err) {
+    console.error('fetchHighlights failed:', err);
     return [];
   }
 }
@@ -213,7 +235,7 @@ export function exportLibraryZIP(): void {
 /**
  * Export search results as a downloadable JSON file.
  */
-export function exportSearchJSON(query: string, mode: string = 'hybrid'): void {
+export function exportSearchJSON(query: string, mode: string = 'spoken'): void {
   const link = document.createElement('a');
   link.href = `${API_BASE_URL}/export/search?query=${encodeURIComponent(query)}&mode=${encodeURIComponent(mode)}&format=json`;
   link.download = `vault_search_${query.slice(0, 30).replace(/\s+/g, '_')}.json`;
@@ -225,7 +247,7 @@ export function exportSearchJSON(query: string, mode: string = 'hybrid'): void {
 /**
  * Export search results as a downloadable CSV file.
  */
-export function exportSearchCSV(query: string, mode: string = 'hybrid'): void {
+export function exportSearchCSV(query: string, mode: string = 'spoken'): void {
   const link = document.createElement('a');
   link.href = `${API_BASE_URL}/export/search?query=${encodeURIComponent(query)}&mode=${encodeURIComponent(mode)}&format=csv`;
   link.download = `vault_search_${query.slice(0, 30).replace(/\s+/g, '_')}.csv`;

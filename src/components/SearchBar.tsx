@@ -1,5 +1,5 @@
 import React from 'react';
-import { Search, X, Sparkles, SlidersHorizontal } from 'lucide-react';
+import { Search, X, Sparkles, SlidersHorizontal, History } from 'lucide-react';
 
 interface SearchBarProps {
   query: string;
@@ -10,13 +10,16 @@ interface SearchBarProps {
   searchMode: string;
   setSearchMode: (mode: string) => void;
   suggestedQueries: string[];
+  queryHistory?: string[];
+  inputRef?: React.RefObject<HTMLInputElement>;
 }
 
+// Two honest modes (IMPROVEMENT-PLAN.md 2.4). The old 'hybrid' / 'questions' / 'topics'
+// all ran identical backend code and gave no actual mode-dependent behavior — 'spoken' and
+// 'visual_scenes' are the only two search modes that are genuinely different pipelines.
 export const SEARCH_MODES = [
-  { id: 'hybrid', label: 'HYBRID' },
-  { id: 'questions', label: 'QUESTIONS' },
-  { id: 'visual_scenes', label: 'VISUAL (CLIP)' },
-  { id: 'topics', label: 'TOPICS' },
+  { id: 'spoken', label: 'SPOKEN' },
+  { id: 'visual_scenes', label: 'ON-SCREEN (CLIP)' },
 ];
 
 export const SearchBar: React.FC<SearchBarProps> = ({
@@ -28,6 +31,8 @@ export const SearchBar: React.FC<SearchBarProps> = ({
   searchMode,
   setSearchMode,
   suggestedQueries,
+  queryHistory = [],
+  inputRef,
 }) => {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -93,10 +98,11 @@ export const SearchBar: React.FC<SearchBarProps> = ({
             </div>
 
             <input
+              ref={inputRef}
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Type a topic, spoken phrase, or natural question..."
+              placeholder="Type a topic, spoken phrase, or natural question... (press / to focus)"
               disabled={disabled}
               className="w-full pl-12 pr-32 py-4 bg-canvas border border-hairline rounded-xl text-ink placeholder:text-ink-mute/70 focus:outline-none focus:border-hairline-bright focus:ring-1 focus:ring-accent-sunset/30 transition-all text-sm sm:text-base disabled:opacity-40 font-sans shadow-inner"
             />
@@ -128,6 +134,28 @@ export const SearchBar: React.FC<SearchBarProps> = ({
             </button>
           </div>
         </form>
+
+        {/* Recent Searches (IMPROVEMENT-PLAN.md 3.6) */}
+        {queryHistory.length > 0 && (
+          <div className="space-y-2 pt-1">
+            <span className="text-[10px] text-ink-mute font-mono uppercase tracking-wider flex items-center gap-1">
+              <History className="w-3 h-3" />
+              Recent searches:
+            </span>
+            <div className="flex flex-wrap gap-2">
+              {queryHistory.map((sample, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => handleSelectSample(sample)}
+                  disabled={disabled}
+                  className="px-3 py-1.5 rounded-full border border-hairline/60 bg-canvas/50 hover:bg-canvas-soft hover:border-hairline-bright text-xs text-ink-mute hover:text-ink transition-all text-left truncate max-w-xs disabled:opacity-40 font-sans"
+                >
+                  {sample}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Dynamic Suggested Queries */}
         {suggestedQueries.length > 0 && (

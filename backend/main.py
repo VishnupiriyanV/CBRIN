@@ -4,6 +4,12 @@ import tempfile
 import os
 import json
 from contextlib import asynccontextmanager
+from dotenv import load_dotenv
+
+# Must run before any os.getenv/os.environ reads below (CORS origins, OPENAI_API_KEY,
+# VAULT_WHISPER_MODEL) — see .env.example for what's configurable.
+load_dotenv()
+
 from fastapi import FastAPI, HTTPException, UploadFile, File, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse, Response
@@ -12,8 +18,82 @@ from typing import Optional, List, Dict, Any
 import io
 
 from vector_store import VectorStore, MEDIA_DIR
-from transcript_service import fetch_youtube_transcript, transcribe_file_with_whisper, fetch_youtube_metadata, preload_whisper_model
+from transcript_service import fetch_youtube_transcript, transcribe_file_with_whisper, fetch_youtube_metadata, preload_whisper_model, content_hash_id, get_youtube_video_id
 from multimodal_engine import preload_models, KEYFRAMES_DIR
+
+
+def _repair_stale_chunks(store: "VectorStore"):
+    """
+    One-time migration: chunks persisted before sentence-level indexing (missing
+    `sentence_idx`) get evicted from the live index by VectorStore on load (see
+    vector_store._evict_stale_chunks) because they break search()'s window-merge logic.
+    Re-derive them here from their original source — a fresh YouTube transcript fetch, or
+    Whisper re-transcription of the still-persisted local media file — so the library
+    repairs itself instead of quietly serving degraded search results forever.
+
+    Runs at most once per video: a successful (or exhausted) repair bumps the on-disk
+    schema version, so this is a no-op on every subsequent boot — it does not re-attempt
+    on every startup the way the old unconditional visual-embedding reindex did (1.6).
+    """
+    if not store.pending_rechunk:
+        return
+
+    print(f"[Vault API] Re-chunking {len(store.pending_rechunk)} video(s) with an outdated index format...")
+
+    for vid_id in store.pending_rechunk:
+        old_meta = store.pending_rechunk_meta.get(vid_id, {"id": vid_id})
+        title = old_meta.get('title', vid_id)
+        try:
+            if old_meta.get('youtube_id'):
+                data = fetch_youtube_transcript(old_meta['youtube_id'])
+                video_meta = data['video_meta']
+                new_chunks = store.chunk_transcript(data['segments'], video_meta)
+                if not new_chunks:
+                    raise ValueError("Re-fetched transcript produced no chunks.")
+                store.add_video(video_meta)
+                store.add_chunks(new_chunks)
+
+            elif old_meta.get('is_local'):
+                media_path = None
+                for ext in ['.mp4', '.mov', '.webm', '.mkv', '.avi', '.mp3', '.wav', '.m4a']:
+                    fpath = os.path.join(MEDIA_DIR, f"{vid_id}{ext}")
+                    if os.path.exists(fpath):
+                        media_path = fpath
+                        break
+                if not media_path:
+                    raise ValueError("Original media file is no longer present on disk.")
+
+                data = transcribe_file_with_whisper(media_path, title)
+                video_meta = dict(old_meta)
+                video_meta['total_seconds'] = data['video_meta']['total_seconds']
+                video_meta['duration_formatted'] = data['video_meta']['duration_formatted']
+                video_meta['status'] = 'fully_indexed'
+                video_meta['error_message'] = None
+                new_chunks = store.chunk_transcript(data['segments'], video_meta, media_path=media_path)
+                if not new_chunks:
+                    raise ValueError("Re-transcription produced no chunks.")
+                store.add_video(video_meta)
+                store.add_chunks(new_chunks)
+
+            else:
+                raise ValueError("No YouTube ID or local media file available to re-chunk from.")
+
+            print(f"[Vault API] Re-chunked '{title}' successfully.")
+
+        except Exception as e:
+            print(f"[Vault API] Automatic re-chunk failed for '{title}' ({vid_id}): {e}")
+            store.add_failed_video(
+                video_id=vid_id,
+                title=title,
+                channel=old_meta.get('channel', 'Creator Library'),
+                error_msg=f"Index format was upgraded and automatic re-indexing failed: {e}. Delete and re-ingest manually.",
+                is_local=old_meta.get('is_local', False),
+                youtube_id=old_meta.get('youtube_id'),
+                source_url=old_meta.get('source_url'),
+            )
+
+    store.finalize_schema_migration()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -29,6 +109,11 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"[Vault API] Error preloading Whisper model: {e}")
 
+    try:
+        _repair_stale_chunks(store)
+    except Exception as e:
+        print(f"[Vault API] Stale chunk repair pass failed: {e}")
+
     print("[Vault API] Model preloading completed. Server ready on http://localhost:8000.")
     yield
     print("[Vault API] Server shutting down.")
@@ -40,10 +125,17 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Enable CORS for local dev
+# Enable CORS for local dev. allow_origins=["*"] + allow_credentials=True is rejected by
+# browsers outright — pin to the actual Vite dev origins instead. Override via env var if
+# the frontend is served from somewhere else (e.g. a LAN IP or a different port).
+_cors_origins = os.environ.get(
+    "VAULT_CORS_ORIGINS",
+    "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173"
+).split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[o.strip() for o in _cors_origins if o.strip()],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -56,7 +148,9 @@ store = VectorStore()
 class SearchQuery(BaseModel):
     query: str
     top_k: Optional[int] = 5
-    search_mode: Optional[str] = "hybrid"  # hybrid, questions, topics, visual_scenes
+    # Two honest modes (IMPROVEMENT-PLAN.md 2.4) — the old 'hybrid'/'questions'/'topics'
+    # all ran identical code and only 'visual_scenes' actually branched.
+    search_mode: Optional[str] = "spoken"  # spoken, visual_scenes
 
 
 class IngestRequest(BaseModel):
@@ -107,7 +201,10 @@ def get_library():
     result = []
     for vid_id, meta in store.videos.items():
         chunk_count = sum(1 for c in store.chunks if c.get('video_id') == vid_id)
-        visual_count = sum(1 for c in store.chunks if c.get('video_id') == vid_id and c.get('has_visual_embedding', False))
+        # Only count real per-moment frames, not a video-level shared thumbnail (2.10) —
+        # otherwise every YouTube video would show a "visual indexed" badge that's honest
+        # about individual chunks but misleading about what visual search can do with them.
+        visual_count = sum(1 for c in store.chunks if c.get('video_id') == vid_id and c.get('visual_status') == 'ok')
         video_data = {
             "id": vid_id,
             "youtube_id": meta.get('youtube_id'),
@@ -175,17 +272,18 @@ def search_vault(payload: SearchQuery):
         return {
             "query": payload.query,
             "results": [],
+            "near_misses": [],
             "execution_time_ms": 0,
             "total_chunks_scanned": 0,
             "library_video_count": 0,
-            "search_mode": payload.search_mode or "hybrid",
+            "search_mode": payload.search_mode or "spoken",
             "message": "No content indexed yet. Ingest videos or audio files to start searching."
         }
 
     return store.search(
         query=payload.query,
         top_k=payload.top_k or 5,
-        search_mode=payload.search_mode or "hybrid"
+        search_mode=payload.search_mode or "spoken"
     )
 
 
@@ -224,16 +322,26 @@ def ingest_youtube(payload: IngestRequest):
             raise ValueError("Transcript was fetched but contained no meaningful speech text.")
 
     except ValueError as e:
-        yt_id = payload.youtube_url
-        meta = fetch_youtube_metadata(yt_id)
-        vid_id = f"yt-{meta['title']}"
+        try:
+            yt_video_id = get_youtube_video_id(payload.youtube_url)
+        except ValueError:
+            yt_video_id = None
+
+        if yt_video_id:
+            meta = fetch_youtube_metadata(yt_video_id)
+            vid_id = f"yt-{yt_video_id}"
+        else:
+            meta = {"title": "Unrecognized YouTube URL", "channel": "YouTube Creator"}
+            vid_id = f"yt-unrecognized-{abs(hash(payload.youtube_url)) % 100000}"
+
         store.add_failed_video(
             video_id=vid_id,
             title=meta['title'],
             channel=meta['channel'],
             error_msg=str(e),
             is_local=False,
-            youtube_id=None
+            youtube_id=yt_video_id,
+            source_url=payload.youtube_url
         )
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
@@ -254,6 +362,18 @@ async def upload_and_transcribe_file(file: UploadFile = File(...)):
     try:
         with open(temp_file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
+
+        content_id = content_hash_id(temp_file_path)
+        if content_id in store.videos:
+            if os.path.exists(temp_file_path):
+                os.remove(temp_file_path)
+            existing = store.videos[content_id]
+            return {
+                "success": False,
+                "message": f"'{existing.get('title', file.filename)}' is already indexed (identical file content).",
+                "video": existing,
+                "new_chunks_count": 0
+            }
 
         data = transcribe_file_with_whisper(temp_file_path, file.filename)
         video_meta = data['video_meta']
@@ -278,7 +398,7 @@ async def upload_and_transcribe_file(file: UploadFile = File(...)):
             "new_chunks_count": len(new_chunks)
         }
     except ValueError as e:
-        vid_id = f"local-{abs(hash(file.filename)) % 100000}"
+        vid_id = content_hash_id(temp_file_path) if os.path.exists(temp_file_path) else f"local-failed-{abs(hash(file.filename)) % 100000}"
         clean_title = os.path.splitext(file.filename)[0].replace("-", " ").replace("_", " ").title()
         store.add_failed_video(
             video_id=vid_id,
@@ -347,7 +467,7 @@ def export_library(format: str = Query("json", description="Export format: 'json
 @app.get("/api/export/search")
 def export_search_results(
     query: str = Query(..., description="Search query"),
-    mode: str = Query("hybrid", description="Search mode"),
+    mode: str = Query("spoken", description="Search mode"),
     format: str = Query("json", description="Export format: 'json' or 'csv'")
 ):
     """Export search results as JSON or CSV."""
