@@ -3,6 +3,8 @@ import { Database, Plus, Search, Sparkles, FileVideo, CheckCircle2, AlertTriangl
 import { LibraryStats } from '../types';
 import { exportLibraryJSON, exportLibraryZIP, exportHighlightsJSON } from '../services/api';
 
+export type AppView = 'search' | 'engine';
+
 interface HeaderProps {
   totalVideos: number;
   totalChunks: number;
@@ -12,6 +14,8 @@ interface HeaderProps {
   onOpenHighlights: () => void;
   onOpenProgress: () => void;
   highlightCount: number;
+  activeView?: AppView;
+  onChangeView?: (view: AppView) => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -23,6 +27,8 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenHighlights,
   onOpenProgress,
   highlightCount,
+  activeView = 'search',
+  onChangeView,
 }) => {
   const isFullyIndexed = stats?.is_fully_indexed ?? (totalVideos > 0);
   const failedCount = stats?.failed_count ?? 0;
@@ -59,6 +65,25 @@ export const Header: React.FC<HeaderProps> = ({
             CREATORBRAIN // L1
           </span>
         </div>
+
+        {/* View tabs: Search (Layer 1) vs ENGINE (Layer 3 clip studio) */}
+        {onChangeView && (
+          <div className="hidden sm:flex items-center gap-0.5 p-0.5 rounded-full border border-hairline bg-canvas-soft shrink-0">
+            <button
+              onClick={() => onChangeView('search')}
+              className={`px-3 py-1 rounded-full text-[11px] font-mono transition-all ${activeView === 'search' ? 'bg-canvas-card text-ink border border-hairline-bright' : 'text-ink-mute hover:text-ink'}`}
+            >
+              Search
+            </button>
+            <button
+              onClick={() => onChangeView('engine')}
+              className={`px-3 py-1 rounded-full text-[11px] font-mono transition-all flex items-center gap-1 ${activeView === 'engine' ? 'bg-canvas-card text-accent-sunset border border-hairline-bright' : 'text-ink-mute hover:text-ink'}`}
+            >
+              <Sparkles className="w-3 h-3" />
+              <span>Engine</span>
+            </button>
+          </div>
+        )}
 
         {/* Center: Consolidated Library Telemetry Capsule (Clickable -> Opens Indexing Progress Modal) */}
         {totalVideos > 0 && (

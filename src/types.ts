@@ -77,6 +77,81 @@ export interface LibraryStats {
   is_fitted: boolean;
 }
 
+// --- ENGINE (Layer 3): narrative-aware clip generation ---
+
+export type EngineJobStatus = 'queued' | 'running' | 'done' | 'failed';
+
+export interface EngineJob {
+  id: string;
+  kind: string;
+  video_id?: string | null;
+  status: EngineJobStatus;
+  stage: string;
+  progress: number;
+  message: string;
+  error?: string | null;
+  result?: Record<string, any> | null;
+  created_at: number;
+  updated_at: number;
+}
+
+// Named, inspectable signals only — never a fabricated "predicted engagement %".
+export interface ClipSignals {
+  hook_strength: number;
+  self_containedness: number;
+  emotional_delta: number;
+  quotability: number;
+  boundary_cleanliness: number;
+  taste_match?: number; // present only once >=10 creator feedback labels exist
+}
+
+export interface NarrativeBeat {
+  beat_type: string;
+  start_sentence_idx: number;
+  end_sentence_idx: number;
+  requires_setup_from_idx: number | null;
+  title: string;
+  why_it_lands: string;
+  emotional_arc: Record<string, string>;
+  self_contained: boolean;
+  quotable_line: string;
+}
+
+export interface ClipCandidate {
+  id: string;
+  video_id: string;
+  start_sentence_idx: number;
+  end_sentence_idx: number;
+  start_sec: number;
+  end_sec: number;
+  title: string;
+  quotable_line: string;
+  beats: NarrativeBeat[];
+  signals: ClipSignals;
+  composite: number;
+  reason: string;
+  degraded: boolean;
+  timing_precise: boolean;
+}
+
+export interface BrandKit {
+  fonts: { caption: string; display: string };
+  colors: { primary: string; accent: string; text: string; stroke: string };
+  caption: {
+    position: string;
+    case: string;
+    max_words_per_cue: number;
+    highlight_style: string;
+    animation: string;
+  };
+  rhythm: { avg_shot_sec: number; wpm: number };
+  safe_margins: { top: number; bottom: number };
+  auto_seeded: boolean;
+}
+
+export const RENDER_PRESETS = ['tiktok', 'shorts', 'linkedin', 'x'] as const;
+export type RenderPreset = typeof RENDER_PRESETS[number];
+
 export interface Highlight {
   chunk_id: string;
   video_id: string;

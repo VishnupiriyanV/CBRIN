@@ -10,7 +10,8 @@ import datetime
 from typing import List, Dict, Any, Optional
 import numpy as np
 
-from multimodal_engine import MultimodalEngine, KEYFRAMES_DIR
+import paths
+from multimodal_engine import MultimodalEngine
 
 try:
     from sentence_transformers import SentenceTransformer, CrossEncoder
@@ -75,15 +76,9 @@ def get_cross_encoder():
             HAS_CROSS_ENCODER = False
     return CROSS_ENCODER_MODEL
 
-# Persistence paths
-DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
-MEDIA_DIR = os.path.join(DATA_DIR, "media")
-CHUNKS_FILE = os.path.join(DATA_DIR, "chunks.json")
-EMBEDDINGS_FILE = os.path.join(DATA_DIR, "embeddings.npy")
-VISUAL_EMBEDDINGS_FILE = os.path.join(DATA_DIR, "visual_embeddings.npy")
-VIDEOS_FILE = os.path.join(DATA_DIR, "videos.json")
-HIGHLIGHTS_FILE = os.path.join(DATA_DIR, "highlights.json")
-INDEX_META_FILE = os.path.join(DATA_DIR, "index_meta.json")
+# Persistence paths live in paths.py (single seam tests redirect via paths.use_root()).
+# Read them as paths.CHUNKS_FILE etc at each use site — never `from paths import X`, which
+# would bind a copy that a later use_root() call can't reach.
 
 # Bump whenever the on-disk chunk shape changes in a way search() depends on.
 # v2 introduced sentence-level `sentence_idx` — chunks without it were written by the
@@ -115,27 +110,27 @@ class VectorStore:
         self._load_from_disk()
 
     def _ensure_dirs(self):
-        os.makedirs(DATA_DIR, exist_ok=True)
-        os.makedirs(MEDIA_DIR, exist_ok=True)
+        os.makedirs(paths.DATA_DIR, exist_ok=True)
+        os.makedirs(paths.MEDIA_DIR, exist_ok=True)
 
     def _save_to_disk(self):
         """Persist chunks, video metadata, highlights, and dual embeddings to disk."""
         self._ensure_dirs()
 
-        with open(CHUNKS_FILE, 'w', encoding='utf-8') as f:
+        with open(paths.CHUNKS_FILE, 'w', encoding='utf-8') as f:
             json.dump(self.chunks, f, indent=2, ensure_ascii=False)
 
-        with open(VIDEOS_FILE, 'w', encoding='utf-8') as f:
+        with open(paths.VIDEOS_FILE, 'w', encoding='utf-8') as f:
             json.dump(self.videos, f, indent=2, ensure_ascii=False)
 
-        with open(HIGHLIGHTS_FILE, 'w', encoding='utf-8') as f:
+        with open(paths.HIGHLIGHTS_FILE, 'w', encoding='utf-8') as f:
             json.dump(self.highlights, f, indent=2, ensure_ascii=False)
 
         if self.dense_embeddings is not None:
-            np.save(EMBEDDINGS_FILE, self.dense_embeddings)
+            np.save(paths.EMBEDDINGS_FILE, self.dense_embeddings)
 
         if self.visual_embeddings is not None:
-            np.save(VISUAL_EMBEDDINGS_FILE, self.visual_embeddings)
+            np.save(paths.VISUAL_EMBEDDINGS_FILE, self.visual_embeddings)
 
         print(f"[Vault] Persisted {len(self.chunks)} chunks, {len(self.videos)} videos, {len(self.highlights)} highlights to disk.")
 
@@ -144,27 +139,27 @@ class VectorStore:
         self.pending_rechunk = []
         self.pending_rechunk_meta = {}
 
-        if not os.path.exists(CHUNKS_FILE):
+        if not os.path.exists(paths.CHUNKS_FILE):
             print("[Vault] No persisted library found. Starting fresh.")
             self.is_fitted = True
             return
 
         try:
-            with open(CHUNKS_FILE, 'r', encoding='utf-8') as f:
+            with open(paths.CHUNKS_FILE, 'r', encoding='utf-8') as f:
                 self.chunks = json.load(f)
 
-            if os.path.exists(VIDEOS_FILE):
-                with open(VIDEOS_FILE, 'r', encoding='utf-8') as f:
+            if os.path.exists(paths.VIDEOS_FILE):
+                with open(paths.VIDEOS_FILE, 'r', encoding='utf-8') as f:
                     self.videos = json.load(f)
 
-            if os.path.exists(HIGHLIGHTS_FILE):
-                with open(HIGHLIGHTS_FILE, 'r', encoding='utf-8') as f:
+            if os.path.exists(paths.HIGHLIGHTS_FILE):
+                with open(paths.HIGHLIGHTS_FILE, 'r', encoding='utf-8') as f:
                     self.highlights = json.load(f)
 
             evicted = self._evict_stale_chunks()
 
-            if HAS_DENSE_MODEL and os.path.exists(EMBEDDINGS_FILE) and not evicted:
-                self.dense_embeddings = np.load(EMBEDDINGS_FILE)
+            if HAS_DENSE_MODEL and os.path.exists(paths.EMBEDDINGS_FILE) and not evicted:
+                self.dense_embeddings = np.load(paths.EMBEDDINGS_FILE)
                 if len(self.dense_embeddings) == len(self.chunks):
                     self.is_fitted = True
                     print(f"[Vault] Restored {len(self.chunks)} chunks with dense embeddings.")
@@ -175,8 +170,8 @@ class VectorStore:
             else:
                 self.is_fitted = True
 
-            if os.path.exists(VISUAL_EMBEDDINGS_FILE) and not evicted:
-                self.visual_embeddings = np.load(VISUAL_EMBEDDINGS_FILE)
+            if os.path.exists(paths.VISUAL_EMBEDDINGS_FILE) and not evicted:
+                self.visual_embeddings = np.load(paths.VISUAL_EMBEDDINGS_FILE)
 
             # Auto-generate visual embeddings for chunks that don't have one yet and
             # haven't already been marked as permanently unable to get one (1.6: don't
@@ -208,9 +203,9 @@ class VectorStore:
         Returns True if anything was evicted.
         """
         stored_schema_version = 0
-        if os.path.exists(INDEX_META_FILE):
+        if os.path.exists(paths.INDEX_META_FILE):
             try:
-                with open(INDEX_META_FILE, 'r', encoding='utf-8') as f:
+                with open(paths.INDEX_META_FILE, 'r', encoding='utf-8') as f:
                     stored_schema_version = json.load(f).get('schema_version', 0)
             except Exception:
                 stored_schema_version = 0
@@ -239,7 +234,7 @@ class VectorStore:
         """Call once pending re-chunk repairs (self.pending_rechunk) have been attempted,
         successfully or not, so the next boot doesn't re-run the eviction/repair pass."""
         self._ensure_dirs()
-        with open(INDEX_META_FILE, 'w', encoding='utf-8') as f:
+        with open(paths.INDEX_META_FILE, 'w', encoding='utf-8') as f:
             json.dump({"schema_version": SCHEMA_VERSION}, f, indent=2)
         self.pending_rechunk = []
         self.pending_rechunk_meta = {}
@@ -294,7 +289,7 @@ class VectorStore:
 
             local_path = None
             for ext in ['.mp4', '.mov', '.webm', '.mkv', '.avi', '.mp3', '.wav', '.m4a']:
-                fpath = os.path.join(MEDIA_DIR, f"{video_id}{ext}")
+                fpath = os.path.join(paths.MEDIA_DIR, f"{video_id}{ext}")
                 if os.path.exists(fpath):
                     local_path = fpath
                     break
@@ -495,7 +490,7 @@ class VectorStore:
         self.chunks = [c for c in self.chunks if c.get('video_id') != video_id]
 
         for c in chunks_to_remove:
-            keyframe_path = os.path.join(KEYFRAMES_DIR, f"{c['id']}.jpg")
+            keyframe_path = os.path.join(paths.KEYFRAMES_DIR, f"{c['id']}.jpg")
             if os.path.exists(keyframe_path):
                 try:
                     os.remove(keyframe_path)
@@ -509,7 +504,7 @@ class VectorStore:
 
         # Delete local media file if present
         for ext in ['.mp4', '.mov', '.webm', '.mkv', '.avi', '.mp3', '.wav', '.m4a']:
-            fpath = os.path.join(MEDIA_DIR, f"{video_id}{ext}")
+            fpath = os.path.join(paths.MEDIA_DIR, f"{video_id}{ext}")
             if os.path.exists(fpath):
                 try:
                     os.remove(fpath)

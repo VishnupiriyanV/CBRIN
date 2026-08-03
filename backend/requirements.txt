@@ -24,3 +24,7 @@ rank_bm25>=0.2.2,<0.3.0
 # Testing
 pytest>=7.4.0,<9.0.0
 pyyaml>=6.0,<7.0
+
+# ENGINE (Layer 3) — narrative-aware clip generation.
+yt-dlp>=2024.1.0          # source media for YouTube-ingested videos
+imageio-ffmpeg>=0.4.9     # bundled static ffmpeg binary; no system install

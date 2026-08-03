@@ -17,9 +17,19 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 import io
 
-from vector_store import VectorStore, MEDIA_DIR
+import paths
+from vector_store import VectorStore, get_cross_encoder
 from transcript_service import fetch_youtube_transcript, transcribe_file_with_whisper, fetch_youtube_metadata, preload_whisper_model, content_hash_id, get_youtube_video_id
-from multimodal_engine import preload_models, KEYFRAMES_DIR
+from multimodal_engine import preload_models
+
+# ENGINE (Layer 3) — narrative-aware clip generation.
+import jobs as engine_jobs
+import media_service
+import word_timing
+import narrative_engine
+import clip_scoring
+import brand_kit as brand_kit_module
+import clip_renderer
 
 
 def _repair_stale_chunks(store: "VectorStore"):
@@ -56,7 +66,7 @@ def _repair_stale_chunks(store: "VectorStore"):
             elif old_meta.get('is_local'):
                 media_path = None
                 for ext in ['.mp4', '.mov', '.webm', '.mkv', '.avi', '.mp3', '.wav', '.m4a']:
-                    fpath = os.path.join(MEDIA_DIR, f"{vid_id}{ext}")
+                    fpath = os.path.join(paths.MEDIA_DIR, f"{vid_id}{ext}")
                     if os.path.exists(fpath):
                         media_path = fpath
                         break
@@ -99,6 +109,16 @@ def _repair_stale_chunks(store: "VectorStore"):
 async def lifespan(app: FastAPI):
     """Pre-load all machine learning models into memory on server startup."""
     print("[Vault API] Server starting up. Preloading models...")
+    try:
+        # imageio-ffmpeg's bundled binary isn't on PATH until this runs once — openai-whisper's
+        # audio loader and yt-dlp both shell out to a bare "ffmpeg" command rather than
+        # accepting a path, so local Whisper transcription (existing upload_transcribe path,
+        # plus ENGINE's word_timing) would otherwise fail with WinError 2 on a machine with no
+        # system ffmpeg install (verified live on this box).
+        media_service.ffmpeg_exe()
+    except Exception as e:
+        print(f"[Vault API] Error resolving bundled ffmpeg: {e}")
+
     try:
         preload_models()
     except Exception as e:
@@ -164,6 +184,26 @@ class HighlightRequest(BaseModel):
 
 class ImportRequest(BaseModel):
     mode: Optional[str] = "merge"  # merge or replace
+
+
+class EngineAnalyzeRequest(BaseModel):
+    video_id: str
+    max_clips: Optional[int] = 6
+
+
+class EngineAdjustRequest(BaseModel):
+    start_sec: float
+    end_sec: float
+
+
+class EngineRenderRequest(BaseModel):
+    clip_id: str
+    presets: List[str]
+
+
+class EngineFeedbackRequest(BaseModel):
+    clip_id: str
+    verdict: str  # "winner" | "dud"
 
 
 @app.get("/")
@@ -232,7 +272,7 @@ def get_library():
 def get_media_file(video_id: str):
     """Stream local uploaded audio/video file for HTML5 playback seeking."""
     for ext in ['.mp4', '.mov', '.webm', '.mkv', '.avi', '.mp3', '.wav', '.m4a']:
-        fpath = os.path.join(MEDIA_DIR, f"{video_id}{ext}")
+        fpath = os.path.join(paths.MEDIA_DIR, f"{video_id}{ext}")
         if os.path.exists(fpath):
             return FileResponse(fpath)
 
@@ -242,7 +282,7 @@ def get_media_file(video_id: str):
 @app.get("/api/keyframe/{chunk_id}")
 def get_keyframe(chunk_id: str):
     """Serve a keyframe thumbnail JPEG for a specific chunk."""
-    keyframe_path = os.path.join(KEYFRAMES_DIR, f"{chunk_id}.jpg")
+    keyframe_path = os.path.join(paths.KEYFRAMES_DIR, f"{chunk_id}.jpg")
     if os.path.exists(keyframe_path):
         return FileResponse(keyframe_path, media_type="image/jpeg")
     raise HTTPException(status_code=404, detail="Keyframe not found for this chunk.")
@@ -379,7 +419,7 @@ async def upload_and_transcribe_file(file: UploadFile = File(...)):
         video_meta = data['video_meta']
         segments = data['segments']
 
-        persistent_media_path = os.path.join(MEDIA_DIR, f"{video_meta['id']}{file_ext}")
+        persistent_media_path = os.path.join(paths.MEDIA_DIR, f"{video_meta['id']}{file_ext}")
         shutil.copyfile(temp_file_path, persistent_media_path)
 
         new_chunks = store.chunk_transcript(segments, video_meta, media_path=persistent_media_path)
@@ -540,6 +580,215 @@ async def import_library(file: UploadFile = File(...), mode: str = Query("merge"
         raise HTTPException(status_code=400, detail="Invalid JSON file format")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Import failed: {str(e)}")
+
+
+# --- ENGINE (Layer 3): narrative-aware clip generation --------------------------------
+
+def _load_clips() -> Dict[str, Any]:
+    if not os.path.exists(paths.CLIPS_FILE):
+        return {}
+    try:
+        with open(paths.CLIPS_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_clips(clips: Dict[str, Any]):
+    os.makedirs(paths.DATA_DIR, exist_ok=True)
+    with open(paths.CLIPS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(clips, f, indent=2, ensure_ascii=False)
+
+
+def _sentences_for_video(video_id: str) -> List[Dict[str, Any]]:
+    sentences = [
+        {"sentence_idx": c["sentence_idx"], "text": c["text"], "start_sec": c["start_sec"], "end_sec": c["end_sec"]}
+        for c in store.chunks
+        if c.get("video_id") == video_id and c.get("sentence_idx") is not None
+    ]
+    sentences.sort(key=lambda s: s["sentence_idx"])
+    return sentences
+
+
+def _run_analyze_job(video_id: str, max_clips: int):
+    def _job(report):
+        video_meta = store.videos.get(video_id)
+        if not video_meta:
+            raise ValueError(f"Video '{video_id}' not found in library.")
+
+        sentences = _sentences_for_video(video_id)
+        if not sentences:
+            raise ValueError(f"Video '{video_id}' has no sentence-level transcript chunks to analyze.")
+
+        report("media", 0.05, "locating source media")
+        try:
+            media_path = media_service.ensure_media(video_id, youtube_id=video_meta.get("youtube_id"))
+        except media_service.MediaUnavailable as e:
+            raise ValueError(str(e))
+
+        timing_precise = True
+        try:
+            report("words", 0.15, "getting word-level timing")
+            word_timing.ensure_words(video_id, media_path, report=report)
+        except Exception as e:
+            timing_precise = False
+            print(f"[ENGINE] Word timing unavailable for '{video_id}': {e}. Continuing with sentence-level timing only.")
+
+        report("beats", 0.5, "extracting narrative beats")
+        analysis = narrative_engine.analyze_video(sentences, max_clips=max_clips)
+
+        report("scoring", 0.75, "scoring clip candidates")
+        sentences_by_idx = {s["sentence_idx"]: s for s in sentences}
+        corpus_texts = [c.get("text", "") for c in store.chunks]
+        taste_centroid = clip_scoring.compute_taste_centroid()
+
+        ranked = clip_scoring.rank(
+            analysis["candidates"], sentences_by_idx, video_id, corpus_texts,
+            get_cross_encoder, max_clips=max_clips, taste_centroid=taste_centroid,
+        )
+
+        all_clips = _load_clips()
+        # Replace this video's previous clips with the fresh analysis.
+        all_clips = {cid: c for cid, c in all_clips.items() if c.get("video_id") != video_id}
+        for clip in ranked:
+            clip["video_id"] = video_id
+            clip["degraded"] = analysis["degraded"]
+            clip["timing_precise"] = timing_precise
+            all_clips[clip["id"]] = clip
+        _save_clips(all_clips)
+
+        report("done", 1.0, f"{len(ranked)} clip(s) ready")
+        return {"video_id": video_id, "clip_count": len(ranked), "degraded": analysis["degraded"]}
+
+    return _job
+
+
+@app.post("/api/engine/analyze")
+def engine_analyze(payload: EngineAnalyzeRequest):
+    """Kick off narrative analysis for a video as a background job. Poll the returned
+    job_id via GET /api/engine/jobs/{job_id}, then fetch results via
+    GET /api/engine/clips/{video_id}."""
+    if payload.video_id not in store.videos:
+        raise HTTPException(status_code=404, detail=f"Video '{payload.video_id}' not found.")
+
+    job_id = engine_jobs.submit("engine_analyze", _run_analyze_job(payload.video_id, payload.max_clips or 6), video_id=payload.video_id)
+    return {"job_id": job_id}
+
+
+@app.get("/api/engine/jobs/{job_id}")
+def engine_get_job(job_id: str):
+    job = engine_jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
+    return job.to_dict()
+
+
+@app.get("/api/engine/clips/{video_id}")
+def engine_get_clips(video_id: str):
+    """Return the most recent analysis's ranked clips for a video (empty list if Analyze
+    hasn't been run yet, not a 404 — that's a normal, expected state)."""
+    all_clips = _load_clips()
+    return [c for c in all_clips.values() if c.get("video_id") == video_id]
+
+
+@app.post("/api/engine/clips/{clip_id}/adjust")
+def engine_adjust_clip(clip_id: str, payload: EngineAdjustRequest):
+    """Snap a manually-adjusted trim range onto exact word boundaries."""
+    all_clips = _load_clips()
+    clip = all_clips.get(clip_id)
+    if clip is None:
+        raise HTTPException(status_code=404, detail=f"Clip '{clip_id}' not found.")
+
+    snapped_start, snapped_end = word_timing.snap_to_words(clip["video_id"], payload.start_sec, payload.end_sec)
+    clip["start_sec"] = snapped_start
+    clip["end_sec"] = snapped_end
+    all_clips[clip_id] = clip
+    _save_clips(all_clips)
+    return clip
+
+
+@app.post("/api/engine/render")
+def engine_render(payload: EngineRenderRequest):
+    """Render a clip to one or more platform presets as a background job."""
+    all_clips = _load_clips()
+    clip = all_clips.get(payload.clip_id)
+    if clip is None:
+        raise HTTPException(status_code=404, detail=f"Clip '{payload.clip_id}' not found.")
+
+    unknown_presets = [p for p in payload.presets if p not in clip_renderer.PRESETS]
+    if unknown_presets:
+        raise HTTPException(status_code=400, detail=f"Unknown preset(s): {unknown_presets}. Valid: {list(clip_renderer.PRESETS.keys())}")
+
+    video_id = clip["video_id"]
+    video_meta = store.videos.get(video_id)
+    if not video_meta:
+        raise HTTPException(status_code=404, detail=f"Video '{video_id}' for this clip no longer exists.")
+
+    def _job(report):
+        try:
+            media_path = media_service.ensure_media(video_id, youtube_id=video_meta.get("youtube_id"))
+        except media_service.MediaUnavailable as e:
+            raise ValueError(str(e))
+
+        words = word_timing.load_words(video_id) or []
+        kit = brand_kit_module.load()
+
+        results = clip_renderer.render_clip(
+            clip_id=payload.clip_id,
+            source_path=media_path,
+            start_sec=clip["start_sec"],
+            end_sec=clip["end_sec"],
+            words=words,
+            brand_kit=kit,
+            presets=payload.presets,
+            report=report,
+        )
+        return {"clip_id": payload.clip_id, "presets": results}
+
+    job_id = engine_jobs.submit("engine_render", _job, video_id=video_id)
+    return {"job_id": job_id}
+
+
+@app.get("/api/engine/clip_file/{clip_id}/{preset}")
+def engine_get_clip_file(clip_id: str, preset: str):
+    """Serve a rendered clip .mp4. clip_id/preset are validated against known clips/presets
+    before touching the filesystem — both are path components."""
+    all_clips = _load_clips()
+    if clip_id not in all_clips:
+        raise HTTPException(status_code=404, detail=f"Clip '{clip_id}' not found.")
+    if preset not in clip_renderer.PRESETS:
+        raise HTTPException(status_code=400, detail=f"Unknown preset '{preset}'.")
+
+    file_path = os.path.join(paths.CLIPS_DIR, clip_id, f"{preset}.mp4")
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail=f"'{preset}' has not been rendered for clip '{clip_id}' yet.")
+    return FileResponse(file_path, media_type="video/mp4")
+
+
+@app.get("/api/engine/brand_kit")
+def engine_get_brand_kit():
+    return brand_kit_module.load()
+
+
+@app.put("/api/engine/brand_kit")
+def engine_update_brand_kit(patch: Dict[str, Any]):
+    return brand_kit_module.apply_edit(patch)
+
+
+@app.post("/api/engine/brand_kit/autoseed")
+def engine_autoseed_brand_kit(force: bool = Query(False)):
+    try:
+        return brand_kit_module.autoseed(force=force)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
+@app.post("/api/engine/feedback")
+def engine_feedback(payload: EngineFeedbackRequest):
+    if payload.verdict not in ("winner", "dud"):
+        raise HTTPException(status_code=400, detail="verdict must be 'winner' or 'dud'.")
+    label_count = clip_scoring.record_feedback(payload.clip_id, payload.verdict)
+    return {"label_count": label_count}
 
 
 if __name__ == "__main__":

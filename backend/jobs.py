@@ -1,0 +1,164 @@
+"""
+In-process background job queue for ENGINE's long-running work (Whisper word-timing
+re-transcription, ffmpeg renders). /api/upload_transcribe is a blocking POST today
+(IMPROVEMENT-PLAN.md 3.3); ENGINE's analyze/render calls are slower still, so they must not
+block the request thread. This module is generic enough that upload_transcribe could move
+onto it later, but that migration is explicitly out of scope for this change.
+
+ThreadPoolExecutor(max_workers=1): serial by design. Whisper and ffmpeg both saturate a
+single CPU core; running them "in parallel" on a typical dev machine trades one slow success
+for two slow failures fighting over the same cores.
+"""
+import json
+import os
+import threading
+import time
+import traceback
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field, asdict
+from typing import Any, Callable, Dict, List, Optional
+
+import paths
+
+MAX_RETAINED_JOBS = 200
+
+_executor = ThreadPoolExecutor(max_workers=1)
+_lock = threading.Lock()
+_jobs: Dict[str, "JobRecord"] = {}
+
+
+@dataclass
+class JobRecord:
+    id: str
+    kind: str
+    video_id: Optional[str]
+    status: str = "queued"  # queued | running | done | failed
+    stage: str = ""
+    progress: float = 0.0
+    message: str = ""
+    error: Optional[str] = None
+    result: Optional[Dict[str, Any]] = None
+    created_at: float = field(default_factory=time.time)
+    updated_at: float = field(default_factory=time.time)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+def _ensure_dir():
+    os.makedirs(paths.DATA_DIR, exist_ok=True)
+
+
+def _load_all() -> Dict[str, JobRecord]:
+    if not os.path.exists(paths.JOBS_FILE):
+        return {}
+    try:
+        with open(paths.JOBS_FILE, 'r', encoding='utf-8') as f:
+            raw = json.load(f)
+        return {jid: JobRecord(**data) for jid, data in raw.items()}
+    except Exception:
+        return {}
+
+
+def _save_all():
+    _ensure_dir()
+    with _lock:
+        # Retain only the most recent MAX_RETAINED_JOBS records.
+        ordered = sorted(_jobs.values(), key=lambda j: j.created_at, reverse=True)
+        keep = ordered[:MAX_RETAINED_JOBS]
+        _jobs.clear()
+        for j in keep:
+            _jobs[j.id] = j
+        payload = {jid: j.to_dict() for jid, j in _jobs.items()}
+    with open(paths.JOBS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(payload, f, indent=2, ensure_ascii=False)
+
+
+def _init_from_disk():
+    """On process start, any job left 'running' or 'queued' from a prior process is dead —
+    mark it failed rather than resurrecting it as in-flight forever."""
+    loaded = _load_all()
+    changed = False
+    for job in loaded.values():
+        if job.status in ("running", "queued"):
+            job.status = "failed"
+            job.error = "interrupted by server restart"
+            job.updated_at = time.time()
+            changed = True
+    with _lock:
+        _jobs.clear()
+        _jobs.update(loaded)
+    if changed:
+        _save_all()
+
+
+_init_from_disk()
+
+
+def get(job_id: str) -> Optional[JobRecord]:
+    with _lock:
+        job = _jobs.get(job_id)
+        return JobRecord(**job.to_dict()) if job else None
+
+
+def list_for_video(video_id: str) -> List[JobRecord]:
+    with _lock:
+        return [JobRecord(**j.to_dict()) for j in _jobs.values() if j.video_id == video_id]
+
+
+def submit(kind: str, fn: Callable[[Callable[[str, float, str], None]], Dict[str, Any]],
+           video_id: Optional[str] = None) -> str:
+    """
+    Submit `fn` to run on the single background worker thread. `fn` receives a `report`
+    callback (stage: str, progress: float, message: str) it should call as it makes
+    progress; its return value is stored as the job's `result` on success.
+    """
+    job_id = str(uuid.uuid4())
+    job = JobRecord(id=job_id, kind=kind, video_id=video_id, status="queued")
+    with _lock:
+        _jobs[job_id] = job
+    _save_all()
+
+    def report(stage: str, progress: float, message: str = ""):
+        with _lock:
+            j = _jobs.get(job_id)
+            if j is None:
+                return
+            j.stage = stage
+            j.progress = max(0.0, min(1.0, progress))
+            j.message = message
+            j.status = "running"
+            j.updated_at = time.time()
+        _save_all()
+
+    def _run():
+        with _lock:
+            j = _jobs.get(job_id)
+            if j is None:
+                return
+            j.status = "running"
+            j.updated_at = time.time()
+        _save_all()
+        try:
+            result = fn(report)
+            with _lock:
+                j = _jobs.get(job_id)
+                if j is not None:
+                    j.status = "done"
+                    j.progress = 1.0
+                    j.result = result
+                    j.updated_at = time.time()
+            _save_all()
+        except Exception as e:
+            with _lock:
+                j = _jobs.get(job_id)
+                if j is not None:
+                    j.status = "failed"
+                    j.error = f"{e}"
+                    j.message = traceback.format_exc(limit=3)
+                    j.updated_at = time.time()
+            _save_all()
+
+    _executor.submit(_run)
+    return job_id

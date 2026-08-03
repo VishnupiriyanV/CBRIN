@@ -22,6 +22,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+import paths  # noqa: E402
 import vector_store as vs  # noqa: E402
 
 
@@ -126,8 +127,8 @@ class TestRerankerUnavailableFallback:
 
 class TestDeleteVideoCleansUpKeyframes:
     def test_delete_video_removes_keyframe_files(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(vs, "KEYFRAMES_DIR", str(tmp_path))
-        monkeypatch.setattr(vs, "MEDIA_DIR", str(tmp_path))
+        monkeypatch.setattr(paths, "KEYFRAMES_DIR", str(tmp_path))
+        monkeypatch.setattr(paths, "MEDIA_DIR", str(tmp_path))
 
         store = _build_store_with_chunks()
 
