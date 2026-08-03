@@ -216,6 +216,68 @@ class MultimodalEngine:
         return f"Topic: {topic}. Questions: {questions}. Concepts: {concepts}. Spoken: {chunk_text}"
 
     @staticmethod
+    def segment_transcript_into_sentences(segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Split transcript segment list into punctuated sentence units.
+        Preserves start/end timestamps, duration, and sentence index.
+        """
+        if not segments:
+            return []
+
+        sentences = []
+        current_words = []
+        sentence_start_sec = None
+        sentence_end_sec = 0.0
+        sentence_idx = 0
+
+        for seg in segments:
+            seg_start = float(seg.get('start', 0.0))
+            seg_duration = float(seg.get('duration', 0.0))
+            seg_text = seg.get('text', '').strip()
+
+            if not seg_text:
+                continue
+
+            if sentence_start_sec is None:
+                sentence_start_sec = seg_start
+
+            # Split segment text by sentence punctuation [.!?]
+            raw_parts = re.split(r'([.!?]+)', seg_text)
+
+            for i in range(0, len(raw_parts), 2):
+                text_part = raw_parts[i].strip()
+                punct_part = raw_parts[i+1] if i+1 < len(raw_parts) else ''
+
+                if text_part:
+                    current_words.append(text_part + punct_part)
+                    sentence_end_sec = seg_start + seg_duration
+
+                if punct_part or (i + 2 < len(raw_parts)):
+                    full_text = " ".join(current_words).strip()
+                    if len(full_text.split()) >= 3:
+                        sentences.append({
+                            "sentence_idx": sentence_idx,
+                            "text": full_text,
+                            "start_sec": math.floor(sentence_start_sec),
+                            "end_sec": math.ceil(sentence_end_sec),
+                        })
+                        sentence_idx += 1
+                    current_words = []
+                    sentence_start_sec = None
+
+        if current_words and sentence_start_sec is not None:
+            full_text = " ".join(current_words).strip()
+            if len(full_text.split()) >= 3:
+                sentences.append({
+                    "sentence_idx": sentence_idx,
+                    "text": full_text,
+                    "start_sec": math.floor(sentence_start_sec),
+                    "end_sec": math.ceil(sentence_end_sec),
+                })
+
+        return sentences
+
+    @staticmethod
     def extract_keyframe_and_embed(
         source_target: Optional[str],
         timestamp_sec: float,

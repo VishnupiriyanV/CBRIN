@@ -13,7 +13,7 @@ import numpy as np
 from multimodal_engine import MultimodalEngine
 
 try:
-    from sentence_transformers import SentenceTransformer
+    from sentence_transformers import SentenceTransformer, CrossEncoder
     EMBEDDING_MODEL = SentenceTransformer('all-MiniLM-L6-v2')
     HAS_DENSE_MODEL = True
     print("[Vault] Loaded SentenceTransformer ('all-MiniLM-L6-v2') for semantic text embeddings.")
@@ -22,6 +22,21 @@ except Exception as e:
     print(f"[Vault] SentenceTransformer unavailable ({e}), falling back to TF-IDF.")
     from sklearn.feature_extraction.text import TfidfVectorizer
     from sklearn.metrics.pairwise import cosine_similarity
+
+CROSS_ENCODER_MODEL = None
+HAS_CROSS_ENCODER = True
+
+def get_cross_encoder():
+    global CROSS_ENCODER_MODEL, HAS_CROSS_ENCODER
+    if CROSS_ENCODER_MODEL is None and HAS_CROSS_ENCODER:
+        try:
+            print("[Vault] Loading CrossEncoder reranker ('cross-encoder/ms-marco-MiniLM-L-6-v2')...")
+            CROSS_ENCODER_MODEL = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
+            print("[Vault] CrossEncoder reranker loaded.")
+        except Exception as e:
+            print(f"[Vault] CrossEncoder failed to load: {e}")
+            HAS_CROSS_ENCODER = False
+    return CROSS_ENCODER_MODEL
 
 # Persistence paths
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
@@ -176,96 +191,91 @@ class VectorStore:
 
     def chunk_transcript(self, transcript_segments: List[Dict[str, Any]], video_meta: Dict[str, Any], media_path: Optional[str] = None) -> List[Dict[str, Any]]:
         """
-        Group transcript segments into sliding windows (~45s window, ~10s overlap).
-        Enrich each chunk with section topic, synthetic questions, and concepts via MultimodalEngine.
-        Extract keyframe thumbnails and CLIP visual embeddings when media is available.
+        Sentence-level small-to-big chunking.
+        1. Segment transcript into punctuated sentence units.
+        2. Embed each sentence unit for high-precision semantic matching.
+        3. Extract keyframe thumbnail & CLIP visual embedding.
         """
         chunks = []
         visual_vectors = []
-        window_duration = 45.0
-        overlap_duration = 10.0
+        now_iso = datetime.datetime.now().isoformat()
 
         if not transcript_segments:
             return chunks
 
-        total_duration = transcript_segments[-1].get('start', 0) + transcript_segments[-1].get('duration', 0)
-        current_start = 0.0
-        chunk_idx = 1
-        now_iso = datetime.datetime.now().isoformat()
+        sentences = MultimodalEngine.segment_transcript_into_sentences(transcript_segments)
 
-        while current_start < total_duration:
-            current_end = current_start + window_duration
+        # Fallback to sliding windows if sentence segmentation yields nothing
+        if not sentences:
+            total_duration = transcript_segments[-1].get('start', 0) + transcript_segments[-1].get('duration', 0)
+            current_start = 0.0
+            chunk_idx = 1
+            window_duration = 45.0
+            overlap_duration = 10.0
 
-            matching_segments = [
-                s for s in transcript_segments
-                if s.get('start', 0) >= current_start and s.get('start', 0) < current_end
-            ]
+            while current_start < total_duration:
+                current_end = current_start + window_duration
+                matching = [s for s in transcript_segments if s.get('start', 0) >= current_start and s.get('start', 0) < current_end]
+                if matching:
+                    text = " ".join([s.get('text', '') for s in matching]).strip()
+                    s_sec = math.floor(matching[0].get('start', 0))
+                    e_sec = math.ceil(matching[-1].get('start', 0) + matching[-1].get('duration', 0))
+                    if len(text.split()) >= 4:
+                        sentences.append({"sentence_idx": chunk_idx - 1, "text": text, "start_sec": s_sec, "end_sec": e_sec})
+                        chunk_idx += 1
+                current_start += (window_duration - overlap_duration)
 
-            if matching_segments:
-                combined_text = " ".join([s.get('text', '') for s in matching_segments]).strip()
-                start_sec = math.floor(matching_segments[0].get('start', 0))
-                end_sec = math.ceil(matching_segments[-1].get('start', 0) + matching_segments[-1].get('duration', 0))
+        local_target = media_path if (media_path and os.path.exists(media_path)) else None
+        thumb_url = video_meta.get('thumbnail_url') or (
+            f"https://img.youtube.com/vi/{video_meta.get('youtube_id')}/hqdefault.jpg" if video_meta.get('youtube_id') else None
+        )
 
-                start_min = self._format_timestamp(start_sec)
-                end_min = self._format_timestamp(end_sec)
+        for s_idx, sent in enumerate(sentences):
+            chunk_id = f"chunk-{video_meta['id']}-{s_idx + 1}"
+            sent_text = sent['text']
+            start_sec = sent['start_sec']
+            end_sec = sent['end_sec']
 
-                if len(combined_text.split()) >= 4:
-                    context = MultimodalEngine.extract_context(combined_text)
-                    enriched_text = MultimodalEngine.generate_enriched_text(combined_text, context)
+            start_timestamp = self._format_timestamp(start_sec)
+            end_timestamp = self._format_timestamp(end_sec)
 
-                    chunk_id = f"chunk-{video_meta['id']}-{chunk_idx}"
+            context = MultimodalEngine.extract_context(sent_text)
+            enriched_text = MultimodalEngine.generate_enriched_text(sent_text, context)
 
-                    chunk_obj = {
-                        "id": chunk_id,
-                        "video_id": video_meta['id'],
-                        "video_title": video_meta.get('title', 'Untitled'),
-                        "channel": video_meta.get('channel', 'Creator Library'),
-                        "youtube_id": video_meta.get('youtube_id'),
-                        "is_local": video_meta.get('is_local', False),
-                        "start_sec": start_sec,
-                        "end_sec": end_sec,
-                        "start_timestamp": start_min,
-                        "end_timestamp": end_min,
-                        "text": combined_text,
-                        "enriched_text": enriched_text,
-                        "section_topic": context['section_topic'],
-                        "questions_answered": context['questions_answered'],
-                        "implicit_concepts": context['implicit_concepts'],
-                        "matched_concepts": context['implicit_concepts'],
-                        "thumbnail_url": video_meta.get('thumbnail_url', ''),
-                        "has_visual_embedding": False,
-                        "keyframe_url": None,
-                        "indexed_at": now_iso,
-                    }
+            vis_vec, keyframe_url = MultimodalEngine.extract_keyframe_and_embed(
+                source_target=local_target,
+                timestamp_sec=start_sec,
+                chunk_id=chunk_id,
+                image_url=thumb_url
+            )
 
-                    # Extract CLIP visual embedding + keyframe thumbnail
-                    local_target = media_path if (media_path and os.path.exists(media_path)) else None
-                    thumb_url = video_meta.get('thumbnail_url') or (
-                        f"https://img.youtube.com/vi/{video_meta.get('youtube_id')}/hqdefault.jpg" if video_meta.get('youtube_id') else None
-                    )
+            chunk_obj = {
+                "id": chunk_id,
+                "video_id": video_meta['id'],
+                "video_title": video_meta.get('title', 'Untitled'),
+                "channel": video_meta.get('channel', 'Creator Library'),
+                "youtube_id": video_meta.get('youtube_id'),
+                "is_local": video_meta.get('is_local', False),
+                "sentence_idx": s_idx,
+                "start_sec": start_sec,
+                "end_sec": end_sec,
+                "start_timestamp": start_timestamp,
+                "end_timestamp": end_timestamp,
+                "text": sent_text,
+                "enriched_text": enriched_text,
+                "section_topic": context['section_topic'],
+                "questions_answered": context['questions_answered'],
+                "implicit_concepts": context['implicit_concepts'],
+                "matched_concepts": context['implicit_concepts'],
+                "thumbnail_url": video_meta.get('thumbnail_url', ''),
+                "has_visual_embedding": vis_vec is not None,
+                "keyframe_url": keyframe_url,
+                "indexed_at": now_iso,
+            }
 
-                    vis_vec, keyframe_url = MultimodalEngine.extract_keyframe_and_embed(
-                        source_target=local_target,
-                        timestamp_sec=start_sec,
-                        chunk_id=chunk_id,
-                        image_url=thumb_url
-                    )
+            chunks.append(chunk_obj)
+            visual_vectors.append(vis_vec)
 
-                    if vis_vec is not None:
-                        chunk_obj["has_visual_embedding"] = True
-                        visual_vectors.append(vis_vec)
-                    else:
-                        visual_vectors.append(None)
-
-                    if keyframe_url:
-                        chunk_obj["keyframe_url"] = keyframe_url
-
-                    chunks.append(chunk_obj)
-                    chunk_idx += 1
-
-            current_start += (window_duration - overlap_duration)
-
-        # Accumulate visual embeddings for the new chunks
         if any(v is not None for v in visual_vectors):
             dim = next(v.shape[0] for v in visual_vectors if v is not None)
             new_vis = np.array([
@@ -369,10 +379,13 @@ class VectorStore:
         self.is_fitted = True
         print(f"[Vault] Indexed {len(self.chunks)} chunks.")
 
-    def search(self, query: str, top_k: int = 5, relevance_threshold: float = 0.15, search_mode: str = "hybrid") -> Dict[str, Any]:
+    def search(self, query: str, top_k: int = 5, relevance_threshold: float = 0.1, search_mode: str = "hybrid") -> Dict[str, Any]:
         """
-        Multi-way semantic search:
-        Modes: 'hybrid', 'questions', 'topics', 'visual_scenes'
+        Small-to-Big Retrieval Pipeline:
+        1. Dense retrieval over sentence-level chunks (top 20).
+        2. Window expansion (±1 surrounding sentence).
+        3. Merge overlapping / adjacent windows from same video.
+        4. Cross-Encoder reranking to pick top 5.
         """
         start_time = time.time()
 
@@ -386,14 +399,9 @@ class VectorStore:
                 "search_mode": search_mode
             }
 
-        # Select target text field based on search_mode
-        if search_mode == "questions":
-            search_query = f"Question: {query}"
-        elif search_mode == "topics":
-            search_query = f"Topic: {query}"
-        else:
-            search_query = query
+        search_query = query
 
+        # Step 1: Compute Dense Similarities over Sentence Chunks
         if search_mode == "visual_scenes":
             clip_vec = MultimodalEngine.embed_text_clip(query)
             if clip_vec is not None and self.visual_embeddings is not None and len(self.visual_embeddings) == len(self.chunks):
@@ -414,7 +422,7 @@ class VectorStore:
             else:
                 similarities = np.zeros(len(self.chunks))
 
-        # Filter by threshold and sort
+        # Filter top 20 candidate sentence matches
         scored_indices = []
         for idx, score in enumerate(similarities):
             val = float(score)
@@ -422,22 +430,142 @@ class VectorStore:
                 scored_indices.append((idx, val))
 
         scored_indices.sort(key=lambda x: x[1], reverse=True)
+        top_sentence_matches = scored_indices[:20]
 
+        if not top_sentence_matches:
+            return {
+                "query": query,
+                "results": [],
+                "execution_time_ms": round((time.time() - start_time) * 1000, 2),
+                "total_chunks_scanned": len(self.chunks),
+                "library_video_count": len(self.videos),
+                "search_mode": search_mode
+            }
+
+        # Step 2: Window Expansion (±1 sentence) & Candidate Construction
+        # Group chunks by video_id for fast sentence lookup
+        video_chunks_map: Dict[str, List[Dict[str, Any]]] = {}
+        for c in self.chunks:
+            vid = c.get('video_id', '')
+            if vid not in video_chunks_map:
+                video_chunks_map[vid] = []
+            video_chunks_map[vid].append(c)
+
+        for vid in video_chunks_map:
+            video_chunks_map[vid].sort(key=lambda x: x.get('sentence_idx', 0))
+
+        expanded_candidates = []
+
+        for idx, dense_score in top_sentence_matches:
+            target_chunk = self.chunks[idx]
+            vid_id = target_chunk.get('video_id', '')
+            s_idx = target_chunk.get('sentence_idx', 0)
+            vid_sentences = video_chunks_map.get(vid_id, [])
+
+            # Expand window to ±1 sentence
+            matched_pos = next((i for i, sc in enumerate(vid_sentences) if sc['id'] == target_chunk['id']), 0)
+            start_pos = max(0, matched_pos - 1)
+            end_pos = min(len(vid_sentences) - 1, matched_pos + 1)
+
+            window_sentences = vid_sentences[start_pos:end_pos + 1]
+
+            combined_text = " ".join([s['text'] for s in window_sentences]).strip()
+            min_start_sec = window_sentences[0]['start_sec']
+            max_end_sec = window_sentences[-1]['end_sec']
+
+            candidate_item = {
+                "id": target_chunk['id'],
+                "video_id": vid_id,
+                "video_title": target_chunk.get('video_title', ''),
+                "channel": target_chunk.get('channel', ''),
+                "youtube_id": target_chunk.get('youtube_id'),
+                "is_local": target_chunk.get('is_local', False),
+                "start_sec": min_start_sec,
+                "end_sec": max_end_sec,
+                "start_timestamp": self._format_timestamp(min_start_sec),
+                "end_timestamp": self._format_timestamp(max_end_sec),
+                "text": combined_text,
+                "matched_sentence": target_chunk['text'],
+                "score": dense_score,
+                "dense_score": dense_score,
+                "matched_concepts": target_chunk.get('implicit_concepts', []),
+                "thumbnail_url": target_chunk.get('thumbnail_url', ''),
+                "keyframe_url": target_chunk.get('keyframe_url'),
+                "section_topic": target_chunk.get('section_topic', ''),
+                "questions_answered": target_chunk.get('questions_answered', []),
+                "implicit_concepts": target_chunk.get('implicit_concepts', []),
+                "has_visual_embedding": target_chunk.get('has_visual_embedding', False),
+                "is_highlighted": target_chunk['id'] in self.highlights,
+                "sentence_range": (window_sentences[0].get('sentence_idx', 0), window_sentences[-1].get('sentence_idx', 0)),
+            }
+            expanded_candidates.append(candidate_item)
+
+        # Step 3: Merge Overlapping or Adjacent Windows from the Same Video
+        merged_candidates = []
+        expanded_candidates.sort(key=lambda x: (x['video_id'], x['sentence_range'][0]))
+
+        for candidate in expanded_candidates:
+            if not merged_candidates:
+                merged_candidates.append(candidate)
+                continue
+
+            last = merged_candidates[-1]
+            # Check if same video and overlapping/adjacent sentence ranges
+            if last['video_id'] == candidate['video_id']:
+                last_start_s, last_end_s = last['sentence_range']
+                cand_start_s, cand_end_s = candidate['sentence_range']
+
+                if cand_start_s <= last_end_s + 1:
+                    # Merge overlapping windows
+                    new_start_s = min(last_start_s, cand_start_s)
+                    new_end_s = max(last_end_s, cand_end_s)
+
+                    # Reconstruct merged text without duplicate sentences
+                    vid_sents = video_chunks_map.get(last['video_id'], [])
+                    merged_sents = [s for s in vid_sents if new_start_s <= s.get('sentence_idx', 0) <= new_end_s]
+                    merged_text = " ".join([s['text'] for s in merged_sents]).strip()
+
+                    last['sentence_range'] = (new_start_s, new_end_s)
+                    last['start_sec'] = merged_sents[0]['start_sec']
+                    last['end_sec'] = merged_sents[-1]['end_sec']
+                    last['start_timestamp'] = self._format_timestamp(last['start_sec'])
+                    last['end_timestamp'] = self._format_timestamp(last['end_sec'])
+                    last['text'] = merged_text
+                    last['dense_score'] = max(last['dense_score'], candidate['dense_score'])
+                    last['score'] = last['dense_score']
+                    continue
+
+            merged_candidates.append(candidate)
+
+        # Step 4: Cross-Encoder Reranking Stage
         results = []
-        for idx, score in scored_indices[:top_k]:
-            item = dict(self.chunks[idx])
-            item['score'] = round(score, 4)
-            item['is_highlighted'] = item['id'] in self.highlights
 
-            # Generate a clear one-line match explanation
-            topic = item.get('section_topic', 'spoken transcript')
+        reranker = get_cross_encoder()
+        if reranker is not None and merged_candidates:
+            try:
+                pairs = [(query, cand['text']) for cand in merged_candidates]
+                rerank_scores = reranker.predict(pairs)
+
+                for idx, cand in enumerate(merged_candidates):
+                    raw_rerank = float(rerank_scores[idx])
+                    normalized_score = round(1.0 / (1.0 + math.exp(-raw_rerank)), 4)
+                    cand['score'] = normalized_score
+                    cand['rerank_score'] = raw_rerank
+
+                merged_candidates.sort(key=lambda x: x['score'], reverse=True)
+            except Exception as e:
+                print(f"[Vault] CrossEncoder prediction error: {e}")
+                merged_candidates.sort(key=lambda x: x['score'], reverse=True)
+        else:
+            merged_candidates.sort(key=lambda x: x['score'], reverse=True)
+
+        for item in merged_candidates[:top_k]:
+            topic = item.get('section_topic', 'spoken content')
             concepts = item.get('implicit_concepts', [])
-            questions = item.get('questions_answered', [])
+            matched_sentence = item.get('matched_sentence', '')
 
             if search_mode == 'visual_scenes':
                 match_reason = f"Matched visual scene frame for '{topic}'"
-            elif search_mode == 'questions' and questions and len(questions[0]) > 10:
-                match_reason = f"Matched question: \"{questions[0]}\""
             elif concepts and len(concepts) >= 2:
                 match_reason = f"Matched: {concepts[0]} & {concepts[1]}"
             elif concepts:
