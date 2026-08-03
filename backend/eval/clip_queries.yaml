@@ -1,0 +1,74 @@
+# Hand-labeled clip-boundary fixtures for backend/eval/clip_eval.py (ENGINE-PLAN.md Phase 6).
+#
+# There is no real creator library in this checkout to hand-label against (backend/data/ is
+# empty and gitignored), so these are synthetic transcripts constructed to exercise the
+# specific failure modes ENGINE exists to prevent: mid-sentence starts, and clips that cut a
+# setup off from its punchline. Each "video" is a self-contained sentence list (matching the
+# shape store.chunks produces: sentence_idx/text/start_sec/end_sec) plus a hand-labeled
+# expected clip window and, where relevant, the sentence index a payoff structurally depends
+# on (required_setup_idx).
+#
+# To eval against a REAL library instead, point clip_eval.py's --video-id at a video_id in a
+# running backend/data/ library (see the --video-id flag) — it reads real sentences from
+# VectorStore.chunks the same way run_eval.py does for search queries.
+
+videos:
+  - video_id: "fixture-work-story"
+    sentences:
+      - {sentence_idx: 0, start_sec: 0,  end_sec: 8,  text: "So today I want to tell you about the biggest mistake I ever made at work."}
+      - {sentence_idx: 1, start_sec: 9,  end_sec: 17, text: "It was a normal Tuesday morning and everything seemed fine when I got in."}
+      - {sentence_idx: 2, start_sec: 18, end_sec: 26, text: "My manager called me into a meeting with absolutely no warning at all that day."}
+      - {sentence_idx: 3, start_sec: 27, end_sec: 35, text: "I walked in completely convinced that I was about to get praised for my work."}
+      - {sentence_idx: 4, start_sec: 36, end_sec: 44, text: "But then she said something I have never repeated to anyone until right now."}
+      - {sentence_idx: 5, start_sec: 45, end_sec: 53, text: "She told me the project I led had failed silently for three whole months straight."}
+      - {sentence_idx: 6, start_sec: 54, end_sec: 62, text: "I felt my stomach drop and my face went completely pale in front of everyone."}
+      - {sentence_idx: 7, start_sec: 63, end_sec: 71, text: "Here is the thing nobody tells you about failure like that when it happens."}
+      - {sentence_idx: 8, start_sec: 72, end_sec: 80, text: "It taught me more about resilience than any success ever could have taught me."}
+      - {sentence_idx: 9, start_sec: 81, end_sec: 89, text: "Now I check in on every project every single week without fail no matter what."}
+    examples:
+      - label: "confession requires the walk-in setup"
+        expected_start_sec: 27
+        expected_end_sec: 44
+        required_setup_idx: 3
+      - label: "lesson requires the failure reveal"
+        expected_start_sec: 45
+        expected_end_sec: 71
+        required_setup_idx: 5
+      - label: "reaction beat requires the confession"
+        expected_start_sec: 36
+        expected_end_sec: 62
+        required_setup_idx: 4
+      - label: "closing habit requires the lesson"
+        expected_start_sec: 63
+        expected_end_sec: 89
+        required_setup_idx: 7
+
+  - video_id: "fixture-product-launch"
+    sentences:
+      - {sentence_idx: 0, start_sec: 0,   end_sec: 9,   text: "We spent eight months building a feature nobody actually asked for."}
+      - {sentence_idx: 1, start_sec: 10,  end_sec: 18,  text: "The team was confident it would double our signups within a quarter."}
+      - {sentence_idx: 2, start_sec: 19,  end_sec: 27,  text: "We launched on a Monday morning with a press release and a live stream."}
+      - {sentence_idx: 3, start_sec: 28,  end_sec: 36,  text: "Within an hour the dashboard showed almost nobody had clicked the button."}
+      - {sentence_idx: 4, start_sec: 37,  end_sec: 45,  text: "Turns out we had never actually asked a single customer what they wanted."}
+      - {sentence_idx: 5, start_sec: 46,  end_sec: 54,  text: "That silence taught us more than any successful launch ever could have."}
+      - {sentence_idx: 6, start_sec: 55,  end_sec: 63,  text: "Here is the thing nobody tells you about shipping in a vacuum like that."}
+      - {sentence_idx: 7, start_sec: 64,  end_sec: 72,  text: "We now interview five users before writing a single line of new code."}
+      - {sentence_idx: 8, start_sec: 73,  end_sec: 81,  text: "And every launch since then has actually moved the numbers we care about."}
+      - {sentence_idx: 9, start_sec: 82,  end_sec: 90,  text: "So if you are about to ship blind, stop and go talk to someone first."}
+    examples:
+      - label: "turning point requires the dashboard reveal"
+        expected_start_sec: 28
+        expected_end_sec: 45
+        required_setup_idx: 3
+      - label: "lesson requires the customer-silence turn"
+        expected_start_sec: 37
+        expected_end_sec: 63
+        required_setup_idx: 4
+      - label: "payoff requires knowing what changed"
+        expected_start_sec: 64
+        expected_end_sec: 81
+        required_setup_idx: 7
+      - label: "cta requires the whole arc's outcome"
+        expected_start_sec: 73
+        expected_end_sec: 90
+        required_setup_idx: 8

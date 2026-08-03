@@ -100,3 +100,65 @@ tune retrieval by, only to notice this gap exists.
 change and require both: recall goes up, false-positive rate on negatives stays at (or
 near) 0%. If a change trades one for the other, it's not obviously a win — decide
 deliberately.
+
+---
+
+## ENGINE clip eval (`clip_eval.py`)
+
+Same rule, applied to ENGINE-PLAN.md Phase 2's narrative clip generation: "does a clip
+candidate respect the sentence/setup boundaries it's supposed to" made measurable, not
+asserted by fiat.
+
+```bash
+cd backend
+python eval/clip_eval.py                    # heuristic (degraded) mode, default clip_queries.yaml
+python eval/clip_eval.py --verbose           # + per-example pass/fail
+python eval/clip_eval.py --mode llm          # LLM-backed beat extraction (needs VAULT_LLM_API_KEY)
+python eval/clip_eval.py --compare-modes     # heuristic vs LLM side by side
+```
+
+### What it measures
+
+- **mid_sentence_start_rate** — must be `0.0%`. This is the regression guard on ENGINE's
+  core claim: every candidate is built from sentence boundaries, so a clip cutting mid-word
+  or mid-sentence should be structurally impossible. A nonzero value means
+  `narrative_engine.beats_to_candidates` has regressed, not that a threshold moved.
+- **setup_containment_rate** — must be `100%`. For every hand-labeled example with a
+  `required_setup_idx`, does the best-matching generated candidate's start sit at or before
+  it? This is `test_narrative_engine.py`'s dependency-chain guarantee, now checked against
+  full multi-beat transcripts instead of hand-built minimal fixtures.
+- **coverage_rate** — fraction of hand-labeled examples for which *any* generated candidate
+  overlapped the expected window at all. A candidate has to exist before its boundary can be
+  judged, and this is the number that's honest about a beat-detector simply missing a beat.
+- **mean_iou** / **mean_boundary_error_sec** — quality of the best-matching candidate's
+  boundaries against the hand label, among examples with a match.
+
+### Current fixtures
+
+`clip_queries.yaml` has **no real hand-labeled creator library to draw from** —
+`backend/data/` is empty and gitignored in this checkout, unlike the search eval above which
+at least had 2 real ingested videos at some point. The 8 examples across 2 synthetic
+"videos" are constructed transcripts designed to exercise the specific failure modes
+ENGINE exists to prevent (a payoff whose setup is several sentences back). Real usage should
+point this harness at an actual indexed library; see the YAML file's header comment.
+
+### v0 — heuristic (degraded) mode, synthetic fixtures
+
+```
+Examples: 8   Candidates generated: 2
+mid_sentence_start_rate: 0.0%
+coverage_rate: 50.0%
+mean_iou: 0.614
+mean_boundary_error_sec: 6.750
+setup_containment_rate: 100.0%
+```
+
+The hard constraint (`setup_containment_rate`) holds at 100% on every example a candidate
+was found for — confirming the dependency-chain guarantee empirically, not just in the
+isolated `test_narrative_engine.py` unit tests. `coverage_rate` at 50% is the honest cost of
+degraded mode: discourse-marker/question-pairing heuristics found beats for only 2 of the 4
+narrative turns per fixture video, missing the "lesson" and "closing" beats entirely because
+they don't trip any of the bundled markers. This is exactly `IMPROVEMENT-PLAN.md`-style
+"quality without an LLM key is materially lower" (ENGINE-PLAN.md risk #6/#7), now with a
+number instead of a claim. `--compare-modes` against an LLM-backed run is the next
+measurement once a `VAULT_LLM_API_KEY` is available to test against.
