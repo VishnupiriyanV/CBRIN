@@ -61,6 +61,9 @@ pnpm-debug.log*
 ehthumbs.db
 Thumbs.db
 
+# Backend persisted data (embeddings, chunks)
+backend/data/
+
 # Temporary & Cache files
 .eslintcache
 .stylelintcache
