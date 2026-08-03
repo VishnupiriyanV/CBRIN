@@ -1,6 +1,8 @@
 import os
 import re
 import math
+import io
+import urllib.request
 from collections import Counter
 from typing import List, Dict, Any, Optional, Tuple
 import numpy as np
@@ -56,8 +58,18 @@ def _ensure_keyframes_dir():
 
 def preload_models():
     """Preload SentenceTransformer text model and CLIP visual model into memory on startup."""
-    global TEXT_MODEL, CLIP_MODEL, HAS_TEXT_MODEL, HAS_CLIP_MODEL
+    global TEXT_MODEL, CLIP_MODEL, HAS_TEXT_MODEL, HAS_CLIP_MODEL, HAS_OPENCV
     _ensure_keyframes_dir()
+
+    # Re-check OpenCV import in case it was installed dynamically
+    if not HAS_OPENCV:
+        try:
+            import cv2
+            globals()['cv2'] = cv2
+            HAS_OPENCV = True
+            print("[MultimodalEngine] OpenCV (cv2) successfully initialized.")
+        except ImportError:
+            HAS_OPENCV = False
 
     if HAS_TEXT_MODEL and TEXT_MODEL is None:
         try:
@@ -82,37 +94,20 @@ class MultimodalEngine:
     """
     Multimodal Context Engine combining:
     1. Whisper segment analysis
-    2. CLIP visual scene embedding (via frame sampling)
+    2. CLIP visual scene embedding (via video frame sampling or image URLs)
     3. TF-IDF weighted contextual topic & synthetic question extraction
-    4. Bigram/trigram phrase detection for meaningful multi-word concepts
+    4. Positional bigram/trigram phrase detection
     5. Keyframe thumbnail generation
     """
 
     @staticmethod
-    def _extract_ngrams(words: List[str], n: int) -> List[str]:
-        """Extract n-grams from a list of cleaned words."""
-        if len(words) < n:
-            return []
-        return [" ".join(words[i:i+n]) for i in range(len(words) - n + 1)]
-
-    @staticmethod
     def _score_ngram(ngram: str, frequency: int, total_words: int) -> float:
-        """
-        Score an n-gram by its frequency relative to total words and its word count.
-        Bigrams/trigrams get a boost because multi-word phrases are more specific.
-        """
         tf = frequency / max(total_words, 1)
-        length_bonus = len(ngram.split()) * 0.3  # bigrams=0.6, trigrams=0.9
+        length_bonus = len(ngram.split()) * 0.3
         return tf + length_bonus
 
     @staticmethod
     def _extract_positional_ngrams(raw_words: List[str], n: int) -> List[str]:
-        """
-        Extract n-grams from the ORIGINAL word sequence, keeping only those
-        where ALL constituent words pass the meaningful filter (>= 5 chars, not stopwords).
-        This ensures bigrams like 'relational database' are real adjacent phrases from the text,
-        not artifacts of stopword removal.
-        """
         ngrams = []
         for i in range(len(raw_words) - n + 1):
             window = raw_words[i:i+n]
@@ -122,62 +117,46 @@ class MultimodalEngine:
 
     @staticmethod
     def extract_context(text: str) -> Dict[str, Any]:
-        """
-        Extract section topic, synthetic questions answered, and implicit concepts
-        using frequency-weighted ranking with positional bigram/trigram phrase detection.
-        Produces contextually meaningful topics and questions.
-        """
-        # Tokenize: preserve original word order for positional n-gram extraction
         raw_words = re.findall(r'\b[a-zA-Z]+\b', text.lower())
 
-        # Filter: meaningful unigrams (>= 5 chars, not stopwords)
         meaningful_words = [
             w for w in raw_words
             if len(w) >= 5 and w not in STOPWORDS
         ]
 
-        # Count word frequencies for TF-IDF style ranking
         word_freq = Counter(meaningful_words)
         total_words = len(meaningful_words)
 
-        # --- Positional Bigram and Trigram extraction from ORIGINAL word order ---
         bigrams = MultimodalEngine._extract_positional_ngrams(raw_words, 2)
         trigrams = MultimodalEngine._extract_positional_ngrams(raw_words, 3)
 
         bigram_freq = Counter(bigrams)
         trigram_freq = Counter(trigrams)
 
-        # Score all candidates
         scored_candidates = []
 
-        # Score unigrams: those appearing 2+ times or 7+ chars (domain-specific terms)
         for word, freq in word_freq.items():
             if freq >= 2 or len(word) >= 7:
                 score = MultimodalEngine._score_ngram(word, freq, total_words)
                 scored_candidates.append((word, score, 'unigram'))
 
-        # Score bigrams: appearing 2+ times, or both words >= 6 chars (technical/domain terms)
         for bigram, freq in bigram_freq.items():
             parts = bigram.split()
             if freq >= 2 or all(len(p) >= 6 for p in parts):
                 score = MultimodalEngine._score_ngram(bigram, freq, total_words)
                 scored_candidates.append((bigram, score, 'bigram'))
 
-        # Score trigrams: only those appearing 2+ times (high confidence)
         for trigram, freq in trigram_freq.items():
             if freq >= 2:
                 score = MultimodalEngine._score_ngram(trigram, freq, total_words)
                 scored_candidates.append((trigram, score, 'trigram'))
 
-        # Sort by score descending
         scored_candidates.sort(key=lambda x: x[1], reverse=True)
 
-        # Deduplicate: prefer higher-scoring phrases, suppress subsumed unigrams
         final_concepts = []
         used_words = set()
         for candidate, score, gram_type in scored_candidates:
             candidate_words = set(candidate.split())
-            # Skip unigrams whose word is already covered by a higher-scoring multi-word phrase
             if gram_type == 'unigram' and candidate_words.issubset(used_words):
                 continue
             final_concepts.append(candidate)
@@ -185,7 +164,6 @@ class MultimodalEngine:
             if len(final_concepts) >= 6:
                 break
 
-        # Fallback: if too few concepts, add top-frequency single words
         if len(final_concepts) < 3:
             for word, freq in word_freq.most_common(10):
                 if word not in used_words and len(word) >= 5:
@@ -194,11 +172,9 @@ class MultimodalEngine:
                     if len(final_concepts) >= 4:
                         break
 
-        # --- Generate section topic ---
         if len(final_concepts) >= 2:
             top = final_concepts[0]
             if ' ' in top:
-                # Multi-word phrase makes a great standalone topic
                 section_topic = top.title()
             else:
                 section_topic = f"{final_concepts[0].title()} & {final_concepts[1].title()}"
@@ -207,7 +183,6 @@ class MultimodalEngine:
         else:
             section_topic = "General Discussion"
 
-        # --- Generate synthetic questions ---
         questions_answered = []
         if len(final_concepts) >= 2:
             top_concept = final_concepts[0].replace('_', ' ')
@@ -235,57 +210,72 @@ class MultimodalEngine:
 
     @staticmethod
     def generate_enriched_text(chunk_text: str, context: Dict[str, Any]) -> str:
-        """
-        Combine transcript text with section topic, synthetic questions, and concepts for hybrid embedding.
-        """
         topic = context.get('section_topic', '')
         questions = " ".join(context.get('questions_answered', []))
         concepts = " ".join(context.get('implicit_concepts', []))
         return f"Topic: {topic}. Questions: {questions}. Concepts: {concepts}. Spoken: {chunk_text}"
 
     @staticmethod
-    def extract_keyframe_and_embed(media_path: str, timestamp_sec: float, chunk_id: str) -> Tuple[Optional[np.ndarray], Optional[str]]:
+    def extract_keyframe_and_embed(
+        source_target: Optional[str],
+        timestamp_sec: float,
+        chunk_id: str,
+        image_url: Optional[str] = None
+    ) -> Tuple[Optional[np.ndarray], Optional[str]]:
         """
-        Sample video frame at target timestamp, save thumbnail JPEG to disk, and compute CLIP visual embedding.
+        Extract keyframe or image, compute CLIP visual embedding, and save thumbnail.
+        Supports:
+        1. Local video files (.mp4/.mov) via OpenCV frame sampling.
+        2. Image URLs (YouTube thumbnails / Web images) via PIL & HTTP fetch.
         Returns tuple: (visual_vector, keyframe_url)
         """
-        global CLIP_MODEL
+        global CLIP_MODEL, HAS_OPENCV
         _ensure_keyframes_dir()
 
         if CLIP_MODEL is None and HAS_CLIP_MODEL:
             preload_models()
 
-        if not HAS_OPENCV or not os.path.exists(media_path):
+        if CLIP_MODEL is None:
             return None, None
 
-        try:
-            cap = cv2.VideoCapture(media_path)
-            fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-            frame_number = int(timestamp_sec * fps)
-            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
-            ret, frame = cap.read()
-            cap.release()
+        keyframe_filename = f"{chunk_id}.jpg"
+        keyframe_path = os.path.join(KEYFRAMES_DIR, keyframe_filename)
+        keyframe_url = f"http://localhost:8000/api/keyframe/{chunk_id}"
 
-            if not ret or frame is None:
-                return None, None
+        # Option A: Local video file via OpenCV
+        if source_target and os.path.exists(source_target) and HAS_OPENCV:
+            try:
+                cap = cv2.VideoCapture(source_target)
+                fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+                frame_number = int(timestamp_sec * fps)
+                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
+                ret, frame = cap.read()
+                cap.release()
 
-            # Save keyframe image JPEG for UI thumbnail display
-            keyframe_filename = f"{chunk_id}.jpg"
-            keyframe_path = os.path.join(KEYFRAMES_DIR, keyframe_filename)
-            cv2.imwrite(keyframe_path, frame, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
-            keyframe_url = f"http://localhost:8000/api/keyframe/{chunk_id}"
+                if ret and frame is not None:
+                    cv2.imwrite(keyframe_path, frame, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+                    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    pil_img = Image.fromarray(rgb_frame)
+                    visual_vec = CLIP_MODEL.encode(pil_img, convert_to_numpy=True, normalize_embeddings=True)
+                    return visual_vec, keyframe_url
+            except Exception as e:
+                print(f"[MultimodalEngine] OpenCV frame sampling error at {timestamp_sec}s: {e}")
 
-            # Compute CLIP visual embedding if model is available
-            visual_vec = None
-            if CLIP_MODEL is not None:
-                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                pil_img = Image.fromarray(rgb_frame)
-                visual_vec = CLIP_MODEL.encode(pil_img, convert_to_numpy=True, normalize_embeddings=True)
+        # Option B: Image URL (e.g. YouTube thumbnail poster) via PIL
+        target_url = image_url or (source_target if source_target and source_target.startswith('http') else None)
+        if target_url:
+            try:
+                req = urllib.request.Request(target_url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
+                with urllib.request.urlopen(req, timeout=8) as response:
+                    img_bytes = response.read()
+                    pil_img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+                    pil_img.save(keyframe_path, "JPEG", quality=85)
+                    visual_vec = CLIP_MODEL.encode(pil_img, convert_to_numpy=True, normalize_embeddings=True)
+                    return visual_vec, keyframe_url
+            except Exception as e:
+                print(f"[MultimodalEngine] Image URL visual embedding failed for {target_url}: {e}")
 
-            return visual_vec, keyframe_url
-        except Exception as e:
-            print(f"[MultimodalEngine] Keyframe extraction failed at {timestamp_sec}s: {e}")
-            return None, None
+        return None, None
 
     @staticmethod
     def embed_text_clip(query: str) -> Optional[np.ndarray]:

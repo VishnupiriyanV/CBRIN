@@ -107,12 +107,72 @@ class VectorStore:
 
             if os.path.exists(VISUAL_EMBEDDINGS_FILE):
                 self.visual_embeddings = np.load(VISUAL_EMBEDDINGS_FILE)
+
+            # Auto-generate visual embeddings if missing or unpopulated
+            missing_vis = sum(1 for c in self.chunks if not c.get('has_visual_embedding', False))
+            if self.chunks and (self.visual_embeddings is None or missing_vis > 0):
+                self.reindex_visual_embeddings()
+
         except Exception as e:
             print(f"[Vault] Error loading persisted library: {e}. Starting fresh.")
             self.chunks = []
             self.videos = {}
             self.highlights = {}
             self.is_fitted = True
+
+    def reindex_visual_embeddings(self):
+        """
+        Generate CLIP visual embeddings for all stored chunks (YouTube thumbnails or local video keyframes).
+        """
+        if not self.chunks:
+            return
+
+        print(f"[Vault] Generating CLIP visual embeddings for {len(self.chunks)} chunks...")
+        visual_vectors = []
+        updated_chunks = False
+
+        for chunk in self.chunks:
+            chunk_id = chunk['id']
+            start_sec = chunk.get('start_sec', 0)
+            video_id = chunk.get('video_id', '')
+
+            local_path = None
+            for ext in ['.mp4', '.mov', '.webm', '.mkv', '.avi', '.mp3', '.wav', '.m4a']:
+                fpath = os.path.join(MEDIA_DIR, f"{video_id}{ext}")
+                if os.path.exists(fpath):
+                    local_path = fpath
+                    break
+
+            thumb_url = chunk.get('thumbnail_url') or (
+                f"https://img.youtube.com/vi/{chunk.get('youtube_id')}/hqdefault.jpg" if chunk.get('youtube_id') else None
+            )
+
+            vis_vec, keyframe_url = MultimodalEngine.extract_keyframe_and_embed(
+                source_target=local_path,
+                timestamp_sec=start_sec,
+                chunk_id=chunk_id,
+                image_url=thumb_url
+            )
+
+            if vis_vec is not None:
+                chunk["has_visual_embedding"] = True
+                visual_vectors.append(vis_vec)
+                if keyframe_url:
+                    chunk["keyframe_url"] = keyframe_url
+                updated_chunks = True
+            else:
+                visual_vectors.append(None)
+
+        if any(v is not None for v in visual_vectors):
+            dim = next(v.shape[0] for v in visual_vectors if v is not None)
+            self.visual_embeddings = np.array([
+                v if v is not None else np.zeros(dim)
+                for v in visual_vectors
+            ])
+            print(f"[Vault] Successfully indexed CLIP visual embeddings for {sum(1 for v in visual_vectors if v is not None)}/{len(self.chunks)} chunks.")
+
+        if updated_chunks:
+            self._save_to_disk()
 
     def chunk_transcript(self, transcript_segments: List[Dict[str, Any]], video_meta: Dict[str, Any], media_path: Optional[str] = None) -> List[Dict[str, Any]]:
         """
@@ -178,20 +238,27 @@ class VectorStore:
                         "indexed_at": now_iso,
                     }
 
-                    # Extract CLIP visual embedding + keyframe thumbnail if media path is available
-                    if media_path and os.path.exists(media_path):
-                        vis_vec, keyframe_url = MultimodalEngine.extract_keyframe_and_embed(
-                            media_path, start_sec, chunk_id
-                        )
-                        if vis_vec is not None:
-                            chunk_obj["has_visual_embedding"] = True
-                            visual_vectors.append(vis_vec)
-                        else:
-                            visual_vectors.append(None)
-                        if keyframe_url:
-                            chunk_obj["keyframe_url"] = keyframe_url
+                    # Extract CLIP visual embedding + keyframe thumbnail
+                    local_target = media_path if (media_path and os.path.exists(media_path)) else None
+                    thumb_url = video_meta.get('thumbnail_url') or (
+                        f"https://img.youtube.com/vi/{video_meta.get('youtube_id')}/hqdefault.jpg" if video_meta.get('youtube_id') else None
+                    )
+
+                    vis_vec, keyframe_url = MultimodalEngine.extract_keyframe_and_embed(
+                        source_target=local_target,
+                        timestamp_sec=start_sec,
+                        chunk_id=chunk_id,
+                        image_url=thumb_url
+                    )
+
+                    if vis_vec is not None:
+                        chunk_obj["has_visual_embedding"] = True
+                        visual_vectors.append(vis_vec)
                     else:
                         visual_vectors.append(None)
+
+                    if keyframe_url:
+                        chunk_obj["keyframe_url"] = keyframe_url
 
                     chunks.append(chunk_obj)
                     chunk_idx += 1

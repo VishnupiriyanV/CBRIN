@@ -5,10 +5,11 @@ import { ResultCard } from './components/ResultCard';
 import { VideoPlayerModal } from './components/VideoPlayerModal';
 import { LibraryModal } from './components/LibraryModal';
 import { HighlightsPanel } from './components/HighlightsPanel';
+import { IndexingProgressModal } from './components/IndexingProgressModal';
 import { EmptyState } from './components/EmptyState';
 import { ChunkResult, VideoItem, SearchResponse, LibraryStats, Highlight } from './types';
 import { performSearch, fetchLibraryVideos, fetchLibraryStats, checkBackendHealth, fetchSuggestedQueries, addHighlight, removeHighlight, fetchHighlights, exportSearchJSON, exportSearchCSV } from './services/api';
-import { Zap, Plus, Video, WifiOff, FileDown, ChevronDown, Clock, Eye, Layers } from 'lucide-react';
+import { Zap, Plus, Video, WifiOff, FileDown, ChevronDown } from 'lucide-react';
 
 export const App: React.FC = () => {
   const [query, setQuery] = useState('');
@@ -19,6 +20,7 @@ export const App: React.FC = () => {
   const [selectedResult, setSelectedResult] = useState<ChunkResult | null>(null);
   const [isLibraryOpen, setIsLibraryOpen] = useState(false);
   const [isHighlightsOpen, setIsHighlightsOpen] = useState(false);
+  const [isProgressOpen, setIsProgressOpen] = useState(false);
   const [videos, setVideos] = useState<VideoItem[]>([]);
   const [stats, setStats] = useState<LibraryStats | null>(null);
   const [suggestedQueries, setSuggestedQueries] = useState<string[]>([]);
@@ -152,6 +154,7 @@ export const App: React.FC = () => {
         onOpenLibrary={() => setIsLibraryOpen(true)}
         onOpenIngest={() => setIsLibraryOpen(true)}
         onOpenHighlights={() => setIsHighlightsOpen(true)}
+        onOpenProgress={() => setIsProgressOpen(true)}
         highlightCount={highlights.length}
       />
 
@@ -296,12 +299,20 @@ export const App: React.FC = () => {
           <div className="space-y-4 pt-6 border-t border-hairline/60">
             <div className="flex items-center justify-between">
               <span className="eyebrow-mono">INDEXED CONTENT IN YOUR VAULT</span>
-              <button
-                onClick={() => setIsLibraryOpen(true)}
-                className="text-[11px] font-mono text-accent-sunset hover:underline"
-              >
-                VIEW ALL ({videos.length}) →
-              </button>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setIsProgressOpen(true)}
+                  className="text-[11px] font-mono text-ink-mute hover:text-ink flex items-center gap-1"
+                >
+                  <span>TELEMETRY & PIPELINE</span> →
+                </button>
+                <button
+                  onClick={() => setIsLibraryOpen(true)}
+                  className="text-[11px] font-mono text-accent-sunset hover:underline"
+                >
+                  VIEW ALL ({videos.length}) →
+                </button>
+              </div>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -369,6 +380,16 @@ export const App: React.FC = () => {
           setSelectedResult(h as any);
         }}
         onRemoveHighlight={handleRemoveHighlight}
+      />
+
+      {/* Indexing Progress Telemetry Modal */}
+      <IndexingProgressModal
+        isOpen={isProgressOpen}
+        onClose={() => setIsProgressOpen(false)}
+        videos={videos}
+        stats={stats}
+        backendOnline={backendOnline ?? false}
+        onRefresh={refreshData}
       />
     </div>
   );

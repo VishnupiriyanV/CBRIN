@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Database, Plus, Search, Sparkles, FileVideo, CheckCircle2, AlertTriangle, Bookmark, FileDown, Eye, ChevronDown } from 'lucide-react';
+import { Database, Plus, Search, Sparkles, FileVideo, CheckCircle2, AlertTriangle, Bookmark, FileDown, Eye, ChevronDown, Activity } from 'lucide-react';
 import { LibraryStats } from '../types';
 import { exportLibraryJSON, exportLibraryZIP, exportHighlightsJSON } from '../services/api';
 
@@ -10,6 +10,7 @@ interface HeaderProps {
   onOpenLibrary: () => void;
   onOpenIngest: () => void;
   onOpenHighlights: () => void;
+  onOpenProgress: () => void;
   highlightCount: number;
 }
 
@@ -20,6 +21,7 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenLibrary,
   onOpenIngest,
   onOpenHighlights,
+  onOpenProgress,
   highlightCount,
 }) => {
   const isFullyIndexed = stats?.is_fully_indexed ?? (totalVideos > 0);
@@ -58,9 +60,13 @@ export const Header: React.FC<HeaderProps> = ({
           </span>
         </div>
 
-        {/* Center: Consolidated Library Telemetry Capsule */}
+        {/* Center: Consolidated Library Telemetry Capsule (Clickable -> Opens Indexing Progress Modal) */}
         {totalVideos > 0 && (
-          <div className="hidden md:flex items-center gap-3 px-3.5 py-1 rounded-full border border-hairline/80 bg-canvas-card/80 backdrop-blur-md text-[11px] font-mono shadow-sm">
+          <button
+            onClick={onOpenProgress}
+            className="hidden md:flex items-center gap-3 px-3.5 py-1 rounded-full border border-hairline/80 bg-canvas-card/80 hover:bg-canvas-soft hover:border-hairline-bright transition-all text-[11px] font-mono shadow-sm group cursor-pointer"
+            title="Click to view full indexing pipeline telemetry & progress"
+          >
             {/* Status indicator */}
             {failedCount > 0 ? (
               <div className="flex items-center gap-1.5 text-red-400">
@@ -70,7 +76,7 @@ export const Header: React.FC<HeaderProps> = ({
             ) : isFullyIndexed ? (
               <div className="flex items-center gap-1.5 text-emerald-400">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                <span>INDEXED</span>
+                <span>100% INDEXED</span>
               </div>
             ) : (
               <div className="flex items-center gap-1.5 text-amber-400">
@@ -82,7 +88,7 @@ export const Header: React.FC<HeaderProps> = ({
             <span className="text-hairline-bright">•</span>
 
             {/* Media count */}
-            <div className="flex items-center gap-1 text-ink-mute">
+            <div className="flex items-center gap-1 text-ink-mute group-hover:text-ink">
               <FileVideo className="w-3 h-3 text-ink-mute" />
               <span>{totalVideos} MEDIA</span>
             </div>
@@ -90,7 +96,7 @@ export const Header: React.FC<HeaderProps> = ({
             <span className="text-hairline-bright">•</span>
 
             {/* Chunk count */}
-            <div className="flex items-center gap-1 text-ink-mute">
+            <div className="flex items-center gap-1 text-ink-mute group-hover:text-ink">
               <Sparkles className="w-3 h-3 text-accent-sunset" />
               <span>{totalChunks} CHUNKS</span>
             </div>
@@ -99,13 +105,16 @@ export const Header: React.FC<HeaderProps> = ({
             {totalChunks > 0 && (
               <>
                 <span className="text-hairline-bright">•</span>
-                <div className="flex items-center gap-1 text-ink-mute" title={`${visualIndexedCount} of ${totalChunks} chunks have visual (CLIP) embeddings`}>
+                <div className="flex items-center gap-1 text-ink-mute group-hover:text-ink">
                   <Eye className="w-3 h-3 text-ink-mute" />
                   <span>{visualIndexedCount}/{totalChunks} VISUAL</span>
                 </div>
               </>
             )}
-          </div>
+
+            <span className="text-hairline-bright">•</span>
+            <Activity className="w-3 h-3 text-accent-sunset opacity-60 group-hover:opacity-100 transition-opacity" />
+          </button>
         )}
 
         {/* Right: Actions */}
