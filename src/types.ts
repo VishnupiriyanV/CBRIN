@@ -39,6 +39,7 @@ export interface ChunkResult {
   has_visual_embedding?: boolean;
   is_highlighted?: boolean;
   indexed_at?: string;
+  match_reason?: string;
 }
 
 export interface SearchResponse {

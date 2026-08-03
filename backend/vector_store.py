@@ -427,8 +427,25 @@ class VectorStore:
         for idx, score in scored_indices[:top_k]:
             item = dict(self.chunks[idx])
             item['score'] = round(score, 4)
-            # Attach highlight status
             item['is_highlighted'] = item['id'] in self.highlights
+
+            # Generate a clear one-line match explanation
+            topic = item.get('section_topic', 'spoken transcript')
+            concepts = item.get('implicit_concepts', [])
+            questions = item.get('questions_answered', [])
+
+            if search_mode == 'visual_scenes':
+                match_reason = f"Matched visual scene frame for '{topic}'"
+            elif search_mode == 'questions' and questions and len(questions[0]) > 10:
+                match_reason = f"Matched question: \"{questions[0]}\""
+            elif concepts and len(concepts) >= 2:
+                match_reason = f"Matched: {concepts[0]} & {concepts[1]}"
+            elif concepts:
+                match_reason = f"Matched: {concepts[0]}"
+            else:
+                match_reason = f"Matched topic: {topic}"
+
+            item['match_reason'] = match_reason
             results.append(item)
 
         exec_time_ms = round((time.time() - start_time) * 1000, 2)
@@ -445,65 +462,50 @@ class VectorStore:
     def get_suggested_queries(self) -> List[str]:
         """
         Dynamically generate suggested queries from real indexed topics.
-        Diversified: max 2 suggestions per video, prefers questions, then topic phrases.
-        NO hardcoded samples.
+        Strictly deduplicated (case-insensitive) and varied across 6 natural template formats.
         """
         suggestions = []
-        seen = set()
-        video_counts: Dict[str, int] = {}
+        seen_lower = set()
 
-        # Pass 1: Collect questions (higher quality suggestions)
+        templates = [
+            lambda c1, c2, top: f"How do {c1} and {c2} compare?",
+            lambda c1, c2, top: f"Tell me about {top.lower() if top else c1}",
+            lambda c1, c2, top: f"Why is {c1} important?",
+            lambda c1, c2, top: f"What did the speaker explain about {c1}?",
+            lambda c1, c2, top: f"Key insights on {c1} and {c2}",
+            lambda c1, c2, top: f"When were {c1} and {c2} discussed?",
+        ]
+        template_idx = 0
+
+        # Collect concepts and topics from chunks
         for chunk in self.chunks:
-            vid_id = chunk.get('video_id', '')
-            if video_counts.get(vid_id, 0) >= 2:
-                continue
-
-            for q in chunk.get('questions_answered', []):
-                clean_q = q.strip()
-                # Filter out generic/garbage questions
-                if (clean_q and clean_q not in seen
-                        and len(clean_q) > 20
-                        and 'concept is addressed' not in clean_q.lower()):
-                    seen.add(clean_q)
-                    suggestions.append(clean_q)
-                    video_counts[vid_id] = video_counts.get(vid_id, 0) + 1
-                    if len(suggestions) >= 6:
-                        return suggestions
-                    break  # Max 1 question per chunk
-
-        # Pass 2: Generate topic-based suggestions from section topics
-        for chunk in self.chunks:
-            vid_id = chunk.get('video_id', '')
-            if video_counts.get(vid_id, 0) >= 2:
-                continue
-
-            topic = chunk.get('section_topic', '')
-            if topic and topic != 'General Discussion':
-                phrase = f"Tell me about {topic.lower()}"
-                if phrase not in seen:
-                    seen.add(phrase)
-                    suggestions.append(phrase)
-                    video_counts[vid_id] = video_counts.get(vid_id, 0) + 1
-                    if len(suggestions) >= 6:
-                        return suggestions
-
-        # Pass 3: Concept-based fallback
-        for chunk in self.chunks:
-            vid_id = chunk.get('video_id', '')
-            if video_counts.get(vid_id, 0) >= 2:
-                continue
-
             concepts = chunk.get('implicit_concepts', [])
-            # Pick multi-word concepts first (bigrams/trigrams)
-            multi_word = [c for c in concepts if ' ' in c]
-            target = multi_word[0] if multi_word else (concepts[0] if concepts else None)
-            if target:
-                phrase = f"When did I discuss {target}?"
-                if phrase not in seen:
-                    seen.add(phrase)
+            topic = chunk.get('section_topic', '')
+
+            c1 = concepts[0] if len(concepts) > 0 else 'content'
+            c2 = concepts[1] if len(concepts) > 1 else 'topics'
+
+            # Try generating from template
+            generator = templates[template_idx % len(templates)]
+            candidate = generator(c1, c2, topic).strip()
+            norm = candidate.lower()
+
+            if norm not in seen_lower and len(candidate) > 15:
+                seen_lower.add(norm)
+                suggestions.append(candidate)
+                template_idx += 1
+                if len(suggestions) >= 4:
+                    return suggestions
+
+        # Fallback if too few chunks: generate generic concept suggestions
+        for chunk in self.chunks:
+            for concept in chunk.get('implicit_concepts', []):
+                phrase = f"What is discussed regarding {concept}?"
+                norm = phrase.lower()
+                if norm not in seen_lower:
+                    seen_lower.add(norm)
                     suggestions.append(phrase)
-                    video_counts[vid_id] = video_counts.get(vid_id, 0) + 1
-                    if len(suggestions) >= 6:
+                    if len(suggestions) >= 4:
                         return suggestions
 
         return suggestions

@@ -1,6 +1,6 @@
 import React from 'react';
 import { ChunkResult } from '../types';
-import { Play, Clock, ArrowUpRight, HelpCircle, Layers, Bookmark, Eye, FileText } from 'lucide-react';
+import { Play, Clock, ArrowUpRight, HelpCircle, Layers, Bookmark, Eye, FileText, User } from 'lucide-react';
 
 interface ResultCardProps {
   result: ChunkResult;
@@ -9,40 +9,81 @@ interface ResultCardProps {
   onToggleHighlight: (result: ChunkResult) => void;
 }
 
+const COMMON_STOPWORDS = new Set([
+  'the', 'that', 'this', 'with', 'from', 'have', 'your', 'about', 'they', 'what', 'when',
+  'like', 'just', 'more', 'some', 'been', 'also', 'into', 'over', 'such', 'than', 'them',
+  'then', 'very', 'will', 'would', 'could', 'should', 'does', 'going', 'really', 'know',
+  'think', 'well', 'here', 'there', 'where', 'which', 'their', 'were', 'being', 'each',
+  'make', 'because', 'thing', 'things', 'come', 'came', 'made', 'want', 'kind', 'sort',
+  'you', 'are', 'was', 'has', 'had', 'but', 'and', 'for', 'not', 'yes', 'yeah', 'okay',
+  'sure', 'bunch', 'stuff', 'look', 'said', 'says', 'tell', 'told', 'actually', 'basically',
+  'literally', 'something', 'anything', 'everything', 'nothing', 'how', 'did', 'who', 'why',
+  'can', 'could', 'is', 'a', 'an', 'of', 'to', 'in', 'on', 'at', 'by'
+]);
+
 export const ResultCard: React.FC<ResultCardProps> = ({
   result,
   searchQuery,
   onJumpToMoment,
   onToggleHighlight,
 }) => {
-  const renderHighlightedSnippet = (text: string, query: string) => {
-    if (!query || !query.trim()) return text;
+  const renderHighlightedSnippet = (text: string, query: string, matchedConcepts?: string[]) => {
+    if (!text) return null;
 
-    const queryWords = query.toLowerCase().split(/\W+/).filter(w => w.length > 2);
-    if (queryWords.length === 0) return text;
+    // Filter out stop words from query words
+    const queryTokens = (query || '')
+      .toLowerCase()
+      .split(/\W+/)
+      .filter(w => w.length > 2 && !COMMON_STOPWORDS.has(w));
 
-    const escapedWords = queryWords
-      .map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-      .join('|');
+    const candidatePhrases: string[] = [];
 
-    const regex = new RegExp(`(${escapedWords})`, 'gi');
-    const parts = text.split(regex);
+    // 1. Contiguous non-stopword query subphrases
+    if (queryTokens.length >= 2) {
+      candidatePhrases.push(queryTokens.join(' '));
+      for (let i = 0; i < queryTokens.length - 1; i++) {
+        candidatePhrases.push(`${queryTokens[i]} ${queryTokens[i + 1]}`);
+      }
+    }
+
+    // 2. Matched key concepts
+    if (matchedConcepts && matchedConcepts.length > 0) {
+      candidatePhrases.push(...matchedConcepts);
+    }
+
+    // 3. Individual non-stopword query terms
+    candidatePhrases.push(...queryTokens);
+
+    // Find the longest candidate phrase that actually appears in the text
+    let bestMatch: string | null = null;
+    const lowerText = text.toLowerCase();
+
+    for (const phrase of candidatePhrases) {
+      if (!phrase || phrase.trim().length < 3) continue;
+      const cleanPhrase = phrase.trim().toLowerCase();
+      if (lowerText.includes(cleanPhrase)) {
+        if (!bestMatch || cleanPhrase.length > bestMatch.length) {
+          bestMatch = cleanPhrase;
+        }
+      }
+    }
+
+    if (!bestMatch) {
+      return <span>{text}</span>;
+    }
+
+    const matchIndex = lowerText.indexOf(bestMatch);
+    if (matchIndex === -1) return <span>{text}</span>;
+
+    const before = text.slice(0, matchIndex);
+    const matchedText = text.slice(matchIndex, matchIndex + bestMatch.length);
+    const after = text.slice(matchIndex + bestMatch.length);
 
     return (
       <>
-        {parts.map((part, idx) => {
-          const isMatch = queryWords.some(
-            w => w.toLowerCase() === part.toLowerCase()
-          );
-          if (isMatch) {
-            return (
-              <mark key={idx} className="highlight-match">
-                {part}
-              </mark>
-            );
-          }
-          return <span key={idx}>{part}</span>;
-        })}
+        <span>{before}</span>
+        <mark className="highlight-match">{matchedText}</mark>
+        <span>{after}</span>
       </>
     );
   };
@@ -94,8 +135,13 @@ export const ResultCard: React.FC<ResultCardProps> = ({
 
             {/* Header Metadata */}
             <div className="flex flex-wrap items-center gap-2">
-              <span className="px-2 py-0.5 rounded-full border border-hairline bg-canvas-soft text-[10px] font-mono text-accent-sunset uppercase tracking-wider">
-                {result.channel}
+              {/* Content Source Channel Badge with Icon & Tooltip */}
+              <span
+                className="px-2.5 py-0.5 rounded-full border border-hairline bg-canvas-soft text-[10px] font-mono text-accent-sunset uppercase tracking-wider flex items-center gap-1"
+                title={`Content Creator / Channel: ${result.channel}`}
+              >
+                <User className="w-2.5 h-2.5 text-accent-sunset" />
+                <span>CHANNEL: {result.channel}</span>
               </span>
 
               {/* Timestamp */}
@@ -104,10 +150,15 @@ export const ResultCard: React.FC<ResultCardProps> = ({
                 <span>{result.start_timestamp} - {result.end_timestamp}</span>
               </div>
 
-              {/* Similarity Score */}
-              <div className="ml-auto sm:ml-0 flex items-center gap-1 text-[11px] font-mono text-ink-mute">
+              {/* Similarity Score + One-line match reason */}
+              <div className="ml-auto sm:ml-0 flex items-center gap-1.5 text-[11px] font-mono text-ink-mute">
                 <span className={`w-1.5 h-1.5 rounded-full ${scoreColor}`}></span>
-                <span>{relevancePercentage}% match</span>
+                <span className="font-semibold text-ink">{relevancePercentage}% match</span>
+                {result.match_reason && (
+                  <span className="text-[10px] text-accent-sunset/90 font-mono hidden md:inline truncate max-w-xs" title={result.match_reason}>
+                    • {result.match_reason}
+                  </span>
+                )}
               </div>
 
               {/* Index type badge — visible on mobile where thumbnail is hidden */}
@@ -137,10 +188,10 @@ export const ResultCard: React.FC<ResultCardProps> = ({
               </div>
             )}
 
-            {/* Spoken Text Snippet */}
+            {/* Spoken Text Snippet with Coherent Single Phrase Highlight */}
             <div className="bg-canvas-soft/60 border border-hairline/60 rounded-md p-3.5 text-sm text-ink-body leading-relaxed font-sans">
               <span className="text-ink-mute text-xs font-mono select-none mr-1.5">"</span>
-              {renderHighlightedSnippet(result.text, searchQuery)}
+              {renderHighlightedSnippet(result.text, searchQuery, result.implicit_concepts)}
               <span className="text-ink-mute text-xs font-mono select-none ml-1.5">"</span>
             </div>
 

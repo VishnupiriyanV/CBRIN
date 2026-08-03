@@ -9,7 +9,7 @@ import { IndexingProgressModal } from './components/IndexingProgressModal';
 import { EmptyState } from './components/EmptyState';
 import { ChunkResult, VideoItem, SearchResponse, LibraryStats, Highlight } from './types';
 import { performSearch, fetchLibraryVideos, fetchLibraryStats, checkBackendHealth, fetchSuggestedQueries, addHighlight, removeHighlight, fetchHighlights, exportSearchJSON, exportSearchCSV } from './services/api';
-import { Zap, Plus, Video, WifiOff, FileDown, ChevronDown } from 'lucide-react';
+import { Zap, Plus, Video, WifiOff, FileDown, ChevronDown, Info } from 'lucide-react';
 
 export const App: React.FC = () => {
   const [query, setQuery] = useState('');
@@ -266,10 +266,17 @@ export const App: React.FC = () => {
                   </div>
                 )}
 
+                {/* Telemetry info toggle (Replaces full-weight header text) */}
                 {searchResponse && (
-                  <span className="text-[11px] font-mono text-ink-mute hidden sm:inline uppercase">
-                    SCANNED {searchResponse.total_chunks_scanned} CHUNKS IN {searchResponse.execution_time_ms}ms // {searchResponse.search_mode}
-                  </span>
+                  <div className="relative group/telemetry">
+                    <button className="px-2.5 py-1 rounded-full border border-hairline bg-canvas-soft hover:border-hairline-bright text-[10px] font-mono text-ink-mute hover:text-ink transition-all flex items-center gap-1">
+                      <Info className="w-3 h-3 text-accent-sunset" />
+                      <span>TELEMETRY</span>
+                    </button>
+                    <div className="absolute right-0 top-full mt-1.5 hidden group-hover/telemetry:block bg-canvas-card border border-hairline-bright px-3 py-1.5 rounded-xl shadow-2xl text-[10px] font-mono text-ink-mute whitespace-nowrap z-50 animate-fade-in">
+                      SCANNED {searchResponse.total_chunks_scanned} CHUNKS IN {searchResponse.execution_time_ms}ms // {searchResponse.search_mode?.toUpperCase()} MODE
+                    </div>
+                  </div>
                 )}
               </div>
             </div>
