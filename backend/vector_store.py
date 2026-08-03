@@ -10,7 +10,7 @@ import datetime
 from typing import List, Dict, Any, Optional
 import numpy as np
 
-from multimodal_engine import MultimodalEngine
+from multimodal_engine import MultimodalEngine, KEYFRAMES_DIR
 
 try:
     from sentence_transformers import SentenceTransformer, CrossEncoder
@@ -189,6 +189,8 @@ class VectorStore:
             if self.chunks and (visual_len_mismatch or missing_vis > 0):
                 self.reindex_visual_embeddings()
 
+            self._warn_if_thresholds_uncalibrated()
+
         except Exception as e:
             print(f"[Vault] Error loading persisted library: {e}. Starting fresh.")
             self.chunks = []
@@ -241,6 +243,22 @@ class VectorStore:
             json.dump({"schema_version": SCHEMA_VERSION}, f, indent=2)
         self.pending_rechunk = []
         self.pending_rechunk_meta = {}
+
+    def _warn_if_thresholds_uncalibrated(self):
+        """
+        RERANK_RELEVANCE_THRESHOLD/RERANK_STRONG_THRESHOLD and their VISUAL_* counterparts
+        were calibrated against backend/eval/queries.yaml on a specific small library (see
+        eval/README.md's history). They are not universal constants — re-run
+        `python eval/run_eval.py --verbose` and adjust them whenever the library's size or
+        content composition changes meaningfully, rather than trusting them by default.
+        Printed once per boot, not per-request, so it doesn't spam the log.
+        """
+        video_count = len({c.get('video_id') for c in self.chunks if c.get('video_id')})
+        if 0 < video_count < 5:
+            print(f"[Vault] Library has only {video_count} video(s) indexed. "
+                  f"RERANK_RELEVANCE_THRESHOLD/VISUAL_RELEVANCE_THRESHOLD in vector_store.py "
+                  f"were calibrated against a small eval library and may not generalize — "
+                  f"re-run `python eval/run_eval.py --verbose` before trusting search quality.")
 
     def reindex_visual_embeddings(self):
         """
@@ -465,12 +483,24 @@ class VectorStore:
         self._save_to_disk()
 
     def delete_video(self, video_id: str) -> bool:
-        """Delete video, remove associated chunks and media file, then re-index."""
+        """Delete video, remove associated chunks, keyframes, and media file, then re-index."""
         if video_id in self.videos:
             del self.videos[video_id]
 
-        # Filter out chunks for this video
+        # Chunks for this video, captured before filtering so their keyframe files can be
+        # cleaned up too — previously only the source media file was deleted here, leaving
+        # every chunk's keyframe JPG orphaned on disk forever (confirmed: 67 orphaned files
+        # accumulated from earlier deletes before this fix).
+        chunks_to_remove = [c for c in self.chunks if c.get('video_id') == video_id]
         self.chunks = [c for c in self.chunks if c.get('video_id') != video_id]
+
+        for c in chunks_to_remove:
+            keyframe_path = os.path.join(KEYFRAMES_DIR, f"{c['id']}.jpg")
+            if os.path.exists(keyframe_path):
+                try:
+                    os.remove(keyframe_path)
+                except Exception as e:
+                    print(f"[Vault] Error deleting keyframe {keyframe_path}: {e}")
 
         # Remove associated highlights
         chunk_ids_to_remove = [cid for cid, h in self.highlights.items() if h.get('video_id') == video_id]
@@ -554,14 +584,17 @@ class VectorStore:
             fused += 1.0 / (k + ranks)
         return fused
 
-    def search(self, query: str, top_k: int = 5, relevance_threshold: float = 0.0, search_mode: str = "spoken") -> Dict[str, Any]:
+    def search(self, query: str, top_k: int = 5, relevance_threshold: Optional[float] = None, search_mode: str = "spoken") -> Dict[str, Any]:
         """
         Retrieval pipeline:
         1. Candidate retrieval (top 30). 'spoken': dense cosine + BM25 lexical, fused via
            Reciprocal Rank Fusion (2.5) so proper nouns/acronyms/product names that dense
            embeddings miss still surface. 'visual_scenes': CLIP image-text cosine similarity.
-           `relevance_threshold` only prunes this candidate pool if set — it is deliberately
-           NOT what decides whether a result is shown to the user (that's step 4 below).
+           `relevance_threshold`, if explicitly passed, prunes this candidate pool — but the
+           default (None) applies no floor at all, because CLIP cosine similarity is signed
+           and a hardcoded 0.0 floor would silently drop legitimate (if weak) visual
+           candidates before they ever reach the real gate in step 4. Candidate selection is
+           deliberately NOT what decides whether a result is shown to the user (that's step 4).
         2. Window expansion (±1 surrounding sentence).
         3. Merge overlapping / adjacent windows from the same video.
         4. Final ranking + relevance gate (2.2): 'spoken' candidates are reranked by a
@@ -570,20 +603,27 @@ class VectorStore:
            against VISUAL_RELEVANCE_THRESHOLD (2.8) — the text cross-encoder has no visual
            grounding, so it never touches these. If nothing clears the bar, `results` is empty
            and the closest few candidates are returned as `near_misses` (3.2) instead of the
-           old behavior of just not returning anything explicable.
+           old behavior of just not returning anything explicable. If the cross-encoder isn't
+           available at all, gating falls back to unranked top-K instead of comparing a
+           retrieval-stage score against a threshold calibrated for a completely different
+           scale (see `reranker_active` below and its use site).
         """
         start_time = time.time()
 
-        def _empty(near_misses=None):
-            return {
+        def _empty(near_misses=None, message=None):
+            resp = {
                 "query": query,
                 "results": [],
                 "near_misses": near_misses or [],
                 "execution_time_ms": round((time.time() - start_time) * 1000, 2),
                 "total_chunks_scanned": len(self.chunks),
                 "library_video_count": len(self.videos),
-                "search_mode": search_mode
+                "search_mode": search_mode,
+                "degraded": False,
             }
+            if message:
+                resp["message"] = message
+            return resp
 
         if not self.chunks or not self.is_fitted or not query.strip():
             return _empty()
@@ -592,6 +632,17 @@ class VectorStore:
 
         # Step 1: Candidate retrieval
         if search_mode == "visual_scenes":
+            # Distinct from "no results for this query" — this library structurally cannot
+            # do moment-level visual search at all (2.10), so say that instead of a bare
+            # empty state indistinguishable from "nothing matched."
+            if not any(c.get('visual_status') == 'ok' for c in self.chunks):
+                return _empty(message=(
+                    "This library has no per-moment visual data yet — indexed video is "
+                    "YouTube content, which only has a shared video-level thumbnail per "
+                    "video, not real frames. Upload a local video/audio file to enable "
+                    "on-screen (CLIP) search."
+                ))
+
             clip_vec = MultimodalEngine.embed_text_clip(query)
             if clip_vec is not None and self.visual_embeddings is not None and len(self.visual_embeddings) == len(self.chunks):
                 similarities = np.dot(self.visual_embeddings, clip_vec)
@@ -629,7 +680,10 @@ class VectorStore:
             else:
                 similarities = np.zeros(len(self.chunks))
 
-        scored_indices = [(idx, float(score)) for idx, score in enumerate(similarities) if float(score) >= relevance_threshold]
+        if relevance_threshold is not None:
+            scored_indices = [(idx, float(score)) for idx, score in enumerate(similarities) if float(score) >= relevance_threshold]
+        else:
+            scored_indices = [(idx, float(score)) for idx, score in enumerate(similarities)]
         scored_indices.sort(key=lambda x: x[1], reverse=True)
         top_sentence_matches = scored_indices[:30]
 
@@ -760,6 +814,7 @@ class VectorStore:
             merged_candidates.append(candidate)
 
         # Step 4: Final ranking + relevance gate
+        reranker_active = False
         if search_mode == 'visual_scenes':
             # No text cross-encoder here — it has no visual grounding, so letting it
             # re-rank CLIP scene matches would just replace an honest visual ranking with
@@ -780,6 +835,7 @@ class VectorStore:
                         cand['score'] = round(1.0 / (1.0 + math.exp(-raw_rerank)), 4)
                         cand['rerank_score'] = raw_rerank
                     merged_candidates.sort(key=lambda x: x['score'], reverse=True)
+                    reranker_active = True
                 except Exception as e:
                     print(f"[Vault] CrossEncoder prediction error: {e}")
                     merged_candidates.sort(key=lambda x: x['score'], reverse=True)
@@ -801,32 +857,52 @@ class VectorStore:
                 item['match_reason'] = f"Matched topic: {topic}"
             return item
 
-        qualifying = [c for c in merged_candidates if c['score'] >= relevance_cutoff]
-
         results = []
         near_misses = []
+        message = None
 
-        if qualifying:
-            for item in qualifying[:top_k]:
-                item['confidence'] = 'strong' if item['score'] >= strong_cutoff else 'possible'
+        # 'spoken' mode's relevance_cutoff (RERANK_RELEVANCE_THRESHOLD=0.08) is calibrated
+        # exclusively for sigmoid(cross-encoder logit) scores. When the reranker didn't run
+        # (model failed to load — e.g. no network to fetch it from HuggingFace Hub the first
+        # time, which has happened in practice — or raised during prediction), `cand['score']`
+        # is left as the retrieval-stage score instead: an RRF-fused value that maxes out
+        # around 0.03, or a raw cosine/BM25 score on yet another scale. Comparing THAT against
+        # 0.08 isn't "stricter", it's wrong — RRF-fused scores can never clear it, so every
+        # single query would silently return zero results despite good candidates existing.
+        # Fall back to unranked top-K instead of pretending a calibrated cutoff still applies.
+        if search_mode != 'visual_scenes' and not reranker_active and merged_candidates:
+            for item in merged_candidates[:top_k]:
+                item['confidence'] = 'unranked'
                 results.append(_attach_match_reason(item))
-        elif merged_candidates:
-            # Nothing cleared the relevance bar — this is deliberately an empty result set,
-            # not a best-effort guess (2.2). Surface the closest few candidates separately so
-            # the UI can say "closest matches" instead of leaving the user with a bare void (3.2).
-            for item in merged_candidates[:3]:
-                item['confidence'] = 'weak'
-                near_misses.append(_attach_match_reason(item))
+            message = ("Relevance reranker is unavailable right now, so these matches are "
+                       "unranked best-effort results rather than confidence-scored ones.")
+        else:
+            qualifying = [c for c in merged_candidates if c['score'] >= relevance_cutoff]
+            if qualifying:
+                for item in qualifying[:top_k]:
+                    item['confidence'] = 'strong' if item['score'] >= strong_cutoff else 'possible'
+                    results.append(_attach_match_reason(item))
+            elif merged_candidates:
+                # Nothing cleared the relevance bar — this is deliberately an empty result
+                # set, not a best-effort guess (2.2). Surface the closest few candidates
+                # separately so the UI can say "closest matches" instead of a bare void (3.2).
+                for item in merged_candidates[:3]:
+                    item['confidence'] = 'weak'
+                    near_misses.append(_attach_match_reason(item))
 
-        return {
+        resp = {
             "query": query,
             "results": results,
             "near_misses": near_misses,
             "execution_time_ms": round((time.time() - start_time) * 1000, 2),
             "total_chunks_scanned": len(self.chunks),
             "library_video_count": len(self.videos),
-            "search_mode": search_mode
+            "search_mode": search_mode,
+            "degraded": search_mode != 'visual_scenes' and not reranker_active,
         }
+        if message:
+            resp["message"] = message
+        return resp
 
     def get_suggested_queries(self) -> List[str]:
         """

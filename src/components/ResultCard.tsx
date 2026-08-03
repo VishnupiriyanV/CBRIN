@@ -115,9 +115,16 @@ export const ResultCard: React.FC<ResultCardProps> = ({
   // across queries — showing it as "72% match" implies a precision the number doesn't have
   // (IMPROVEMENT-PLAN.md 2.3). Show a calibrated confidence bucket instead.
   const confidence = result.confidence ?? (result.score >= 0.75 ? 'strong' : result.score >= 0.5 ? 'possible' : 'weak');
-  const confidenceLabel = confidence === 'strong' ? 'Strong match' : confidence === 'possible' ? 'Possible match' : 'Closest match';
+  // 'unranked': the reranker was unavailable server-side, so this is a best-effort retrieval
+  // match with no real confidence score behind it at all — distinct from 'weak' (a real,
+  // if low, reranker score) and shown neutrally rather than implying any quality judgment.
+  const confidenceLabel = confidence === 'strong' ? 'Strong match' :
+                          confidence === 'possible' ? 'Possible match' :
+                          confidence === 'unranked' ? 'Unranked (degraded)' :
+                          'Closest match';
   const scoreColor = confidence === 'strong' ? 'bg-emerald-500' :
                      confidence === 'possible' ? 'bg-amber-500' :
+                     confidence === 'unranked' ? 'bg-slate-500' :
                      'bg-orange-500';
 
   // Use keyframe thumbnail if available, otherwise fall back to video thumbnail
