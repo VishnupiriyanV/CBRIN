@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ChunkResult } from '../types';
+import { API_ORIGIN, resolveMediaUrl } from '../services/api';
 import { X, Clock, ExternalLink, HelpCircle, Layers, Play, AlertCircle, RefreshCw } from 'lucide-react';
 
 interface VideoPlayerModalProps {
@@ -7,7 +8,7 @@ interface VideoPlayerModalProps {
   onClose: () => void;
 }
 
-const API_BASE_URL = 'http://localhost:8000/api';
+const API_BASE_URL = `${API_ORIGIN}/api`;
 
 export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
   result,
@@ -39,7 +40,7 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
     : null;
 
   const localMediaUrl = isLocal ? `${API_BASE_URL}/media/${result.video_id}` : null;
-  const displayPoster = result.keyframe_url || result.thumbnail_url;
+  const displayPoster = resolveMediaUrl(result.keyframe_url) || resolveMediaUrl(result.thumbnail_url);
 
   // Auto-seek local video when loaded
   useEffect(() => {
@@ -193,7 +194,7 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
               </span>
             </div>
             <span className="text-xs font-mono text-ink-mute">
-              {Math.round(result.score * 100)}% similarity match
+              {result.confidence === 'strong' ? 'Strong match' : result.confidence === 'weak' ? 'Closest match' : 'Possible match'}
             </span>
           </div>
 

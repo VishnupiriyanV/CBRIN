@@ -133,7 +133,7 @@ export const IndexingProgressModal: React.FC<IndexingProgressModalProps> = ({
               </div>
               <p className="text-xs font-semibold text-ink">{totalChunks} Chunks Generated</p>
               <div className="text-[11px] font-mono text-ink-mute">
-                <span>~45s Sliding Windows</span>
+                <span>Sentence-Level Segmentation</span>
               </div>
             </div>
 

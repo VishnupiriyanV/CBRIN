@@ -23,8 +23,45 @@ except Exception as e:
     from sklearn.feature_extraction.text import TfidfVectorizer
     from sklearn.metrics.pairwise import cosine_similarity
 
+try:
+    from rank_bm25 import BM25Okapi
+    HAS_BM25 = True
+except ImportError:
+    HAS_BM25 = False
+    print("[Vault] 'rank_bm25' not installed — hybrid retrieval falls back to dense-only. "
+          "Install it (see backend/requirements.txt) for lexical matching on proper nouns, "
+          "product names, and acronyms that dense embeddings miss (IMPROVEMENT-PLAN.md 2.5).")
+
 CROSS_ENCODER_MODEL = None
 HAS_CROSS_ENCODER = True
+
+# Reranker gating threshold (IMPROVEMENT-PLAN.md 2.2): sigmoid(ms-marco cross-encoder logit).
+# The retriever's own cosine/BM25/RRF scores are NOT comparable across queries and are used
+# only to build the candidate pool (top ~30) — this is the one number that actually decides
+# whether a result is shown at all, which is what makes the empty state reachable (3.2).
+#
+# Calibrated against backend/eval/queries.yaml (not by eye — see backend/eval/README.md):
+# ms-marco-MiniLM-L-6-v2's sigmoid(logit) runs much lower on short spoken-transcript
+# sentences than on the passage-ranking data it was trained on. Measured negative-query
+# (genuinely unrelated topics) top scores cluster at ~0.000-0.001; measured true-positive
+# top scores on this library run ~0.05-0.4+. 0.5 (the original guess) was clearing almost
+# nothing — Recall@5 was 21%. 0.08 sits comfortably above the negative cluster with margin
+# to spare, well below every observed true positive. Re-run `eval/run_eval.py --verbose`
+# after touching this and confirm recall goes up AND false-positive rate stays ~0% — don't
+# move it on vibes.
+RERANK_RELEVANCE_THRESHOLD = 0.08
+RERANK_STRONG_THRESHOLD = 0.35  # "Strong" vs "Possible" confidence bucket cutoff (2.3) — also eval-derived
+
+# CLIP cosine similarities live on a completely different scale than the MiniLM/cross-encoder
+# text scores above (2.8) — calibrated separately, and not run through the text cross-encoder
+# at all (see search()'s visual_scenes branch).
+VISUAL_RELEVANCE_THRESHOLD = 0.20
+VISUAL_STRONG_THRESHOLD = 0.28
+
+# Cap on how large a merged "small-to-big" window can grow (seconds) — see the comment at
+# its use site in search() for why this exists.
+MAX_MERGED_WINDOW_SECONDS = 90
+
 
 def get_cross_encoder():
     global CROSS_ENCODER_MODEL, HAS_CROSS_ENCODER
@@ -46,6 +83,12 @@ EMBEDDINGS_FILE = os.path.join(DATA_DIR, "embeddings.npy")
 VISUAL_EMBEDDINGS_FILE = os.path.join(DATA_DIR, "visual_embeddings.npy")
 VIDEOS_FILE = os.path.join(DATA_DIR, "videos.json")
 HIGHLIGHTS_FILE = os.path.join(DATA_DIR, "highlights.json")
+INDEX_META_FILE = os.path.join(DATA_DIR, "index_meta.json")
+
+# Bump whenever the on-disk chunk shape changes in a way search() depends on.
+# v2 introduced sentence-level `sentence_idx` — chunks without it were written by the
+# old sliding-window fallback and break the window-merge logic in search().
+SCHEMA_VERSION = 2
 
 
 class VectorStore:
@@ -56,6 +99,13 @@ class VectorStore:
         self.is_fitted = False
         self.dense_embeddings: Optional[np.ndarray] = None
         self.visual_embeddings: Optional[np.ndarray] = None
+        self.bm25_index = None  # BM25Okapi, rebuilt in reindex() alongside dense_embeddings
+        self._suggested_queries_cache: Optional[List[str]] = None
+        # Video IDs whose persisted chunks were evicted for predating SCHEMA_VERSION;
+        # the caller (main.py) re-derives them from their original source and calls
+        # finalize_schema_migration() when done.
+        self.pending_rechunk: List[str] = []
+        self.pending_rechunk_meta: Dict[str, Dict[str, Any]] = {}
 
         if not HAS_DENSE_MODEL:
             self.vectorizer = TfidfVectorizer(ngram_range=(1, 2), stop_words='english')
@@ -91,6 +141,9 @@ class VectorStore:
 
     def _load_from_disk(self):
         """Load previously persisted library data on startup."""
+        self.pending_rechunk = []
+        self.pending_rechunk_meta = {}
+
         if not os.path.exists(CHUNKS_FILE):
             print("[Vault] No persisted library found. Starting fresh.")
             self.is_fitted = True
@@ -108,7 +161,9 @@ class VectorStore:
                 with open(HIGHLIGHTS_FILE, 'r', encoding='utf-8') as f:
                     self.highlights = json.load(f)
 
-            if HAS_DENSE_MODEL and os.path.exists(EMBEDDINGS_FILE):
+            evicted = self._evict_stale_chunks()
+
+            if HAS_DENSE_MODEL and os.path.exists(EMBEDDINGS_FILE) and not evicted:
                 self.dense_embeddings = np.load(EMBEDDINGS_FILE)
                 if len(self.dense_embeddings) == len(self.chunks):
                     self.is_fitted = True
@@ -120,12 +175,18 @@ class VectorStore:
             else:
                 self.is_fitted = True
 
-            if os.path.exists(VISUAL_EMBEDDINGS_FILE):
+            if os.path.exists(VISUAL_EMBEDDINGS_FILE) and not evicted:
                 self.visual_embeddings = np.load(VISUAL_EMBEDDINGS_FILE)
 
-            # Auto-generate visual embeddings if missing or unpopulated
-            missing_vis = sum(1 for c in self.chunks if not c.get('has_visual_embedding', False))
-            if self.chunks and (self.visual_embeddings is None or missing_vis > 0):
+            # Auto-generate visual embeddings for chunks that don't have one yet and
+            # haven't already been marked as permanently unable to get one (1.6: don't
+            # retry the same dead thumbnail/audio-only chunk on every single boot).
+            missing_vis = sum(
+                1 for c in self.chunks
+                if not c.get('has_visual_embedding', False) and c.get('visual_status') != 'failed'
+            )
+            visual_len_mismatch = self.visual_embeddings is None or len(self.visual_embeddings) != len(self.chunks)
+            if self.chunks and (visual_len_mismatch or missing_vis > 0):
                 self.reindex_visual_embeddings()
 
         except Exception as e:
@@ -135,18 +196,80 @@ class VectorStore:
             self.highlights = {}
             self.is_fitted = True
 
+    def _evict_stale_chunks(self) -> bool:
+        """
+        Evict chunks written by a pre-SCHEMA_VERSION chunker (missing `sentence_idx`).
+        search()'s window-merge logic silently collapses these into garbage merged blobs
+        with fabricated timestamps (see IMPROVEMENT-PLAN.md 1.1), so refuse to serve them.
+        Affected video IDs are recorded on self.pending_rechunk for the caller to re-derive
+        from their original source (see main.py's startup repair pass).
+        Returns True if anything was evicted.
+        """
+        stored_schema_version = 0
+        if os.path.exists(INDEX_META_FILE):
+            try:
+                with open(INDEX_META_FILE, 'r', encoding='utf-8') as f:
+                    stored_schema_version = json.load(f).get('schema_version', 0)
+            except Exception:
+                stored_schema_version = 0
+
+        if stored_schema_version >= SCHEMA_VERSION:
+            return False
+
+        stale_video_ids = {
+            c.get('video_id') for c in self.chunks
+            if c.get('sentence_idx') is None
+        }
+        if not stale_video_ids:
+            return False
+
+        print(f"[Vault] {len(stale_video_ids)} video(s) predate sentence-level chunking "
+              f"(index schema v{stored_schema_version} < v{SCHEMA_VERSION}). Evicting their "
+              f"chunks from the live index for automatic re-chunking.")
+
+        for vid in stale_video_ids:
+            self.pending_rechunk_meta[vid] = dict(self.videos.get(vid, {"id": vid}))
+        self.pending_rechunk = sorted(stale_video_ids)
+        self.chunks = [c for c in self.chunks if c.get('video_id') not in stale_video_ids]
+        return True
+
+    def finalize_schema_migration(self):
+        """Call once pending re-chunk repairs (self.pending_rechunk) have been attempted,
+        successfully or not, so the next boot doesn't re-run the eviction/repair pass."""
+        self._ensure_dirs()
+        with open(INDEX_META_FILE, 'w', encoding='utf-8') as f:
+            json.dump({"schema_version": SCHEMA_VERSION}, f, indent=2)
+        self.pending_rechunk = []
+        self.pending_rechunk_meta = {}
+
     def reindex_visual_embeddings(self):
         """
-        Generate CLIP visual embeddings for all stored chunks (YouTube thumbnails or local video keyframes).
+        Generate CLIP visual embeddings for stored chunks (YouTube thumbnails or local video
+        keyframes) that don't have one yet and haven't already been marked permanently
+        unattainable (1.6: an audio-only file or a dead thumbnail URL would otherwise be
+        re-attempted on every single boot, forever).
         """
         if not self.chunks:
             return
 
-        print(f"[Vault] Generating CLIP visual embeddings for {len(self.chunks)} chunks...")
-        visual_vectors = []
-        updated_chunks = False
+        # Rebuild the full aligned array (existing successes + freshly attempted ones) so
+        # visual_embeddings always stays positionally aligned with self.chunks.
+        existing_by_id = {}
+        if self.visual_embeddings is not None and len(self.visual_embeddings) == len(self.chunks):
+            existing_by_id = {c['id']: self.visual_embeddings[i] for i, c in enumerate(self.chunks)}
 
-        for chunk in self.chunks:
+        to_attempt = [
+            c for c in self.chunks
+            if not c.get('has_visual_embedding', False) and c.get('visual_status') != 'failed'
+        ]
+        if not to_attempt:
+            return
+
+        print(f"[Vault] Generating CLIP visual embeddings for {len(to_attempt)} chunk(s)...")
+        updated_chunks = False
+        attempted_ok = 0
+
+        for chunk in to_attempt:
             chunk_id = chunk['id']
             start_sec = chunk.get('start_sec', 0)
             video_id = chunk.get('video_id', '')
@@ -162,7 +285,7 @@ class VectorStore:
                 f"https://img.youtube.com/vi/{chunk.get('youtube_id')}/hqdefault.jpg" if chunk.get('youtube_id') else None
             )
 
-            vis_vec, keyframe_url = MultimodalEngine.extract_keyframe_and_embed(
+            vis_vec, keyframe_url, source_kind = MultimodalEngine.extract_keyframe_and_embed(
                 source_target=local_path,
                 timestamp_sec=start_sec,
                 chunk_id=chunk_id,
@@ -171,20 +294,27 @@ class VectorStore:
 
             if vis_vec is not None:
                 chunk["has_visual_embedding"] = True
-                visual_vectors.append(vis_vec)
+                # 'ok' = a real per-moment frame; 'video-level' = the same shared YouTube
+                # thumbnail as every other chunk of this video, which can't localize a
+                # moment (IMPROVEMENT-PLAN.md 2.10) — kept distinct so search/UI can be honest.
+                chunk["visual_status"] = "ok" if source_kind == "frame" else "video-level"
+                existing_by_id[chunk_id] = vis_vec
                 if keyframe_url:
                     chunk["keyframe_url"] = keyframe_url
-                updated_chunks = True
+                attempted_ok += 1
             else:
-                visual_vectors.append(None)
+                chunk["visual_status"] = "failed"
 
-        if any(v is not None for v in visual_vectors):
-            dim = next(v.shape[0] for v in visual_vectors if v is not None)
+            updated_chunks = True
+
+        if existing_by_id:
+            dim = next(iter(existing_by_id.values())).shape[0]
             self.visual_embeddings = np.array([
-                v if v is not None else np.zeros(dim)
-                for v in visual_vectors
+                existing_by_id.get(c['id'], np.zeros(dim))
+                for c in self.chunks
             ])
-            print(f"[Vault] Successfully indexed CLIP visual embeddings for {sum(1 for v in visual_vectors if v is not None)}/{len(self.chunks)} chunks.")
+            print(f"[Vault] Visual embedding pass: {attempted_ok}/{len(to_attempt)} newly succeeded, "
+                  f"{len(existing_by_id)}/{len(self.chunks)} chunks now covered.")
 
         if updated_chunks:
             self._save_to_disk()
@@ -230,6 +360,12 @@ class VectorStore:
             f"https://img.youtube.com/vi/{video_meta.get('youtube_id')}/hqdefault.jpg" if video_meta.get('youtube_id') else None
         )
 
+        # Corpus-level IDF for concept extraction (2.7): existing library + this video's
+        # new sentences, so terms common across the library get demoted without also
+        # suppressing a video's own genuinely-central, frequently-repeated topic.
+        idf_corpus = [c.get('text', '') for c in self.chunks] + [s['text'] for s in sentences]
+        idf_lookup = MultimodalEngine.compute_corpus_idf(idf_corpus)
+
         for s_idx, sent in enumerate(sentences):
             chunk_id = f"chunk-{video_meta['id']}-{s_idx + 1}"
             sent_text = sent['text']
@@ -239,15 +375,19 @@ class VectorStore:
             start_timestamp = self._format_timestamp(start_sec)
             end_timestamp = self._format_timestamp(end_sec)
 
-            context = MultimodalEngine.extract_context(sent_text)
+            context = MultimodalEngine.extract_context(sent_text, idf_lookup)
             enriched_text = MultimodalEngine.generate_enriched_text(sent_text, context)
 
-            vis_vec, keyframe_url = MultimodalEngine.extract_keyframe_and_embed(
+            vis_vec, keyframe_url, source_kind = MultimodalEngine.extract_keyframe_and_embed(
                 source_target=local_target,
                 timestamp_sec=start_sec,
                 chunk_id=chunk_id,
                 image_url=thumb_url
             )
+            if vis_vec is not None:
+                visual_status = "ok" if source_kind == "frame" else "video-level"
+            else:
+                visual_status = "failed"
 
             chunk_obj = {
                 "id": chunk_id,
@@ -266,9 +406,9 @@ class VectorStore:
                 "section_topic": context['section_topic'],
                 "questions_answered": context['questions_answered'],
                 "implicit_concepts": context['implicit_concepts'],
-                "matched_concepts": context['implicit_concepts'],
                 "thumbnail_url": video_meta.get('thumbnail_url', ''),
                 "has_visual_embedding": vis_vec is not None,
+                "visual_status": visual_status,
                 "keyframe_url": keyframe_url,
                 "indexed_at": now_iso,
             }
@@ -304,11 +444,12 @@ class VectorStore:
         video_meta['error_message'] = video_meta.get('error_message', None)
         self.videos[vid_id] = video_meta
 
-    def add_failed_video(self, video_id: str, title: str, channel: str, error_msg: str, is_local: bool = False, youtube_id: Optional[str] = None):
+    def add_failed_video(self, video_id: str, title: str, channel: str, error_msg: str, is_local: bool = False, youtube_id: Optional[str] = None, source_url: Optional[str] = None):
         """Record a failed ingestion so user can see it in UI with Retry options."""
         self.videos[video_id] = {
             "id": video_id,
             "youtube_id": youtube_id,
+            "source_url": source_url,
             "is_local": is_local,
             "title": title,
             "channel": channel,
@@ -355,10 +496,17 @@ class VectorStore:
         self.reindex()
         self._save_to_disk()
 
+    @staticmethod
+    def _bm25_tokenize(text: str) -> List[str]:
+        return re.findall(r"[a-z0-9']+", text.lower())
+
     def reindex(self):
-        """Re-compute dense embeddings for all stored chunks."""
+        """Re-compute dense embeddings and the BM25 lexical index for all stored chunks."""
+        self._invalidate_suggested_queries_cache()
+
         if not self.chunks:
             self.dense_embeddings = None
+            self.bm25_index = None
             self.is_fitted = True
             return
 
@@ -376,36 +524,83 @@ class VectorStore:
             if corpus:
                 self.tfidf_matrix = self.vectorizer.fit_transform(corpus)
 
+        # BM25 over the raw spoken text (not the topic-prefixed enriched_text) — lexical
+        # matching on proper nouns, product names, and acronyms is exactly the failure mode
+        # dense-only search is structurally bad at (IMPROVEMENT-PLAN.md 2.5).
+        if HAS_BM25:
+            tokenized_corpus = [self._bm25_tokenize(c.get('text', '')) for c in self.chunks]
+            self.bm25_index = BM25Okapi(tokenized_corpus) if any(tokenized_corpus) else None
+        else:
+            self.bm25_index = None
+
         self.is_fitted = True
         print(f"[Vault] Indexed {len(self.chunks)} chunks.")
 
-    def search(self, query: str, top_k: int = 5, relevance_threshold: float = 0.1, search_mode: str = "hybrid") -> Dict[str, Any]:
+    @staticmethod
+    def _reciprocal_rank_fusion(score_arrays: List[np.ndarray], k: int = 60) -> np.ndarray:
         """
-        Small-to-Big Retrieval Pipeline:
-        1. Dense retrieval over sentence-level chunks (top 20).
+        Fuse multiple rankers (dense cosine, BM25) into one candidate-selection score via
+        Reciprocal Rank Fusion: sum(1 / (k + rank)) across rankers. RRF is used only to build
+        the retrieval candidate pool — final relevance is decided later by the cross-encoder
+        reranker against RERANK_RELEVANCE_THRESHOLD (2.2), so RRF's small absolute magnitude
+        (~1/60 per ranker) is not meant to be compared against any absolute cutoff.
+        """
+        n = len(score_arrays[0])
+        fused = np.zeros(n)
+        for scores in score_arrays:
+            order = np.argsort(-scores)
+            ranks = np.empty(n, dtype=int)
+            ranks[order] = np.arange(1, n + 1)
+            fused += 1.0 / (k + ranks)
+        return fused
+
+    def search(self, query: str, top_k: int = 5, relevance_threshold: float = 0.0, search_mode: str = "spoken") -> Dict[str, Any]:
+        """
+        Retrieval pipeline:
+        1. Candidate retrieval (top 30). 'spoken': dense cosine + BM25 lexical, fused via
+           Reciprocal Rank Fusion (2.5) so proper nouns/acronyms/product names that dense
+           embeddings miss still surface. 'visual_scenes': CLIP image-text cosine similarity.
+           `relevance_threshold` only prunes this candidate pool if set — it is deliberately
+           NOT what decides whether a result is shown to the user (that's step 4 below).
         2. Window expansion (±1 surrounding sentence).
-        3. Merge overlapping / adjacent windows from same video.
-        4. Cross-Encoder reranking to pick top 5.
+        3. Merge overlapping / adjacent windows from the same video.
+        4. Final ranking + relevance gate (2.2): 'spoken' candidates are reranked by a
+           cross-encoder, and only those whose sigmoid(logit) clears RERANK_RELEVANCE_THRESHOLD
+           become `results`. 'visual_scenes' candidates are ranked directly by CLIP similarity
+           against VISUAL_RELEVANCE_THRESHOLD (2.8) — the text cross-encoder has no visual
+           grounding, so it never touches these. If nothing clears the bar, `results` is empty
+           and the closest few candidates are returned as `near_misses` (3.2) instead of the
+           old behavior of just not returning anything explicable.
         """
         start_time = time.time()
 
-        if not self.chunks or not self.is_fitted or not query.strip():
+        def _empty(near_misses=None):
             return {
                 "query": query,
                 "results": [],
-                "execution_time_ms": 0,
+                "near_misses": near_misses or [],
+                "execution_time_ms": round((time.time() - start_time) * 1000, 2),
                 "total_chunks_scanned": len(self.chunks),
                 "library_video_count": len(self.videos),
                 "search_mode": search_mode
             }
 
+        if not self.chunks or not self.is_fitted or not query.strip():
+            return _empty()
+
         search_query = query
 
-        # Step 1: Compute Dense Similarities over Sentence Chunks
+        # Step 1: Candidate retrieval
         if search_mode == "visual_scenes":
             clip_vec = MultimodalEngine.embed_text_clip(query)
             if clip_vec is not None and self.visual_embeddings is not None and len(self.visual_embeddings) == len(self.chunks):
                 similarities = np.dot(self.visual_embeddings, clip_vec)
+                # YouTube chunks share one video-level thumbnail across every chunk of that
+                # video — ranking *moments* by it is meaningless (2.10), so exclude them here
+                # rather than let the UI's "visual indexed" badge imply moment-level search.
+                for i, c in enumerate(self.chunks):
+                    if c.get('visual_status') == 'video-level':
+                        similarities[i] = -1.0
             elif HAS_DENSE_MODEL and self.dense_embeddings is not None:
                 query_vec = EMBEDDING_MODEL.encode([search_query], convert_to_numpy=True, normalize_embeddings=True)[0]
                 similarities = np.dot(self.dense_embeddings, query_vec)
@@ -413,34 +608,33 @@ class VectorStore:
                 query_vec = self.vectorizer.transform([search_query])
                 similarities = cosine_similarity(query_vec, self.tfidf_matrix)[0]
         else:
+            dense_sims = None
             if HAS_DENSE_MODEL and self.dense_embeddings is not None:
                 query_vec = EMBEDDING_MODEL.encode([search_query], convert_to_numpy=True, normalize_embeddings=True)[0]
-                similarities = np.dot(self.dense_embeddings, query_vec)
+                dense_sims = np.dot(self.dense_embeddings, query_vec)
             elif hasattr(self, 'vectorizer') and self.tfidf_matrix is not None:
                 query_vec = self.vectorizer.transform([search_query])
-                similarities = cosine_similarity(query_vec, self.tfidf_matrix)[0]
+                dense_sims = cosine_similarity(query_vec, self.tfidf_matrix)[0]
+
+            bm25_sims = None
+            if self.bm25_index is not None:
+                bm25_sims = np.array(self.bm25_index.get_scores(self._bm25_tokenize(search_query)))
+
+            if dense_sims is not None and bm25_sims is not None:
+                similarities = self._reciprocal_rank_fusion([dense_sims, bm25_sims])
+            elif dense_sims is not None:
+                similarities = dense_sims
+            elif bm25_sims is not None:
+                similarities = bm25_sims
             else:
                 similarities = np.zeros(len(self.chunks))
 
-        # Filter top 20 candidate sentence matches
-        scored_indices = []
-        for idx, score in enumerate(similarities):
-            val = float(score)
-            if val >= relevance_threshold:
-                scored_indices.append((idx, val))
-
+        scored_indices = [(idx, float(score)) for idx, score in enumerate(similarities) if float(score) >= relevance_threshold]
         scored_indices.sort(key=lambda x: x[1], reverse=True)
-        top_sentence_matches = scored_indices[:20]
+        top_sentence_matches = scored_indices[:30]
 
         if not top_sentence_matches:
-            return {
-                "query": query,
-                "results": [],
-                "execution_time_ms": round((time.time() - start_time) * 1000, 2),
-                "total_chunks_scanned": len(self.chunks),
-                "library_video_count": len(self.videos),
-                "search_mode": search_mode
-            }
+            return _empty()
 
         # Step 2: Window Expansion (±1 sentence) & Candidate Construction
         # Group chunks by video_id for fast sentence lookup
@@ -452,22 +646,28 @@ class VectorStore:
             video_chunks_map[vid].append(c)
 
         for vid in video_chunks_map:
-            video_chunks_map[vid].sort(key=lambda x: x.get('sentence_idx', 0))
+            video_chunks_map[vid].sort(key=lambda x: x.get('sentence_idx') if x.get('sentence_idx') is not None else -1)
 
         expanded_candidates = []
 
         for idx, dense_score in top_sentence_matches:
             target_chunk = self.chunks[idx]
             vid_id = target_chunk.get('video_id', '')
-            s_idx = target_chunk.get('sentence_idx', 0)
+            s_idx = target_chunk.get('sentence_idx')
             vid_sentences = video_chunks_map.get(vid_id, [])
 
-            # Expand window to ±1 sentence
-            matched_pos = next((i for i, sc in enumerate(vid_sentences) if sc['id'] == target_chunk['id']), 0)
-            start_pos = max(0, matched_pos - 1)
-            end_pos = min(len(vid_sentences) - 1, matched_pos + 1)
-
-            window_sentences = vid_sentences[start_pos:end_pos + 1]
+            if s_idx is None:
+                # Chunk predates sentence-level indexing (should be rare — _load_from_disk
+                # evicts these on boot — but defends against e.g. an old export merged in
+                # at runtime via /api/import/library). Treat it as an isolated window rather
+                # than guessing a sentence position, so it can't silently merge with neighbors.
+                window_sentences = [target_chunk]
+            else:
+                # Expand window to ±1 sentence
+                matched_pos = next((i for i, sc in enumerate(vid_sentences) if sc['id'] == target_chunk['id']), 0)
+                start_pos = max(0, matched_pos - 1)
+                end_pos = min(len(vid_sentences) - 1, matched_pos + 1)
+                window_sentences = vid_sentences[start_pos:end_pos + 1]
 
             combined_text = " ".join([s['text'] for s in window_sentences]).strip()
             min_start_sec = window_sentences[0]['start_sec']
@@ -495,8 +695,17 @@ class VectorStore:
                 "questions_answered": target_chunk.get('questions_answered', []),
                 "implicit_concepts": target_chunk.get('implicit_concepts', []),
                 "has_visual_embedding": target_chunk.get('has_visual_embedding', False),
+                "visual_status": target_chunk.get('visual_status'),
                 "is_highlighted": target_chunk['id'] in self.highlights,
-                "sentence_range": (window_sentences[0].get('sentence_idx', 0), window_sentences[-1].get('sentence_idx', 0)),
+                # Legacy (pre-sentence-index) chunks get a unique sentinel range keyed on
+                # their position in self.chunks, so they sort deterministically but can
+                # never numerically overlap/merge with a real sentence range (guarded
+                # explicitly below via is_legacy_window too).
+                "sentence_range": (
+                    (window_sentences[0].get('sentence_idx'), window_sentences[-1].get('sentence_idx'))
+                    if s_idx is not None else (idx, idx)
+                ),
+                "is_legacy_window": s_idx is None,
             }
             expanded_candidates.append(candidate_item)
 
@@ -510,78 +719,110 @@ class VectorStore:
                 continue
 
             last = merged_candidates[-1]
-            # Check if same video and overlapping/adjacent sentence ranges
-            if last['video_id'] == candidate['video_id']:
+            # Check if same video, both sentence-indexed, and overlapping/adjacent ranges
+            if last['video_id'] == candidate['video_id'] and not last['is_legacy_window'] and not candidate['is_legacy_window']:
                 last_start_s, last_end_s = last['sentence_range']
                 cand_start_s, cand_end_s = candidate['sentence_range']
 
                 if cand_start_s <= last_end_s + 1:
-                    # Merge overlapping windows
                     new_start_s = min(last_start_s, cand_start_s)
                     new_end_s = max(last_end_s, cand_end_s)
 
                     # Reconstruct merged text without duplicate sentences
                     vid_sents = video_chunks_map.get(last['video_id'], [])
                     merged_sents = [s for s in vid_sents if new_start_s <= s.get('sentence_idx', 0) <= new_end_s]
-                    merged_text = " ".join([s['text'] for s in merged_sents]).strip()
+                    prospective_duration = (merged_sents[-1]['end_sec'] - merged_sents[0]['start_sec']) if merged_sents else 0
 
-                    last['sentence_range'] = (new_start_s, new_end_s)
-                    last['start_sec'] = merged_sents[0]['start_sec']
-                    last['end_sec'] = merged_sents[-1]['end_sec']
-                    last['start_timestamp'] = self._format_timestamp(last['start_sec'])
-                    last['end_timestamp'] = self._format_timestamp(last['end_sec'])
-                    last['text'] = merged_text
-                    last['dense_score'] = max(last['dense_score'], candidate['dense_score'])
-                    last['score'] = last['dense_score']
-                    continue
+                    # Cap how large a "small-to-big" merge can grow. Without this, a query
+                    # whose retrieval signal is spread across most of one video's chunks —
+                    # e.g. searching a video *about* databases for "database" — can chain-merge
+                    # nearly every adjacent window into one candidate spanning almost the
+                    # entire video. That's the exact failure this pipeline exists to avoid
+                    # (IMPROVEMENT-PLAN.md 1.1: "jump to moment" landing on the whole video
+                    # instead of a moment), and it can resurface here even with correct
+                    # per-sentence data if enough of one video's chunks land in the candidate
+                    # pool. Found via the eval harness (2.1), not by inspection.
+                    if prospective_duration <= MAX_MERGED_WINDOW_SECONDS:
+                        merged_text = " ".join([s['text'] for s in merged_sents]).strip()
+
+                        last['sentence_range'] = (new_start_s, new_end_s)
+                        last['start_sec'] = merged_sents[0]['start_sec']
+                        last['end_sec'] = merged_sents[-1]['end_sec']
+                        last['start_timestamp'] = self._format_timestamp(last['start_sec'])
+                        last['end_timestamp'] = self._format_timestamp(last['end_sec'])
+                        last['text'] = merged_text
+                        last['dense_score'] = max(last['dense_score'], candidate['dense_score'])
+                        last['score'] = last['dense_score']
+                        continue
+                    # else: merging would exceed the cap — treat candidate as the start of
+                    # a new merged group instead of falling through silently unbounded.
 
             merged_candidates.append(candidate)
 
-        # Step 4: Cross-Encoder Reranking Stage
-        results = []
-
-        reranker = get_cross_encoder()
-        if reranker is not None and merged_candidates:
-            try:
-                pairs = [(query, cand['text']) for cand in merged_candidates]
-                rerank_scores = reranker.predict(pairs)
-
-                for idx, cand in enumerate(merged_candidates):
-                    raw_rerank = float(rerank_scores[idx])
-                    normalized_score = round(1.0 / (1.0 + math.exp(-raw_rerank)), 4)
-                    cand['score'] = normalized_score
-                    cand['rerank_score'] = raw_rerank
-
-                merged_candidates.sort(key=lambda x: x['score'], reverse=True)
-            except Exception as e:
-                print(f"[Vault] CrossEncoder prediction error: {e}")
-                merged_candidates.sort(key=lambda x: x['score'], reverse=True)
-        else:
+        # Step 4: Final ranking + relevance gate
+        if search_mode == 'visual_scenes':
+            # No text cross-encoder here — it has no visual grounding, so letting it
+            # re-rank CLIP scene matches would just replace an honest visual ranking with
+            # an arbitrary textual one (2.8). Rank + gate directly on CLIP similarity.
+            for cand in merged_candidates:
+                cand['score'] = cand['dense_score']
             merged_candidates.sort(key=lambda x: x['score'], reverse=True)
+            relevance_cutoff = VISUAL_RELEVANCE_THRESHOLD
+            strong_cutoff = VISUAL_STRONG_THRESHOLD
+        else:
+            reranker = get_cross_encoder()
+            if reranker is not None and merged_candidates:
+                try:
+                    pairs = [(query, cand['text']) for cand in merged_candidates]
+                    rerank_scores = reranker.predict(pairs)
+                    for idx, cand in enumerate(merged_candidates):
+                        raw_rerank = float(rerank_scores[idx])
+                        cand['score'] = round(1.0 / (1.0 + math.exp(-raw_rerank)), 4)
+                        cand['rerank_score'] = raw_rerank
+                    merged_candidates.sort(key=lambda x: x['score'], reverse=True)
+                except Exception as e:
+                    print(f"[Vault] CrossEncoder prediction error: {e}")
+                    merged_candidates.sort(key=lambda x: x['score'], reverse=True)
+            else:
+                merged_candidates.sort(key=lambda x: x['score'], reverse=True)
+            relevance_cutoff = RERANK_RELEVANCE_THRESHOLD
+            strong_cutoff = RERANK_STRONG_THRESHOLD
 
-        for item in merged_candidates[:top_k]:
+        def _attach_match_reason(item):
             topic = item.get('section_topic', 'spoken content')
             concepts = item.get('implicit_concepts', [])
-            matched_sentence = item.get('matched_sentence', '')
-
             if search_mode == 'visual_scenes':
-                match_reason = f"Matched visual scene frame for '{topic}'"
+                item['match_reason'] = f"Matched visual scene frame for '{topic}'"
             elif concepts and len(concepts) >= 2:
-                match_reason = f"Matched: {concepts[0]} & {concepts[1]}"
+                item['match_reason'] = f"Matched: {concepts[0]} & {concepts[1]}"
             elif concepts:
-                match_reason = f"Matched: {concepts[0]}"
+                item['match_reason'] = f"Matched: {concepts[0]}"
             else:
-                match_reason = f"Matched topic: {topic}"
+                item['match_reason'] = f"Matched topic: {topic}"
+            return item
 
-            item['match_reason'] = match_reason
-            results.append(item)
+        qualifying = [c for c in merged_candidates if c['score'] >= relevance_cutoff]
 
-        exec_time_ms = round((time.time() - start_time) * 1000, 2)
+        results = []
+        near_misses = []
+
+        if qualifying:
+            for item in qualifying[:top_k]:
+                item['confidence'] = 'strong' if item['score'] >= strong_cutoff else 'possible'
+                results.append(_attach_match_reason(item))
+        elif merged_candidates:
+            # Nothing cleared the relevance bar — this is deliberately an empty result set,
+            # not a best-effort guess (2.2). Surface the closest few candidates separately so
+            # the UI can say "closest matches" instead of leaving the user with a bare void (3.2).
+            for item in merged_candidates[:3]:
+                item['confidence'] = 'weak'
+                near_misses.append(_attach_match_reason(item))
 
         return {
             "query": query,
             "results": results,
-            "execution_time_ms": exec_time_ms,
+            "near_misses": near_misses,
+            "execution_time_ms": round((time.time() - start_time) * 1000, 2),
             "total_chunks_scanned": len(self.chunks),
             "library_video_count": len(self.videos),
             "search_mode": search_mode
@@ -589,54 +830,58 @@ class VectorStore:
 
     def get_suggested_queries(self) -> List[str]:
         """
-        Dynamically generate suggested queries from real indexed topics.
-        Strictly deduplicated (case-insensitive) and varied across 6 natural template formats.
+        Suggested queries from real indexed topics (IMPROVEMENT-PLAN.md 3.1). The old
+        version walked chunks in index order and cycled through 6 templates regardless of
+        which concepts landed in which slot, producing grammatically-broken pairings like
+        "How do english lesson and weather compare?" — the first thing a new user saw.
+
+        Now: rank concepts by (corpus IDF × recurrence) so genuinely distinctive, recurring
+        topics surface instead of arbitrary index-order pairings, take the top 4 distinct
+        ones, and use one clean template. Cached until the index changes (invalidated by
+        _invalidate_suggested_queries_cache, called from reindex/delete_video/import_library).
         """
-        suggestions = []
-        seen_lower = set()
+        if self._suggested_queries_cache is not None:
+            return self._suggested_queries_cache
 
-        templates = [
-            lambda c1, c2, top: f"How do {c1} and {c2} compare?",
-            lambda c1, c2, top: f"Tell me about {top.lower() if top else c1}",
-            lambda c1, c2, top: f"Why is {c1} important?",
-            lambda c1, c2, top: f"What did the speaker explain about {c1}?",
-            lambda c1, c2, top: f"Key insights on {c1} and {c2}",
-            lambda c1, c2, top: f"When were {c1} and {c2} discussed?",
-        ]
-        template_idx = 0
+        if not self.chunks:
+            self._suggested_queries_cache = []
+            return []
 
-        # Collect concepts and topics from chunks
-        for chunk in self.chunks:
-            concepts = chunk.get('implicit_concepts', [])
-            topic = chunk.get('section_topic', '')
+        idf_lookup = MultimodalEngine.compute_corpus_idf([c.get('text', '') for c in self.chunks])
 
-            c1 = concepts[0] if len(concepts) > 0 else 'content'
-            c2 = concepts[1] if len(concepts) > 1 else 'topics'
-
-            # Try generating from template
-            generator = templates[template_idx % len(templates)]
-            candidate = generator(c1, c2, topic).strip()
-            norm = candidate.lower()
-
-            if norm not in seen_lower and len(candidate) > 15:
-                seen_lower.add(norm)
-                suggestions.append(candidate)
-                template_idx += 1
-                if len(suggestions) >= 4:
-                    return suggestions
-
-        # Fallback if too few chunks: generate generic concept suggestions
+        concept_freq: Dict[str, int] = {}
+        concept_display: Dict[str, str] = {}
         for chunk in self.chunks:
             for concept in chunk.get('implicit_concepts', []):
-                phrase = f"What is discussed regarding {concept}?"
-                norm = phrase.lower()
-                if norm not in seen_lower:
-                    seen_lower.add(norm)
-                    suggestions.append(phrase)
-                    if len(suggestions) >= 4:
-                        return suggestions
+                key = concept.lower().strip()
+                if not key:
+                    continue
+                concept_freq[key] = concept_freq.get(key, 0) + 1
+                concept_display.setdefault(key, concept)
 
+        def _score(key: str) -> float:
+            words = key.split()
+            weights = [idf_lookup.get(w, 1.0) for w in words if w]
+            idf_weight = sum(weights) / len(weights) if weights else 1.0
+            # log(1+freq) rewards concepts that recur (a real, recurring topic) without
+            # letting raw frequency alone dominate distinctiveness.
+            return idf_weight * math.log1p(concept_freq[key])
+
+        ranked = sorted(concept_freq.keys(), key=_score, reverse=True)
+
+        suggestions = []
+        for key in ranked:
+            phrase = f"Where did I talk about {concept_display[key]}?"
+            if phrase not in suggestions:
+                suggestions.append(phrase)
+            if len(suggestions) >= 4:
+                break
+
+        self._suggested_queries_cache = suggestions
         return suggestions
+
+    def _invalidate_suggested_queries_cache(self):
+        self._suggested_queries_cache = None
 
     # --- Highlights / Bookmark API ---
 
@@ -797,7 +1042,8 @@ class VectorStore:
         indexing_count = sum(1 for v in self.videos.values() if v.get('status') == 'indexing')
         is_fully_indexed = (len(self.videos) > 0 and failed_count == 0 and indexing_count == 0)
 
-        visual_indexed_count = sum(1 for c in self.chunks if c.get('has_visual_embedding', False))
+        # 'ok' = a real per-moment frame; excludes video-level shared YouTube thumbnails (2.10).
+        visual_indexed_count = sum(1 for c in self.chunks if c.get('visual_status') == 'ok')
 
         return {
             "total_videos": len(self.videos),

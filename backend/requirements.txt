@@ -1,9 +1,26 @@
-fastapi>=0.104.0
-uvicorn>=0.24.0
-pydantic>=2.5.0
-numpy>=1.24.0
-scikit-learn>=1.3.0
-youtube-transcript-api>=0.6.1
-sentence-transformers>=2.2.2
-openai>=1.0.0
-python-multipart>=0.0.6
+fastapi>=0.104.0,<1.0.0
+uvicorn>=0.24.0,<1.0.0
+pydantic>=2.5.0,<3.0.0
+numpy>=1.24.0,<3.0.0
+scikit-learn>=1.3.0,<2.0.0
+youtube-transcript-api>=0.6.1,<2.0.0
+sentence-transformers>=2.2.2,<6.0.0
+openai>=1.0.0,<3.0.0
+python-multipart>=0.0.6,<1.0.0
+python-dotenv>=1.0.0,<2.0.0
+
+# Local (offline) transcription — used by /api/upload_transcribe when OPENAI_API_KEY is unset.
+openai-whisper>=20231117
+
+# Multimodal engine: keyframe extraction (OpenCV), image decoding (Pillow), CLIP backbone (torch).
+# headless: this is a backend server, no GUI bindings needed.
+opencv-python-headless>=4.8.0,<5.0.0
+Pillow>=10.0.0,<12.0.0
+torch>=2.1.0,<3.0.0
+
+# Lexical retrieval for hybrid (BM25 + dense) search — IMPROVEMENT-PLAN.md 2.5.
+rank_bm25>=0.2.2,<0.3.0
+
+# Testing
+pytest>=7.4.0,<9.0.0
+pyyaml>=6.0,<7.0

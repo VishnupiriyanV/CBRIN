@@ -17,6 +17,8 @@ export interface VideoItem {
   topics?: string[];
 }
 
+export type MatchConfidence = 'strong' | 'possible' | 'weak';
+
 export interface ChunkResult {
   id: string;
   video_id: string;
@@ -30,9 +32,11 @@ export interface ChunkResult {
   end_timestamp: string;
   text: string;
   score: number;
+  confidence?: MatchConfidence;
   matched_concepts: string[];
   thumbnail_url: string;
   keyframe_url?: string | null;
+  visual_status?: 'ok' | 'video-level' | 'failed';
   section_topic?: string;
   questions_answered?: string[];
   implicit_concepts?: string[];
@@ -45,6 +49,7 @@ export interface ChunkResult {
 export interface SearchResponse {
   query: string;
   results: ChunkResult[];
+  near_misses?: ChunkResult[];
   execution_time_ms: number;
   total_chunks_scanned: number;
   library_video_count: number;

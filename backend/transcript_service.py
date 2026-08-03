@@ -1,10 +1,9 @@
 import os
 import re
 import math
-import sys
-import subprocess
 import urllib.request
 import json
+import hashlib
 from typing import List, Dict, Any
 from youtube_transcript_api import YouTubeTranscriptApi
 
@@ -25,40 +24,34 @@ try:
     print("[Vault] Local Whisper module available.")
 except ImportError:
     HAS_LOCAL_WHISPER = False
+    print("[Vault] 'openai-whisper' is not installed. Local (offline) transcription is "
+          "unavailable — install it with `pip install -r backend/requirements.txt`, or set "
+          "OPENAI_API_KEY to use the hosted Whisper API instead.")
 
-
-def ensure_local_whisper_installed() -> bool:
-    """Automatically installs openai-whisper via pip if OPENAI_API_KEY is missing."""
-    global local_whisper, HAS_LOCAL_WHISPER
-    if HAS_LOCAL_WHISPER:
-        return True
-
-    print("[Vault] OPENAI_API_KEY not found. Auto-installing 'openai-whisper' package for local transcription...")
-    try:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "openai-whisper"])
-        import whisper as lw
-        local_whisper = lw
-        HAS_LOCAL_WHISPER = True
-        print("[Vault] Successfully installed and loaded local Whisper model!")
-        return True
-    except Exception as e:
-        print(f"[Vault] Failed to auto-install 'openai-whisper': {e}")
-        return False
+# Defaults to 'base'; override via env for accuracy vs. speed (see IMPROVEMENT-PLAN.md 3.4).
+WHISPER_MODEL_SIZE = os.getenv("VAULT_WHISPER_MODEL", "base")
 
 
 def preload_whisper_model():
-    """Preload local Whisper base model into memory on startup."""
+    """Preload the local Whisper model into memory on startup, if the package is installed."""
     global LOCAL_WHISPER_MODEL, local_whisper, HAS_LOCAL_WHISPER
-    if not os.getenv("OPENAI_API_KEY"):
-        ensure_local_whisper_installed()
-
     if HAS_LOCAL_WHISPER and LOCAL_WHISPER_MODEL is None and local_whisper is not None:
         try:
-            print("[Vault] Preloading local Whisper base model into GPU/RAM...")
-            LOCAL_WHISPER_MODEL = local_whisper.load_model("base")
-            print("[Vault] Local Whisper base model loaded and ready.")
+            print(f"[Vault] Preloading local Whisper '{WHISPER_MODEL_SIZE}' model into GPU/RAM...")
+            LOCAL_WHISPER_MODEL = local_whisper.load_model(WHISPER_MODEL_SIZE)
+            print("[Vault] Local Whisper model loaded and ready.")
         except Exception as e:
             print(f"[Vault] Could not preload local Whisper model: {e}")
+
+
+def content_hash_id(file_path: str) -> str:
+    """Content-addressed, stable ID for a local file — same bytes always yield the same ID,
+    independent of Python's per-process string hash randomization."""
+    sha1 = hashlib.sha1()
+    with open(file_path, "rb") as f:
+        for block in iter(lambda: f.read(65536), b""):
+            sha1.update(block)
+    return f"local-{sha1.hexdigest()[:12]}"
 
 
 def get_youtube_video_id(url_or_id: str) -> str:
@@ -207,7 +200,7 @@ def transcribe_file_with_whisper(file_path: str, file_name: str) -> Dict[str, An
                 duration_formatted = f"{hours}:{minutes:02d}:{secs:02d}" if hours > 0 else f"{minutes:02d}:{secs:02d}"
 
                 video_meta = {
-                    "id": f"local-{abs(hash(file_name)) % 100000}",
+                    "id": content_hash_id(file_path),
                     "title": clean_title,
                     "channel": "Local Media",
                     "is_local": True,
@@ -225,13 +218,11 @@ def transcribe_file_with_whisper(file_path: str, file_name: str) -> Dict[str, An
             print(f"[Vault] Whisper API error for {file_name}: {e}. Falling back to local Whisper...")
 
     # 2. Local Whisper model fallback
-    ensure_local_whisper_installed()
-
     if HAS_LOCAL_WHISPER:
         try:
             if LOCAL_WHISPER_MODEL is None and local_whisper is not None:
-                print(f"[Vault] Loading local Whisper base model for {file_name}...")
-                LOCAL_WHISPER_MODEL = local_whisper.load_model("base")
+                print(f"[Vault] Loading local Whisper '{WHISPER_MODEL_SIZE}' model for {file_name}...")
+                LOCAL_WHISPER_MODEL = local_whisper.load_model(WHISPER_MODEL_SIZE)
 
             result = LOCAL_WHISPER_MODEL.transcribe(file_path)
 
@@ -253,7 +244,7 @@ def transcribe_file_with_whisper(file_path: str, file_name: str) -> Dict[str, An
                 duration_formatted = f"{hours}:{minutes:02d}:{secs:02d}" if hours > 0 else f"{minutes:02d}:{secs:02d}"
 
                 video_meta = {
-                    "id": f"local-{abs(hash(file_name)) % 100000}",
+                    "id": content_hash_id(file_path),
                     "title": clean_title,
                     "channel": "Local Media",
                     "is_local": True,
@@ -271,6 +262,7 @@ def transcribe_file_with_whisper(file_path: str, file_name: str) -> Dict[str, An
             raise ValueError(f"Local Whisper transcription failed for {file_name}: {str(e)}")
 
     raise ValueError(
-        f"Transcription failed for '{file_name}'. "
-        "Could not auto-install or initialize local 'openai-whisper' model."
+        f"Transcription failed for '{file_name}'. Local 'openai-whisper' is not installed and "
+        "no OPENAI_API_KEY is set — install requirements (`pip install -r backend/requirements.txt`) "
+        "or set OPENAI_API_KEY."
     )

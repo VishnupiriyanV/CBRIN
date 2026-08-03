@@ -1,7 +1,7 @@
 import React from 'react';
 import { Highlight, ChunkResult } from '../types';
 import { X, Bookmark, Clock, Play, Trash2, FileDown, Layers, MessageSquare } from 'lucide-react';
-import { exportHighlightsJSON } from '../services/api';
+import { exportHighlightsJSON, resolveMediaUrl } from '../services/api';
 
 interface HighlightsPanelProps {
   isOpen: boolean;
@@ -124,7 +124,7 @@ export const HighlightsPanel: React.FC<HighlightsPanelProps> = ({
                   {/* Thumbnail */}
                   {(h.keyframe_url || h.thumbnail_url) && (
                     <img
-                      src={h.keyframe_url || h.thumbnail_url}
+                      src={resolveMediaUrl(h.keyframe_url) || resolveMediaUrl(h.thumbnail_url)}
                       alt={h.video_title}
                       className="w-20 h-12 object-cover rounded border border-hairline bg-canvas shrink-0 hidden sm:block"
                       onError={(e) => {

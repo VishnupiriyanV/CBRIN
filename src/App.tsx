@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { Header } from './components/Header';
 import { SearchBar } from './components/SearchBar';
 import { ResultCard } from './components/ResultCard';
@@ -9,11 +9,12 @@ import { IndexingProgressModal } from './components/IndexingProgressModal';
 import { EmptyState } from './components/EmptyState';
 import { ChunkResult, VideoItem, SearchResponse, LibraryStats, Highlight } from './types';
 import { performSearch, fetchLibraryVideos, fetchLibraryStats, checkBackendHealth, fetchSuggestedQueries, addHighlight, removeHighlight, fetchHighlights, exportSearchJSON, exportSearchCSV } from './services/api';
-import { Zap, Plus, Video, WifiOff, FileDown, ChevronDown, Info } from 'lucide-react';
+import { getQueryHistory, addToQueryHistory } from './services/queryHistory';
+import { Zap, Plus, Video, WifiOff, FileDown, ChevronDown, Info, Filter } from 'lucide-react';
 
 export const App: React.FC = () => {
   const [query, setQuery] = useState('');
-  const [searchMode, setSearchMode] = useState('hybrid');
+  const [searchMode, setSearchMode] = useState('spoken');
   const [isSearching, setIsSearching] = useState(false);
   const [searchResponse, setSearchResponse] = useState<SearchResponse | null>(null);
   const [searchError, setSearchError] = useState<string | null>(null);
@@ -28,6 +29,15 @@ export const App: React.FC = () => {
   const [hasSearched, setHasSearched] = useState(false);
   const [backendOnline, setBackendOnline] = useState<boolean | null>(null);
   const [exportResultsOpen, setExportResultsOpen] = useState(false);
+  const [queryHistory, setQueryHistory] = useState<string[]>([]);
+  const [selectedIndex, setSelectedIndex] = useState(-1);
+  const [videoFilter, setVideoFilter] = useState<string>('all');
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const resultCardRefs = useRef<Record<string, HTMLDivElement | null>>({});
+
+  useEffect(() => {
+    setQueryHistory(getQueryHistory());
+  }, []);
 
   // Refresh library data & health check
   const refreshData = useCallback(async () => {
@@ -67,10 +77,13 @@ export const App: React.FC = () => {
     setIsSearching(true);
     setHasSearched(true);
     setSearchError(null);
+    setSelectedIndex(-1);
+    setVideoFilter('all');
 
     try {
       const response = await performSearch(searchQuery, mode);
       setSearchResponse(response);
+      setQueryHistory(addToQueryHistory(searchQuery));
     } catch (err: any) {
       console.error("Search error:", err);
       setSearchError(err.message || 'Search failed. Is the Python backend server running?');
@@ -97,7 +110,12 @@ export const App: React.FC = () => {
       if (result.is_highlighted) {
         await removeHighlight(result.id);
       } else {
-        await addHighlight(result.id, "");
+        // The backend has supported a note on a highlight since the start, but nothing in
+        // the UI ever collected one — addHighlight(id, "") always sent an empty string
+        // (IMPROVEMENT-PLAN.md 3.6). A prompt() is a minimal way to actually reach it,
+        // consistent with this app's existing use of confirm()/alert() for quick actions.
+        const note = window.prompt('Add a note to this highlight (optional):', '') ?? '';
+        await addHighlight(result.id, note);
       }
       const updated = await fetchHighlights();
       setHighlights(updated);
@@ -134,6 +152,59 @@ export const App: React.FC = () => {
   };
 
   const totalChunks = stats?.total_chunks || videos.reduce((acc, v) => acc + v.chunk_count, 0);
+
+  // Filter by video (IMPROVEMENT-PLAN.md 3.6) — client-side over the current result set,
+  // no re-query needed.
+  const resultVideoOptions = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const r of searchResponse?.results || []) {
+      if (!seen.has(r.video_id)) seen.set(r.video_id, r.video_title);
+    }
+    return Array.from(seen.entries());
+  }, [searchResponse]);
+
+  const filteredResults = useMemo(() => {
+    const results = searchResponse?.results || [];
+    return videoFilter === 'all' ? results : results.filter(r => r.video_id === videoFilter);
+  }, [searchResponse, videoFilter]);
+
+  // Keyboard nav (IMPROVEMENT-PLAN.md 3.6): '/' focuses search from anywhere; ArrowUp/Down
+  // move through results and Enter opens the selected one, but only when focus isn't
+  // already in a text field (so normal typing is never hijacked).
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const isTyping = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+
+      if (e.key === '/' && !isTyping) {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+        return;
+      }
+
+      if (isTyping || filteredResults.length === 0) return;
+
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSelectedIndex((i) => {
+          const next = Math.min(i + 1, filteredResults.length - 1);
+          resultCardRefs.current[filteredResults[next]?.id]?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+          return next;
+        });
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSelectedIndex((i) => {
+          const next = Math.max(i - 1, 0);
+          resultCardRefs.current[filteredResults[next]?.id]?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+          return next;
+        });
+      } else if (e.key === 'Enter' && selectedIndex >= 0 && selectedIndex < filteredResults.length) {
+        setSelectedResult(filteredResults[selectedIndex]);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [filteredResults, selectedIndex]);
 
   return (
     <div className="min-h-screen bg-canvas text-ink flex flex-col antialiased selection:bg-accent-sunset selection:text-black">
@@ -210,6 +281,8 @@ export const App: React.FC = () => {
             searchMode={searchMode}
             setSearchMode={setSearchMode}
             suggestedQueries={suggestedQueries}
+            queryHistory={queryHistory}
+            inputRef={searchInputRef}
           />
         )}
 
@@ -230,12 +303,29 @@ export const App: React.FC = () => {
                 <span className="eyebrow-mono">SEARCH RESULTS</span>
                 {searchResponse && (
                   <span className="text-[10px] font-mono px-2.5 py-0.5 rounded-full border border-hairline bg-canvas-soft text-accent-sunset">
-                    {searchResponse.results.length} MOMENTS FOUND
+                    {filteredResults.length}{videoFilter !== 'all' ? ` / ${searchResponse.results.length}` : ''} MOMENTS FOUND
                   </span>
                 )}
               </div>
 
               <div className="flex items-center gap-2">
+                {/* Filter by video (IMPROVEMENT-PLAN.md 3.6) */}
+                {resultVideoOptions.length > 1 && (
+                  <div className="relative flex items-center gap-1 px-2 py-1 rounded-full border border-hairline bg-canvas-soft text-[10px] font-mono text-ink-mute">
+                    <Filter className="w-3 h-3 text-accent-sunset shrink-0" />
+                    <select
+                      value={videoFilter}
+                      onChange={(e) => setVideoFilter(e.target.value)}
+                      className="bg-transparent outline-none text-ink-mute hover:text-ink max-w-[10rem] truncate"
+                    >
+                      <option value="all">All videos</option>
+                      {resultVideoOptions.map(([vid, title]) => (
+                        <option key={vid} value={vid}>{title}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
                 {/* Export Search Results */}
                 {searchResponse && searchResponse.results.length > 0 && (
                   <div className="relative">
@@ -284,19 +374,29 @@ export const App: React.FC = () => {
             {/* Results List */}
             {searchResponse && searchResponse.results.length > 0 ? (
               <div className="space-y-4">
-                {searchResponse.results.map((result) => (
-                  <ResultCard
+                {filteredResults.map((result, idx) => (
+                  <div
                     key={result.id}
-                    result={result}
-                    searchQuery={query}
-                    onJumpToMoment={(res) => setSelectedResult(res)}
-                    onToggleHighlight={handleToggleHighlight}
-                  />
+                    ref={(el) => { resultCardRefs.current[result.id] = el; }}
+                    className={idx === selectedIndex ? 'rounded-lg ring-2 ring-accent-sunset/60' : ''}
+                  >
+                    <ResultCard
+                      result={result}
+                      searchQuery={query}
+                      onJumpToMoment={(res) => setSelectedResult(res)}
+                      onToggleHighlight={handleToggleHighlight}
+                    />
+                  </div>
                 ))}
               </div>
             ) : !isSearching ? (
               /* Empty State */
-              <EmptyState query={query} />
+              <EmptyState
+                query={query}
+                nearMisses={searchResponse?.near_misses}
+                onJumpToMoment={(res) => setSelectedResult(res)}
+                onToggleHighlight={handleToggleHighlight}
+              />
             ) : null}
           </div>
         )}

@@ -30,26 +30,39 @@ except ImportError:
 
 from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
 
-# Combine scikit-learn's 318 standard English stop words with video transcript & conversational filler terms
+# scikit-learn's 318 standard English stop words plus genuine discourse filler/meta-commentary
+# terms — NOT subject-matter words. IMPROVEMENT-PLAN.md 2.7 flagged the old list (100+ words
+# including 'problem', 'solution', 'approach', 'process', 'power', 'modern') as overfit to one
+# test video: those are exactly the words a tech creator's real content is *about*. Corpus-level
+# IDF (see compute_corpus_idf) now does the actual work of demoting terms that recur across the
+# library; this list only holds words that are filler in *every* context, not just this video's.
 MEDIA_FILLER = {
-    'yeah', 'okay', 'sure', 'bunch', 'stuff', 'look', 'said', 'says', 'tell', 'told',
-    'boring', 'actually', 'basically', 'literally', 'something', 'anything', 'everything', 'nothing',
+    'yeah', 'okay', 'sure', 'look', 'said', 'says', 'tell', 'told',
+    'actually', 'basically', 'literally', 'something', 'anything', 'everything', 'nothing',
     'gonna', 'wanna', 'gotta', 'today', 'video', 'episode', 'channel', 'subscribe', 'comment',
-    'watch', 'click', 'check', 'link', 'description', 'below', 'people', 'world', 'time', 'times',
-    'years', 'year', 'think', 'thought', 'believe', 'happen', 'happened', 'happening', 'example',
-    'number', 'place', 'shows', 'shown', 'given', 'taken', 'known', 'found', 'based', 'created',
-    'building', 'create', 'build', 'allows', 'allow', 'able', 'order', 'course', 'seconds', 'minutes',
-    'hours', 'current', 'worth', 'count', 'handle', 'approach', 'appears', 'variety', 'process',
-    'stored', 'quietly', 'shaped', 'modern', 'oldest', 'products', 'things', 'biggest', 'smallest',
-    'massive', 'entire', 'quickly', 'slowly', 'heavily', 'launching', 'creating', 'managing',
-    'retrieving', 'storing', 'backed', 'power', 'powered', 'billion', 'billions', 'million', 'millions',
-    'thousand', 'hundred', 'thousands', 'hundreds', 'lifting', 'heavy', 'light', 'recording', 'recorded',
-    'sensation', 'problem', 'solution', 'solutions', 'largely', 'intensive', 'extensive', 'interactive',
-    'mostly', 'overall', 'recently', 'eventually', 'finally', 'specifically', 'discuss', 'discussion',
+    'watch', 'click', 'description', 'below', 'people', 'time', 'times',
+    'years', 'year', 'think', 'thought', 'believe', 'happen', 'happened', 'happening',
+    'shows', 'shown', 'given', 'taken', 'known', 'found',
+    'order', 'course', 'seconds', 'minutes', 'hours',
+    'quickly', 'slowly', 'heavily',
+    'largely', 'mostly', 'overall', 'recently', 'eventually', 'finally', 'specifically',
     'speaker', 'spoken', 'mention'
 }
 
 STOPWORDS = set(ENGLISH_STOP_WORDS).union(MEDIA_FILLER)
+
+# Common contraction suffixes, expanded before tokenizing so "doesn't" yields the clean words
+# "does" + "not" instead of the word-boundary regex silently truncating it to a bogus "doesn"
+# fragment (IMPROVEMENT-PLAN.md 2.7 — this fragment was observed live in implicit_concepts).
+_CONTRACTION_EXPANSIONS = [
+    (r"n't\b", " not"),
+    (r"'re\b", " are"),
+    (r"'ve\b", " have"),
+    (r"'ll\b", " will"),
+    (r"'d\b", " would"),
+    (r"'m\b", " am"),
+]
+_CONTRACTION_PATTERNS = [(re.compile(pat, re.IGNORECASE), repl) for pat, repl in _CONTRACTION_EXPANSIONS]
 
 
 def _ensure_keyframes_dir():
@@ -101,10 +114,43 @@ class MultimodalEngine:
     """
 
     @staticmethod
-    def _score_ngram(ngram: str, frequency: int, total_words: int) -> float:
+    def _expand_contractions(text: str) -> str:
+        for pattern, repl in _CONTRACTION_PATTERNS:
+            text = pattern.sub(repl, text)
+        return text
+
+    @staticmethod
+    def compute_corpus_idf(sentence_texts: List[str]) -> Dict[str, float]:
+        """
+        Document-frequency-based IDF over a batch of sentences (each sentence = one
+        "document"). Used in place of a hand-curated blocklist to demote terms that are
+        common across *this library* — the actual definition of "uninformative" — rather
+        than a fixed list of words someone guessed while looking at one test video
+        (IMPROVEMENT-PLAN.md 2.7). Call with the existing library's chunk texts plus the
+        new video's sentences so recurring filler is demoted without also suppressing a
+        video's own genuinely-central, frequently-repeated topic.
+        """
+        n_docs = len(sentence_texts)
+        if n_docs == 0:
+            return {}
+        df = Counter()
+        for text in sentence_texts:
+            expanded = MultimodalEngine._expand_contractions(text.lower())
+            words = set(re.findall(r'\b[a-zA-Z]+\b', expanded))
+            df.update(words)
+        return {w: math.log((n_docs + 1) / (c + 1)) + 1.0 for w, c in df.items()}
+
+    @staticmethod
+    def _score_ngram(ngram: str, frequency: int, total_words: int, idf_lookup: Optional[Dict[str, float]] = None) -> float:
         tf = frequency / max(total_words, 1)
         length_bonus = len(ngram.split()) * 0.3
-        return tf + length_bonus
+        idf_weight = 1.0
+        if idf_lookup:
+            words = ngram.split()
+            weights = [idf_lookup.get(w, 1.0) for w in words if w]
+            if weights:
+                idf_weight = sum(weights) / len(weights)
+        return tf * idf_weight + length_bonus
 
     @staticmethod
     def _extract_positional_ngrams(raw_words: List[str], n: int) -> List[str]:
@@ -116,8 +162,9 @@ class MultimodalEngine:
         return ngrams
 
     @staticmethod
-    def extract_context(text: str) -> Dict[str, Any]:
-        raw_words = re.findall(r'\b[a-zA-Z]+\b', text.lower())
+    def extract_context(text: str, idf_lookup: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
+        expanded_text = MultimodalEngine._expand_contractions(text.lower())
+        raw_words = re.findall(r'\b[a-zA-Z]+\b', expanded_text)
 
         meaningful_words = [
             w for w in raw_words
@@ -137,18 +184,18 @@ class MultimodalEngine:
 
         for word, freq in word_freq.items():
             if freq >= 2 or len(word) >= 7:
-                score = MultimodalEngine._score_ngram(word, freq, total_words)
+                score = MultimodalEngine._score_ngram(word, freq, total_words, idf_lookup)
                 scored_candidates.append((word, score, 'unigram'))
 
         for bigram, freq in bigram_freq.items():
             parts = bigram.split()
             if freq >= 2 or all(len(p) >= 6 for p in parts):
-                score = MultimodalEngine._score_ngram(bigram, freq, total_words)
+                score = MultimodalEngine._score_ngram(bigram, freq, total_words, idf_lookup)
                 scored_candidates.append((bigram, score, 'bigram'))
 
         for trigram, freq in trigram_freq.items():
             if freq >= 2:
-                score = MultimodalEngine._score_ngram(trigram, freq, total_words)
+                score = MultimodalEngine._score_ngram(trigram, freq, total_words, idf_lookup)
                 scored_candidates.append((trigram, score, 'trigram'))
 
         scored_candidates.sort(key=lambda x: x[1], reverse=True)
@@ -210,25 +257,61 @@ class MultimodalEngine:
 
     @staticmethod
     def generate_enriched_text(chunk_text: str, context: Dict[str, Any]) -> str:
+        """
+        Text actually fed to the dense embedding model. Previously prepended a fixed
+        template ("Topic: X. Questions: Y. Concepts: Z. Spoken: ...") whose literal
+        boilerplate words — plus concepts duplicated once raw and once inside a synthetic
+        question — appeared in *every* chunk and ate into the 384-dim MiniLM vector's
+        real signal (IMPROVEMENT-PLAN.md 2.6). Now just prepends the topic: enough to
+        nudge retrieval toward the right section without drowning out the actual words
+        that were spoken.
+        """
         topic = context.get('section_topic', '')
-        questions = " ".join(context.get('questions_answered', []))
-        concepts = " ".join(context.get('implicit_concepts', []))
-        return f"Topic: {topic}. Questions: {questions}. Concepts: {concepts}. Spoken: {chunk_text}"
+        if topic and topic != "General Discussion":
+            return f"{topic}. {chunk_text}"
+        return chunk_text
+
+    # Hard caps so transcripts with no [.!?] punctuation at all (common in YouTube
+    # auto-captions) still produce bounded chunks instead of one giant "sentence" per video.
+    MAX_SENTENCE_SECONDS = 40.0
+    MAX_SENTENCE_WORDS = 80
 
     @staticmethod
     def segment_transcript_into_sentences(segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
-        Split transcript segment list into punctuated sentence units.
-        Preserves start/end timestamps, duration, and sentence index.
+        Split transcript segments into punctuated sentence units via an explicit state
+        machine. Preserves start/end timestamps and assigns a stable sentence_idx.
+
+        Handles, by construction (see tests in backend/tests/test_multimodal_engine.py):
+        - segments with no punctuation at all -> hard-capped at MAX_SENTENCE_SECONDS /
+          MAX_SENTENCE_WORDS rather than becoming one unbounded sentence.
+        - a single segment containing multiple punctuated sentences -> each flush resets
+          the pending sentence's start time to the *current segment's* start, not to None,
+          so a second sentence within the same segment can't hit math.floor(None).
+        - empty segments -> skipped.
         """
         if not segments:
             return []
 
-        sentences = []
-        current_words = []
-        sentence_start_sec = None
-        sentence_end_sec = 0.0
+        sentences: List[Dict[str, Any]] = []
+        current_words: List[str] = []
+        sentence_start_sec: Optional[float] = None
+        sentence_end_sec: float = 0.0
         sentence_idx = 0
+
+        def flush():
+            nonlocal current_words, sentence_start_sec, sentence_end_sec, sentence_idx
+            full_text = " ".join(current_words).strip()
+            if full_text and len(full_text.split()) >= 3 and sentence_start_sec is not None:
+                sentences.append({
+                    "sentence_idx": sentence_idx,
+                    "text": full_text,
+                    "start_sec": math.floor(sentence_start_sec),
+                    "end_sec": math.ceil(sentence_end_sec),
+                })
+                sentence_idx += 1
+            current_words = []
+            sentence_start_sec = None
 
         for seg in segments:
             seg_start = float(seg.get('start', 0.0))
@@ -238,42 +321,35 @@ class MultimodalEngine:
             if not seg_text:
                 continue
 
-            if sentence_start_sec is None:
-                sentence_start_sec = seg_start
-
-            # Split segment text by sentence punctuation [.!?]
+            # Split segment text by sentence punctuation [.!?], keeping the punctuation.
             raw_parts = re.split(r'([.!?]+)', seg_text)
 
             for i in range(0, len(raw_parts), 2):
                 text_part = raw_parts[i].strip()
-                punct_part = raw_parts[i+1] if i+1 < len(raw_parts) else ''
+                punct_part = raw_parts[i + 1] if i + 1 < len(raw_parts) else ''
+
+                if not text_part and not punct_part:
+                    continue
 
                 if text_part:
+                    if sentence_start_sec is None:
+                        # Reset to *this segment's* start, never left as None — the bug
+                        # that crashed ingest on any segment containing 2+ sentences.
+                        sentence_start_sec = seg_start
                     current_words.append(text_part + punct_part)
                     sentence_end_sec = seg_start + seg_duration
 
-                if punct_part or (i + 2 < len(raw_parts)):
-                    full_text = " ".join(current_words).strip()
-                    if len(full_text.split()) >= 3:
-                        sentences.append({
-                            "sentence_idx": sentence_idx,
-                            "text": full_text,
-                            "start_sec": math.floor(sentence_start_sec),
-                            "end_sec": math.ceil(sentence_end_sec),
-                        })
-                        sentence_idx += 1
-                    current_words = []
-                    sentence_start_sec = None
+                hit_punctuation = bool(punct_part)
+                hit_word_cap = len(current_words) > 0 and len(" ".join(current_words).split()) >= MultimodalEngine.MAX_SENTENCE_WORDS
+                hit_time_cap = (
+                    sentence_start_sec is not None
+                    and (sentence_end_sec - sentence_start_sec) >= MultimodalEngine.MAX_SENTENCE_SECONDS
+                )
 
-        if current_words and sentence_start_sec is not None:
-            full_text = " ".join(current_words).strip()
-            if len(full_text.split()) >= 3:
-                sentences.append({
-                    "sentence_idx": sentence_idx,
-                    "text": full_text,
-                    "start_sec": math.floor(sentence_start_sec),
-                    "end_sec": math.ceil(sentence_end_sec),
-                })
+                if hit_punctuation or hit_word_cap or hit_time_cap:
+                    flush()
+
+        flush()
 
         return sentences
 
@@ -283,13 +359,16 @@ class MultimodalEngine:
         timestamp_sec: float,
         chunk_id: str,
         image_url: Optional[str] = None
-    ) -> Tuple[Optional[np.ndarray], Optional[str]]:
+    ) -> Tuple[Optional[np.ndarray], Optional[str], Optional[str]]:
         """
         Extract keyframe or image, compute CLIP visual embedding, and save thumbnail.
         Supports:
-        1. Local video files (.mp4/.mov) via OpenCV frame sampling.
-        2. Image URLs (YouTube thumbnails / Web images) via PIL & HTTP fetch.
-        Returns tuple: (visual_vector, keyframe_url)
+        1. Local video files (.mp4/.mov) via OpenCV frame sampling — a real per-moment frame.
+        2. Image URLs (YouTube thumbnails / Web images) via PIL & HTTP fetch — for YouTube
+           this is the *same* video-level thumbnail for every chunk of that video, so it
+           cannot actually localize a moment (IMPROVEMENT-PLAN.md 2.10).
+        Returns (visual_vector, keyframe_url, source_kind), where source_kind is
+        'frame' (real per-moment sample), 'thumbnail' (shared video-level image), or None.
         """
         global CLIP_MODEL, HAS_OPENCV
         _ensure_keyframes_dir()
@@ -298,13 +377,16 @@ class MultimodalEngine:
             preload_models()
 
         if CLIP_MODEL is None:
-            return None, None
+            return None, None, None
 
         keyframe_filename = f"{chunk_id}.jpg"
         keyframe_path = os.path.join(KEYFRAMES_DIR, keyframe_filename)
-        keyframe_url = f"http://localhost:8000/api/keyframe/{chunk_id}"
+        # Relative path — the frontend resolves it against its configured API origin
+        # (VITE_API_URL). A hardcoded absolute URL here gets baked into every persisted
+        # chunk, so changing the backend port breaks every existing thumbnail (hygiene).
+        keyframe_url = f"/api/keyframe/{chunk_id}"
 
-        # Option A: Local video file via OpenCV
+        # Option A: Local video file via OpenCV — genuine per-moment frame.
         if source_target and os.path.exists(source_target) and HAS_OPENCV:
             try:
                 cap = cv2.VideoCapture(source_target)
@@ -319,11 +401,12 @@ class MultimodalEngine:
                     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     pil_img = Image.fromarray(rgb_frame)
                     visual_vec = CLIP_MODEL.encode(pil_img, convert_to_numpy=True, normalize_embeddings=True)
-                    return visual_vec, keyframe_url
+                    return visual_vec, keyframe_url, 'frame'
             except Exception as e:
                 print(f"[MultimodalEngine] OpenCV frame sampling error at {timestamp_sec}s: {e}")
 
-        # Option B: Image URL (e.g. YouTube thumbnail poster) via PIL
+        # Option B: Image URL (e.g. YouTube thumbnail poster) via PIL — video-level, not
+        # per-moment: every chunk of the same video gets this same image.
         target_url = image_url or (source_target if source_target and source_target.startswith('http') else None)
         if target_url:
             try:
@@ -333,11 +416,11 @@ class MultimodalEngine:
                     pil_img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
                     pil_img.save(keyframe_path, "JPEG", quality=85)
                     visual_vec = CLIP_MODEL.encode(pil_img, convert_to_numpy=True, normalize_embeddings=True)
-                    return visual_vec, keyframe_url
+                    return visual_vec, keyframe_url, 'thumbnail'
             except Exception as e:
                 print(f"[MultimodalEngine] Image URL visual embedding failed for {target_url}: {e}")
 
-        return None, None
+        return None, None, None
 
     @staticmethod
     def embed_text_clip(query: str) -> Optional[np.ndarray]:
