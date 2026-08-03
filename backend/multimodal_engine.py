@@ -7,19 +7,59 @@ from collections import Counter
 from typing import List, Dict, Any, Optional, Tuple
 import numpy as np
 
-TEXT_MODEL = None
 CLIP_MODEL = None
-HAS_TEXT_MODEL = True
 HAS_CLIP_MODEL = True
 
 KEYFRAMES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "keyframes")
+
+
+def _enable_hf_offline_if_already_cached():
+    """
+    huggingface_hub does an online "check for updates" round-trip on every single model
+    load by default — even when the model is already fully cached locally. That's the
+    actual reason backend boot can take a long time or intermittently fail: each of the
+    three HF-hosted models this app loads (embedding, CLIP, cross-encoder reranker) retries
+    that check with backoff on a flaky/offline connection before giving up (observed live:
+    up to ~30s of retries per model, and in one case the load failed outright and silently
+    fell back to a much worse TF-IDF/no-reranker mode instead of just using the cache).
+
+    If every model this app needs is already cached, skip the network check entirely by
+    setting HF_HUB_OFFLINE before huggingface_hub is imported (transitively, via
+    sentence_transformers below) — this must run before that import for the setting to take
+    effect, since huggingface_hub reads it once into a module-level constant. If anything
+    isn't cached yet (first run on this machine), leave it unset so it can download normally.
+    Respects an explicit HF_HUB_OFFLINE the user/deployment already set.
+    """
+    if os.environ.get("HF_HUB_OFFLINE") is not None:
+        return
+
+    try:
+        from huggingface_hub import constants as hf_constants
+    except Exception:
+        return  # huggingface_hub itself isn't installed; nothing to do here
+
+    required_repos = [
+        "sentence-transformers/all-MiniLM-L6-v2",
+        "sentence-transformers/clip-ViT-B-32",
+        "cross-encoder/ms-marco-MiniLM-L-6-v2",
+    ]
+
+    def _is_cached(repo_id: str) -> bool:
+        snapshots_dir = os.path.join(hf_constants.HF_HUB_CACHE, "models--" + repo_id.replace("/", "--"), "snapshots")
+        return os.path.isdir(snapshots_dir) and len(os.listdir(snapshots_dir)) > 0
+
+    if all(_is_cached(r) for r in required_repos):
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        print("[MultimodalEngine] All HF models found in local cache — loading offline (no network round-trip).")
+
+
+_enable_hf_offline_if_already_cached()
 
 try:
     from sentence_transformers import SentenceTransformer
     from PIL import Image
 except Exception as e:
     print(f"[MultimodalEngine] SentenceTransformer/PIL import error: {e}")
-    HAS_TEXT_MODEL = False
     HAS_CLIP_MODEL = False
 
 try:
@@ -70,8 +110,13 @@ def _ensure_keyframes_dir():
 
 
 def preload_models():
-    """Preload SentenceTransformer text model and CLIP visual model into memory on startup."""
-    global TEXT_MODEL, CLIP_MODEL, HAS_TEXT_MODEL, HAS_CLIP_MODEL, HAS_OPENCV
+    """Preload the CLIP visual model into memory on startup.
+
+    Text embedding is handled entirely by vector_store.py's own EMBEDDING_MODEL — this
+    module used to *also* eagerly load a second, separate 'all-MiniLM-L6-v2' instance into
+    a TEXT_MODEL global that nothing ever read afterward, doubling that model's load time
+    (and RAM) for no reason. Removed rather than fixed forward, since it had no callers."""
+    global CLIP_MODEL, HAS_CLIP_MODEL, HAS_OPENCV
     _ensure_keyframes_dir()
 
     # Re-check OpenCV import in case it was installed dynamically
@@ -83,15 +128,6 @@ def preload_models():
             print("[MultimodalEngine] OpenCV (cv2) successfully initialized.")
         except ImportError:
             HAS_OPENCV = False
-
-    if HAS_TEXT_MODEL and TEXT_MODEL is None:
-        try:
-            print("[MultimodalEngine] Preloading text embedding model ('all-MiniLM-L6-v2')...")
-            TEXT_MODEL = SentenceTransformer('all-MiniLM-L6-v2')
-            print("[MultimodalEngine] Text embedding model loaded.")
-        except Exception as e:
-            print(f"[MultimodalEngine] Text model preload failed: {e}")
-            HAS_TEXT_MODEL = False
 
     if HAS_CLIP_MODEL and CLIP_MODEL is None:
         try:
