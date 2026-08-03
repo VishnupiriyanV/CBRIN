@@ -293,6 +293,14 @@ export const App: React.FC = () => {
           </div>
         )}
 
+        {/* Degraded-mode notice: the relevance reranker was unavailable server-side, so
+            results below are unranked best-effort matches, not confidence-scored ones. */}
+        {searchResponse?.degraded && (
+          <div className="bg-amber-950/30 border border-amber-800/30 rounded-xl p-3 text-xs text-amber-300 font-mono text-center animate-fade-in">
+            {searchResponse.message || 'Relevance reranker unavailable — showing unranked best-effort matches.'}
+          </div>
+        )}
+
         {/* Results Section (only displayed when a search has been executed) */}
         {hasSearched && (
           <div className="space-y-6 pt-4 border-t border-hairline animate-fade-in">
@@ -394,6 +402,7 @@ export const App: React.FC = () => {
               <EmptyState
                 query={query}
                 nearMisses={searchResponse?.near_misses}
+                message={searchResponse?.message}
                 onJumpToMoment={(res) => setSelectedResult(res)}
                 onToggleHighlight={handleToggleHighlight}
               />

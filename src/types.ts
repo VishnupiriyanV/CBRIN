@@ -17,7 +17,10 @@ export interface VideoItem {
   topics?: string[];
 }
 
-export type MatchConfidence = 'strong' | 'possible' | 'weak';
+// 'unranked': the cross-encoder reranker was unavailable (failed to load / threw), so these
+// are unranked best-effort retrieval results rather than confidence-scored ones — see
+// SearchResponse.degraded.
+export type MatchConfidence = 'strong' | 'possible' | 'weak' | 'unranked';
 
 export interface ChunkResult {
   id: string;
@@ -55,6 +58,9 @@ export interface SearchResponse {
   library_video_count: number;
   search_mode?: string;
   message?: string;
+  // True when 'results' are unranked best-effort matches because the relevance reranker
+  // was unavailable, not confidence-scored ones (see MatchConfidence 'unranked').
+  degraded?: boolean;
 }
 
 export interface LibraryStats {
