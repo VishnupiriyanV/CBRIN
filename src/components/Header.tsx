@@ -52,7 +52,7 @@ export const Header: React.FC<HeaderProps> = ({
 
   return (
     <header className="border-b border-hairline/80 sticky top-0 z-40 backdrop-blur-xl bg-canvas/85">
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between gap-4">
+      <div className="relative max-w-6xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between gap-4">
         
         {/* Left: Brand Header & Telemetry */}
         <div className="flex items-center gap-3 shrink-0">
@@ -115,10 +115,10 @@ export const Header: React.FC<HeaderProps> = ({
           )}
         </div>
 
-        {/* Center: Tool Selector (Search vs Engine) */}
+        {/* Center: Tool Selector (Search vs Engine) - Absolute Centered relative to page container */}
         {onChangeView && (
-          <div className="flex-1 flex justify-center items-center">
-            <div className="flex items-center gap-0.5 p-0.5 rounded-full border border-hairline bg-canvas-soft">
+          <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-auto z-10">
+            <div className="flex items-center gap-0.5 p-0.5 rounded-full border border-hairline bg-canvas-soft shadow-md">
               <button
                 onClick={() => onChangeView('search')}
                 className={`px-3.5 py-1 rounded-full text-[11px] font-mono transition-all ${
