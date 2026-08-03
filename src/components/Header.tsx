@@ -61,9 +61,6 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
             <h1 className="text-base font-semibold tracking-tight text-ink">Vault</h1>
           </div>
-          <span className="hidden lg:inline-block eyebrow-mono text-[9px] text-ink-mute px-2.5 py-0.5 rounded-full border border-hairline bg-canvas-soft">
-            CREATORBRAIN // L1
-          </span>
         </div>
 
         {/* View tabs: Search (Layer 1) vs ENGINE (Layer 3 clip studio) */}
