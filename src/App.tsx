@@ -11,7 +11,7 @@ import { ClipStudio } from './components/engine/ClipStudio';
 import { ChunkResult, VideoItem, SearchResponse, LibraryStats, Highlight } from './types';
 import { performSearch, fetchLibraryVideos, fetchLibraryStats, checkBackendHealth, fetchSuggestedQueries, addHighlight, removeHighlight, fetchHighlights, exportSearchJSON, exportSearchCSV } from './services/api';
 import { getQueryHistory, addToQueryHistory } from './services/queryHistory';
-import { Zap, Plus, Video, WifiOff, FileDown, ChevronDown, Info, Filter } from 'lucide-react';
+import { Plus, Video, WifiOff, FileDown, ChevronDown, Info, Filter } from 'lucide-react';
 
 export const App: React.FC = () => {
   const [activeView, setActiveView] = useState<AppView>('search');
@@ -241,17 +241,10 @@ export const App: React.FC = () => {
         ) : (
         <>
         {/* Hero Section */}
-        <div className="text-center space-y-3 max-w-2xl mx-auto">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-hairline bg-canvas-card text-[11px] font-mono text-ink-mute shadow-sm">
-            <Zap className="w-3 h-3 text-accent-sunset" />
-            <span>MULTIMODAL SEMANTIC & VISUAL SEARCH (WHISPER + CLIP)</span>
-          </div>
+        <div className="text-center max-w-2xl mx-auto">
           <h1 className="text-3xl sm:text-4xl lg:text-5xl font-medium tracking-tight text-ink leading-tight">
             Search your spoken content library in plain language.
           </h1>
-          <p className="text-sm sm:text-base text-ink-body font-sans max-w-xl mx-auto">
-            Search what was spoken or shown on screen. Vault indexes your audio/video back-catalog and jumps to the exact moment.
-          </p>
         </div>
 
         {/* Empty Library Onboarding Banner */}
@@ -476,9 +469,8 @@ export const App: React.FC = () => {
       </main>
 
       {/* Minimal Footer */}
-      <footer className="border-t border-hairline py-8 bg-canvas text-center text-xs font-mono text-ink-mute space-y-2">
-        <p>VAULT // CREATORBRAIN LAYER 1 MVP</p>
-        <p className="text-[10px]">ULTRA-MINIMALIST DESIGN // OLED BLACK // HAIRLINE BORDERS // ZERO EMOJIS</p>
+      <footer className="border-t border-hairline py-6 bg-canvas text-center text-xs font-mono text-ink-mute">
+        <p>© Vault</p>
       </footer>
 
       {/* Jump to Moment Video Modal */}
