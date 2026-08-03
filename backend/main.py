@@ -134,13 +134,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"[Vault API] Stale chunk repair pass failed: {e}")
 
-    print("[Vault API] Model preloading completed. Server ready on http://localhost:8000.")
+    print("[Cbrin API] Model preloading completed. Server ready on http://localhost:8000.")
     yield
-    print("[Vault API] Server shutting down.")
+    print("[Cbrin API] Server shutting down.")
 
 app = FastAPI(
-    title="Vault API",
-    description="CreatorBrain Layer 1 MVP — Multimodal Semantic Search for Creator Content",
+    title="Cbrin API",
+    description="Multimodal Semantic Search for Creator Content",
     version="0.4.0",
     lifespan=lifespan
 )
@@ -211,7 +211,7 @@ def read_root():
     stats = store.get_stats()
     return {
         "status": "ok",
-        "service": "Vault API — CreatorBrain Layer 1",
+        "service": "Cbrin API",
         "indexed_chunks": stats["total_chunks"],
         "indexed_videos": stats["indexed_count"],
         "is_fully_indexed": stats["is_fully_indexed"]
@@ -492,7 +492,7 @@ def export_library(format: str = Query("json", description="Export format: 'json
         return Response(
             content=zip_bytes,
             media_type="application/zip",
-            headers={"Content-Disposition": "attachment; filename=vault_library_export.zip"}
+            headers={"Content-Disposition": "attachment; filename=cbrin_library_export.zip"}
         )
     else:
         data = store.export_library_json()
@@ -500,7 +500,7 @@ def export_library(format: str = Query("json", description="Export format: 'json
         return Response(
             content=json_str,
             media_type="application/json",
-            headers={"Content-Disposition": "attachment; filename=vault_library_export.json"}
+            headers={"Content-Disposition": "attachment; filename=cbrin_library_export.json"}
         )
 
 
@@ -519,14 +519,14 @@ def export_search_results(
         return Response(
             content=csv_str,
             media_type="text/csv",
-            headers={"Content-Disposition": f"attachment; filename=vault_search_{query[:30].replace(' ', '_')}.csv"}
+            headers={"Content-Disposition": f"attachment; filename=cbrin_search_{query[:30].replace(' ', '_')}.csv"}
         )
     else:
         json_str = json.dumps(search_result, indent=2, ensure_ascii=False)
         return Response(
             content=json_str,
             media_type="application/json",
-            headers={"Content-Disposition": f"attachment; filename=vault_search_{query[:30].replace(' ', '_')}.json"}
+            headers={"Content-Disposition": f"attachment; filename=cbrin_search_{query[:30].replace(' ', '_')}.json"}
         )
 
 

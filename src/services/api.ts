@@ -214,7 +214,7 @@ export async function fetchHighlights(): Promise<Highlight[]> {
 export function exportLibraryJSON(): void {
   const link = document.createElement('a');
   link.href = `${API_BASE_URL}/export/library?format=json`;
-  link.download = 'vault_library_export.json';
+  link.download = 'cbrin_library_export.json';
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
@@ -226,7 +226,7 @@ export function exportLibraryJSON(): void {
 export function exportLibraryZIP(): void {
   const link = document.createElement('a');
   link.href = `${API_BASE_URL}/export/library?format=zip`;
-  link.download = 'vault_library_export.zip';
+  link.download = 'cbrin_library_export.zip';
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
@@ -238,7 +238,7 @@ export function exportLibraryZIP(): void {
 export function exportSearchJSON(query: string, mode: string = 'spoken'): void {
   const link = document.createElement('a');
   link.href = `${API_BASE_URL}/export/search?query=${encodeURIComponent(query)}&mode=${encodeURIComponent(mode)}&format=json`;
-  link.download = `vault_search_${query.slice(0, 30).replace(/\s+/g, '_')}.json`;
+  link.download = `cbrin_search_${query.slice(0, 30).replace(/\s+/g, '_')}.json`;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
@@ -250,7 +250,7 @@ export function exportSearchJSON(query: string, mode: string = 'spoken'): void {
 export function exportSearchCSV(query: string, mode: string = 'spoken'): void {
   const link = document.createElement('a');
   link.href = `${API_BASE_URL}/export/search?query=${encodeURIComponent(query)}&mode=${encodeURIComponent(mode)}&format=csv`;
-  link.download = `vault_search_${query.slice(0, 30).replace(/\s+/g, '_')}.csv`;
+  link.download = `cbrin_search_${query.slice(0, 30).replace(/\s+/g, '_')}.csv`;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
@@ -262,7 +262,7 @@ export function exportSearchCSV(query: string, mode: string = 'spoken'): void {
 export function exportHighlightsJSON(): void {
   const link = document.createElement('a');
   link.href = `${API_BASE_URL}/export/highlights`;
-  link.download = 'vault_highlights_export.json';
+  link.download = 'cbrin_highlights_export.json';
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);

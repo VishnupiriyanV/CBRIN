@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Database, Plus, Search, Sparkles, FileVideo, CheckCircle2, AlertTriangle, Bookmark, FileDown, Eye, ChevronDown, Activity } from 'lucide-react';
+import { Plus, Search, Sparkles, FileVideo, CheckCircle2, AlertTriangle, Bookmark, FileDown, Eye, ChevronDown, Activity } from 'lucide-react';
+import { CbrinLogo } from './CbrinLogo';
 import { LibraryStats } from '../types';
 import { exportLibraryJSON, exportLibraryZIP, exportHighlightsJSON } from '../services/api';
 
@@ -53,90 +54,94 @@ export const Header: React.FC<HeaderProps> = ({
     <header className="border-b border-hairline/80 sticky top-0 z-40 backdrop-blur-xl bg-canvas/85">
       <div className="max-w-6xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between gap-4">
         
-        {/* Left: Brand Header */}
+        {/* Left: Brand Header & Telemetry */}
         <div className="flex items-center gap-3 shrink-0">
           <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-lg bg-canvas-soft border border-hairline flex items-center justify-center text-accent-sunset">
-              <Database className="w-4 h-4" />
-            </div>
-            <h1 className="text-base font-semibold tracking-tight text-ink">Vault</h1>
+            <CbrinLogo />
+            <h1 className="text-base font-semibold tracking-wider text-ink font-mono">CBRIN</h1>
           </div>
+
+          {/* Library Telemetry Capsule */}
+          {totalVideos > 0 && (
+            <button
+              onClick={onOpenProgress}
+              className="hidden xl:flex items-center gap-3 px-3 py-1 rounded-full border border-hairline/80 bg-canvas-card/80 hover:bg-canvas-soft hover:border-hairline-bright transition-all text-[11px] font-mono shadow-sm group cursor-pointer"
+              title="Click to view full indexing pipeline telemetry & progress"
+            >
+              {failedCount > 0 ? (
+                <div className="flex items-center gap-1.5 text-red-400">
+                  <AlertTriangle className="w-3 h-3 shrink-0" />
+                  <span>{failedCount} FAILED</span>
+                </div>
+              ) : isFullyIndexed ? (
+                <div className="flex items-center gap-1.5 text-emerald-400">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                  <span>100% INDEXED</span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-1.5 text-amber-400">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
+                  <span>INDEXING</span>
+                </div>
+              )}
+
+              <span className="text-hairline-bright">•</span>
+
+              <div className="flex items-center gap-1 text-ink-mute group-hover:text-ink">
+                <FileVideo className="w-3 h-3 text-ink-mute" />
+                <span>{totalVideos} MEDIA</span>
+              </div>
+
+              <span className="text-hairline-bright">•</span>
+
+              <div className="flex items-center gap-1 text-ink-mute group-hover:text-ink">
+                <Sparkles className="w-3 h-3 text-accent-sunset" />
+                <span>{totalChunks} CHUNKS</span>
+              </div>
+
+              {totalChunks > 0 && (
+                <>
+                  <span className="text-hairline-bright">•</span>
+                  <div className="flex items-center gap-1 text-ink-mute group-hover:text-ink">
+                    <Eye className="w-3 h-3 text-ink-mute" />
+                    <span>{visualIndexedCount}/{totalChunks} VISUAL</span>
+                  </div>
+                </>
+              )}
+
+              <span className="text-hairline-bright">•</span>
+              <Activity className="w-3 h-3 text-accent-sunset opacity-60 group-hover:opacity-100 transition-opacity" />
+            </button>
+          )}
         </div>
 
-        {/* View tabs: Search (Layer 1) vs ENGINE (Layer 3 clip studio) */}
+        {/* Center: Tool Selector (Search vs Engine) */}
         {onChangeView && (
-          <div className="hidden sm:flex items-center gap-0.5 p-0.5 rounded-full border border-hairline bg-canvas-soft shrink-0">
-            <button
-              onClick={() => onChangeView('search')}
-              className={`px-3 py-1 rounded-full text-[11px] font-mono transition-all ${activeView === 'search' ? 'bg-canvas-card text-ink border border-hairline-bright' : 'text-ink-mute hover:text-ink'}`}
-            >
-              Search
-            </button>
-            <button
-              onClick={() => onChangeView('engine')}
-              className={`px-3 py-1 rounded-full text-[11px] font-mono transition-all flex items-center gap-1 ${activeView === 'engine' ? 'bg-canvas-card text-accent-sunset border border-hairline-bright' : 'text-ink-mute hover:text-ink'}`}
-            >
-              <Sparkles className="w-3 h-3" />
-              <span>Engine</span>
-            </button>
+          <div className="flex-1 flex justify-center items-center">
+            <div className="flex items-center gap-0.5 p-0.5 rounded-full border border-hairline bg-canvas-soft">
+              <button
+                onClick={() => onChangeView('search')}
+                className={`px-3.5 py-1 rounded-full text-[11px] font-mono transition-all ${
+                  activeView === 'search'
+                    ? 'bg-canvas-card text-ink border border-hairline-bright font-medium shadow-sm'
+                    : 'text-ink-mute hover:text-ink'
+                }`}
+              >
+                Search
+              </button>
+              <button
+                onClick={() => onChangeView('engine')}
+                className={`px-3.5 py-1 rounded-full text-[11px] font-mono transition-all flex items-center gap-1 ${
+                  activeView === 'engine'
+                    ? 'bg-canvas-card text-accent-sunset border border-hairline-bright font-medium shadow-sm'
+                    : 'text-ink-mute hover:text-ink'
+                }`}
+              >
+                <Sparkles className="w-3 h-3" />
+                <span>Engine</span>
+              </button>
+            </div>
           </div>
-        )}
-
-        {/* Center: Consolidated Library Telemetry Capsule (Clickable -> Opens Indexing Progress Modal) */}
-        {totalVideos > 0 && (
-          <button
-            onClick={onOpenProgress}
-            className="hidden md:flex items-center gap-3 px-3.5 py-1 rounded-full border border-hairline/80 bg-canvas-card/80 hover:bg-canvas-soft hover:border-hairline-bright transition-all text-[11px] font-mono shadow-sm group cursor-pointer"
-            title="Click to view full indexing pipeline telemetry & progress"
-          >
-            {/* Status indicator */}
-            {failedCount > 0 ? (
-              <div className="flex items-center gap-1.5 text-red-400">
-                <AlertTriangle className="w-3 h-3 shrink-0" />
-                <span>{failedCount} FAILED</span>
-              </div>
-            ) : isFullyIndexed ? (
-              <div className="flex items-center gap-1.5 text-emerald-400">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                <span>100% INDEXED</span>
-              </div>
-            ) : (
-              <div className="flex items-center gap-1.5 text-amber-400">
-                <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
-                <span>INDEXING</span>
-              </div>
-            )}
-
-            <span className="text-hairline-bright">•</span>
-
-            {/* Media count */}
-            <div className="flex items-center gap-1 text-ink-mute group-hover:text-ink">
-              <FileVideo className="w-3 h-3 text-ink-mute" />
-              <span>{totalVideos} MEDIA</span>
-            </div>
-
-            <span className="text-hairline-bright">•</span>
-
-            {/* Chunk count */}
-            <div className="flex items-center gap-1 text-ink-mute group-hover:text-ink">
-              <Sparkles className="w-3 h-3 text-accent-sunset" />
-              <span>{totalChunks} CHUNKS</span>
-            </div>
-
-            {/* Visual coverage */}
-            {totalChunks > 0 && (
-              <>
-                <span className="text-hairline-bright">•</span>
-                <div className="flex items-center gap-1 text-ink-mute group-hover:text-ink">
-                  <Eye className="w-3 h-3 text-ink-mute" />
-                  <span>{visualIndexedCount}/{totalChunks} VISUAL</span>
-                </div>
-              </>
-            )}
-
-            <span className="text-hairline-bright">•</span>
-            <Activity className="w-3 h-3 text-accent-sunset opacity-60 group-hover:opacity-100 transition-opacity" />
-          </button>
         )}
 
         {/* Right: Actions */}

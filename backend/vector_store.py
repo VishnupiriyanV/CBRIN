@@ -17,10 +17,10 @@ try:
     from sentence_transformers import SentenceTransformer, CrossEncoder
     EMBEDDING_MODEL = SentenceTransformer('all-MiniLM-L6-v2')
     HAS_DENSE_MODEL = True
-    print("[Vault] Loaded SentenceTransformer ('all-MiniLM-L6-v2') for semantic text embeddings.")
+    print("[Cbrin] Loaded SentenceTransformer ('all-MiniLM-L6-v2') for semantic text embeddings.")
 except Exception as e:
     HAS_DENSE_MODEL = False
-    print(f"[Vault] SentenceTransformer unavailable ({e}), falling back to TF-IDF.")
+    print(f"[Cbrin] SentenceTransformer unavailable ({e}), falling back to TF-IDF.")
     from sklearn.feature_extraction.text import TfidfVectorizer
     from sklearn.metrics.pairwise import cosine_similarity
 
@@ -29,7 +29,7 @@ try:
     HAS_BM25 = True
 except ImportError:
     HAS_BM25 = False
-    print("[Vault] 'rank_bm25' not installed — hybrid retrieval falls back to dense-only. "
+    print("[Cbrin] 'rank_bm25' not installed — hybrid retrieval falls back to dense-only. "
           "Install it (see backend/requirements.txt) for lexical matching on proper nouns, "
           "product names, and acronyms that dense embeddings miss (IMPROVEMENT-PLAN.md 2.5).")
 
@@ -68,11 +68,11 @@ def get_cross_encoder():
     global CROSS_ENCODER_MODEL, HAS_CROSS_ENCODER
     if CROSS_ENCODER_MODEL is None and HAS_CROSS_ENCODER:
         try:
-            print("[Vault] Loading CrossEncoder reranker ('cross-encoder/ms-marco-MiniLM-L-6-v2')...")
+            print("[Cbrin] Loading CrossEncoder reranker ('cross-encoder/ms-marco-MiniLM-L-6-v2')...")
             CROSS_ENCODER_MODEL = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
-            print("[Vault] CrossEncoder reranker loaded.")
+            print("[Cbrin] CrossEncoder reranker loaded.")
         except Exception as e:
-            print(f"[Vault] CrossEncoder failed to load: {e}")
+            print(f"[Cbrin] CrossEncoder failed to load: {e}")
             HAS_CROSS_ENCODER = False
     return CROSS_ENCODER_MODEL
 
@@ -132,7 +132,7 @@ class VectorStore:
         if self.visual_embeddings is not None:
             np.save(paths.VISUAL_EMBEDDINGS_FILE, self.visual_embeddings)
 
-        print(f"[Vault] Persisted {len(self.chunks)} chunks, {len(self.videos)} videos, {len(self.highlights)} highlights to disk.")
+        print(f"[Cbrin] Persisted {len(self.chunks)} chunks, {len(self.videos)} videos, {len(self.highlights)} highlights to disk.")
 
     def _load_from_disk(self):
         """Load previously persisted library data on startup."""
@@ -140,7 +140,7 @@ class VectorStore:
         self.pending_rechunk_meta = {}
 
         if not os.path.exists(paths.CHUNKS_FILE):
-            print("[Vault] No persisted library found. Starting fresh.")
+            print("[Cbrin] No persisted library found. Starting fresh.")
             self.is_fitted = True
             return
 
@@ -162,7 +162,7 @@ class VectorStore:
                 self.dense_embeddings = np.load(paths.EMBEDDINGS_FILE)
                 if len(self.dense_embeddings) == len(self.chunks):
                     self.is_fitted = True
-                    print(f"[Vault] Restored {len(self.chunks)} chunks with dense embeddings.")
+                    print(f"[Cbrin] Restored {len(self.chunks)} chunks with dense embeddings.")
                 else:
                     self.reindex()
             elif self.chunks:
@@ -187,7 +187,7 @@ class VectorStore:
             self._warn_if_thresholds_uncalibrated()
 
         except Exception as e:
-            print(f"[Vault] Error loading persisted library: {e}. Starting fresh.")
+            print(f"[Cbrin] Error loading persisted library: {e}. Starting fresh.")
             self.chunks = []
             self.videos = {}
             self.highlights = {}
@@ -1006,7 +1006,7 @@ class VectorStore:
     def export_library_json(self) -> Dict[str, Any]:
         """Export the full library as a JSON-serializable dict."""
         return {
-            "vault_export_version": "1.0",
+            "cbrin_export_version": "1.0",
             "exported_at": datetime.datetime.now().isoformat(),
             "stats": self.get_stats(),
             "videos": self.videos,
@@ -1022,7 +1022,7 @@ class VectorStore:
             zf.writestr("chunks.json", json.dumps(self.chunks, indent=2, ensure_ascii=False))
             zf.writestr("highlights.json", json.dumps(self.highlights, indent=2, ensure_ascii=False))
             meta = {
-                "vault_export_version": "1.0",
+                "cbrin_export_version": "1.0",
                 "exported_at": datetime.datetime.now().isoformat(),
                 "stats": self.get_stats(),
             }

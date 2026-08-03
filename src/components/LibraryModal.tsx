@@ -137,7 +137,7 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
 
     const file = files[0];
     if (!file.name.endsWith('.json') && !file.name.endsWith('.zip')) {
-      setIngestError('Please select a Vault export file (.json or .zip).');
+      setIngestError('Please select a CBRIN export file (.json or .zip).');
       setTimeout(() => setIngestError(null), 5000);
       return;
     }
@@ -371,7 +371,7 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
               >
                 <FileUp className="w-5 h-5 text-ink-mute group-hover:text-accent-sunset transition-colors" />
                 <span className="text-xs font-medium text-ink">
-                  Select a Vault library export (.json or .zip) to restore
+                  Select a CBRIN library export (.json or .zip) to restore
                 </span>
                 <span className="text-[10px] font-mono text-ink-mute">
                   {importMode === 'merge' ? 'NEW ITEMS ADDED, DUPLICATES SKIPPED' : 'WARNING: CURRENT LIBRARY WILL BE REPLACED'}
