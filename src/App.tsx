@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Header } from './components/Header';
+import { Header, AppView } from './components/Header';
 import { SearchBar } from './components/SearchBar';
 import { ResultCard } from './components/ResultCard';
 import { VideoPlayerModal } from './components/VideoPlayerModal';
@@ -7,12 +7,14 @@ import { LibraryModal } from './components/LibraryModal';
 import { HighlightsPanel } from './components/HighlightsPanel';
 import { IndexingProgressModal } from './components/IndexingProgressModal';
 import { EmptyState } from './components/EmptyState';
+import { ClipStudio } from './components/engine/ClipStudio';
 import { ChunkResult, VideoItem, SearchResponse, LibraryStats, Highlight } from './types';
 import { performSearch, fetchLibraryVideos, fetchLibraryStats, checkBackendHealth, fetchSuggestedQueries, addHighlight, removeHighlight, fetchHighlights, exportSearchJSON, exportSearchCSV } from './services/api';
 import { getQueryHistory, addToQueryHistory } from './services/queryHistory';
 import { Zap, Plus, Video, WifiOff, FileDown, ChevronDown, Info, Filter } from 'lucide-react';
 
 export const App: React.FC = () => {
+  const [activeView, setActiveView] = useState<AppView>('search');
   const [query, setQuery] = useState('');
   const [searchMode, setSearchMode] = useState('spoken');
   const [isSearching, setIsSearching] = useState(false);
@@ -227,11 +229,17 @@ export const App: React.FC = () => {
         onOpenHighlights={() => setIsHighlightsOpen(true)}
         onOpenProgress={() => setIsProgressOpen(true)}
         highlightCount={highlights.length}
+        activeView={activeView}
+        onChangeView={setActiveView}
       />
 
       {/* Main Container */}
-      <main className="flex-1 max-w-5xl w-full mx-auto px-4 sm:px-6 py-8 sm:py-12 space-y-10">
+      <main className={`flex-1 w-full mx-auto px-4 sm:px-6 py-8 sm:py-12 space-y-10 ${activeView === 'engine' ? 'max-w-6xl' : 'max-w-5xl'}`}>
 
+        {activeView === 'engine' ? (
+          <ClipStudio videos={videos} backendOnline={backendOnline ?? false} />
+        ) : (
+        <>
         {/* Hero Section */}
         <div className="text-center space-y-3 max-w-2xl mx-auto">
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-hairline bg-canvas-card text-[11px] font-mono text-ink-mute shadow-sm">
@@ -462,6 +470,8 @@ export const App: React.FC = () => {
               ))}
             </div>
           </div>
+        )}
+        </>
         )}
       </main>
 

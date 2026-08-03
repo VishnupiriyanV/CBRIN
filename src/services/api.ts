@@ -1,4 +1,4 @@
-import { SearchResponse, VideoItem, LibraryStats, Highlight } from '../types';
+import { SearchResponse, VideoItem, LibraryStats, Highlight, EngineJob, ClipCandidate, BrandKit } from '../types';
 
 // Configurable via VITE_API_URL so changing the backend's port/host doesn't require a code
 // change — and, critically, doesn't strand every already-persisted chunk whose keyframe_url
@@ -269,6 +269,107 @@ export function exportHighlightsJSON(): void {
 }
 
 // --- Import API ---
+
+// --- ENGINE (Layer 3): narrative-aware clip generation ---
+
+export async function engineAnalyze(videoId: string, maxClips: number = 6): Promise<{ job_id: string }> {
+  const response = await fetch(`${API_BASE_URL}/engine/analyze`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ video_id: videoId, max_clips: maxClips })
+  });
+  if (!response.ok) {
+    const detail = await response.json().catch(() => ({ detail: 'Analyze failed' }));
+    throw new Error(detail.detail || `Analyze failed (${response.status})`);
+  }
+  return await response.json();
+}
+
+export async function engineGetJob(jobId: string): Promise<EngineJob> {
+  const response = await fetch(`${API_BASE_URL}/engine/jobs/${jobId}`);
+  if (!response.ok) {
+    const detail = await response.json().catch(() => ({ detail: 'Job not found' }));
+    throw new Error(detail.detail || `Job lookup failed (${response.status})`);
+  }
+  return await response.json();
+}
+
+export async function engineGetClips(videoId: string): Promise<ClipCandidate[]> {
+  const response = await fetch(`${API_BASE_URL}/engine/clips/${videoId}`);
+  if (!response.ok) return [];
+  return await response.json();
+}
+
+export async function engineAdjustClip(clipId: string, startSec: number, endSec: number): Promise<ClipCandidate> {
+  const response = await fetch(`${API_BASE_URL}/engine/clips/${clipId}/adjust`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ start_sec: startSec, end_sec: endSec })
+  });
+  if (!response.ok) {
+    const detail = await response.json().catch(() => ({ detail: 'Adjust failed' }));
+    throw new Error(detail.detail || `Adjust failed (${response.status})`);
+  }
+  return await response.json();
+}
+
+export async function engineRender(clipId: string, presets: string[]): Promise<{ job_id: string }> {
+  const response = await fetch(`${API_BASE_URL}/engine/render`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ clip_id: clipId, presets })
+  });
+  if (!response.ok) {
+    const detail = await response.json().catch(() => ({ detail: 'Render failed' }));
+    throw new Error(detail.detail || `Render failed (${response.status})`);
+  }
+  return await response.json();
+}
+
+export function engineClipFileUrl(clipId: string, preset: string): string {
+  return `${API_BASE_URL}/engine/clip_file/${encodeURIComponent(clipId)}/${encodeURIComponent(preset)}`;
+}
+
+export async function engineGetBrandKit(): Promise<BrandKit> {
+  const response = await fetch(`${API_BASE_URL}/engine/brand_kit`);
+  if (!response.ok) throw new Error(`Failed to fetch brand kit (${response.status})`);
+  return await response.json();
+}
+
+export async function engineUpdateBrandKit(patch: Partial<BrandKit>): Promise<BrandKit> {
+  const response = await fetch(`${API_BASE_URL}/engine/brand_kit`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch)
+  });
+  if (!response.ok) {
+    const detail = await response.json().catch(() => ({ detail: 'Update failed' }));
+    throw new Error(detail.detail || `Update failed (${response.status})`);
+  }
+  return await response.json();
+}
+
+export async function engineAutoseedBrandKit(force: boolean = false): Promise<BrandKit> {
+  const response = await fetch(`${API_BASE_URL}/engine/brand_kit/autoseed?force=${force}`, { method: 'POST' });
+  if (!response.ok) {
+    const detail = await response.json().catch(() => ({ detail: 'Autoseed failed' }));
+    throw new Error(detail.detail || `Autoseed failed (${response.status})`);
+  }
+  return await response.json();
+}
+
+export async function engineSendFeedback(clipId: string, verdict: 'winner' | 'dud'): Promise<{ label_count: number }> {
+  const response = await fetch(`${API_BASE_URL}/engine/feedback`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ clip_id: clipId, verdict })
+  });
+  if (!response.ok) {
+    const detail = await response.json().catch(() => ({ detail: 'Feedback failed' }));
+    throw new Error(detail.detail || `Feedback failed (${response.status})`);
+  }
+  return await response.json();
+}
 
 /**
  * Import a library backup file (JSON or ZIP).

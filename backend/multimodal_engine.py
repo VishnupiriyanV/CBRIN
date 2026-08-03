@@ -7,10 +7,10 @@ from collections import Counter
 from typing import List, Dict, Any, Optional, Tuple
 import numpy as np
 
+import paths
+
 CLIP_MODEL = None
 HAS_CLIP_MODEL = True
-
-KEYFRAMES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "keyframes")
 
 
 def _enable_hf_offline_if_already_cached():
@@ -106,7 +106,7 @@ _CONTRACTION_PATTERNS = [(re.compile(pat, re.IGNORECASE), repl) for pat, repl in
 
 
 def _ensure_keyframes_dir():
-    os.makedirs(KEYFRAMES_DIR, exist_ok=True)
+    os.makedirs(paths.KEYFRAMES_DIR, exist_ok=True)
 
 
 def preload_models():
@@ -416,7 +416,7 @@ class MultimodalEngine:
             return None, None, None
 
         keyframe_filename = f"{chunk_id}.jpg"
-        keyframe_path = os.path.join(KEYFRAMES_DIR, keyframe_filename)
+        keyframe_path = os.path.join(paths.KEYFRAMES_DIR, keyframe_filename)
         # Relative path — the frontend resolves it against its configured API origin
         # (VITE_API_URL). A hardcoded absolute URL here gets baked into every persisted
         # chunk, so changing the backend port breaks every existing thumbnail (hygiene).
