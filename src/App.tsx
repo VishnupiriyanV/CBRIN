@@ -419,6 +419,7 @@ export const App: React.FC = () => {
                       searchQuery={query}
                       onJumpToMoment={(res) => setSelectedResult(res)}
                       onToggleHighlight={handleToggleHighlight}
+                      searchMode={searchResponse?.search_mode || searchMode}
                     />
                   </div>
                 ))}
@@ -431,6 +432,7 @@ export const App: React.FC = () => {
                 message={searchResponse?.message}
                 onJumpToMoment={(res) => setSelectedResult(res)}
                 onToggleHighlight={handleToggleHighlight}
+                searchMode={searchResponse?.search_mode || searchMode}
               />
             ) : null}
           </div>

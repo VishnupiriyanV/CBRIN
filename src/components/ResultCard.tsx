@@ -8,6 +8,10 @@ interface ResultCardProps {
   searchQuery: string;
   onJumpToMoment: (result: ChunkResult) => void;
   onToggleHighlight: (result: ChunkResult) => void;
+  /** 'visual_scenes' (the "ON-SCREEN (CLIP)" mode) makes the frame the primary result — a
+   * viewer is asking "what did this look like", so the photo leads and the transcript text
+   * becomes supporting context, not the other way around like 'spoken' mode. */
+  searchMode?: string;
 }
 
 // A separate, smaller list from backend/multimodal_engine.py's STOPWORDS by design, not by
@@ -33,8 +37,10 @@ export const ResultCard: React.FC<ResultCardProps> = ({
   searchQuery,
   onJumpToMoment,
   onToggleHighlight,
+  searchMode,
 }) => {
   const [copied, setCopied] = useState(false);
+  const isVisualMode = searchMode === 'visual_scenes';
 
   const handleCopyCitation = async () => {
     // The actual repurposing workflow this product exists for (IMPROVEMENT-PLAN.md 3.6):
@@ -49,8 +55,22 @@ export const ResultCard: React.FC<ResultCardProps> = ({
     }
   };
 
-  const renderHighlightedSnippet = (text: string, query: string, matchedConcepts?: string[]) => {
-    if (!text) return null;
+  const renderHighlightedSnippet = (rawText: string, query: string, matchedConcepts?: string[]) => {
+    if (!rawText) return null;
+
+    // Apply sentence capitalization to raw speech transcripts
+    const formatSentenceCasing = (s: string) => {
+      if (!s) return '';
+      let formatted = s.trim();
+      formatted = formatted.replace(/(^\s*|[.!?]\s+)([a-z])/g, (_, p1, p2) => p1 + p2.toUpperCase());
+      formatted = formatted.replace(/\bi\b/g, 'I');
+      if (formatted.length > 0) {
+        formatted = formatted.charAt(0).toUpperCase() + formatted.slice(1);
+      }
+      return formatted;
+    };
+
+    const text = formatSentenceCasing(rawText);
 
     // Filter out stop words from query words
     const queryTokens = (query || '')
@@ -135,15 +155,21 @@ export const ResultCard: React.FC<ResultCardProps> = ({
       <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
 
         {/* Thumbnail + Main Content */}
-        <div className="flex gap-4 flex-1 min-w-0">
+        <div className={`flex gap-4 flex-1 min-w-0 ${isVisualMode ? 'flex-col sm:flex-row' : ''}`}>
 
-          {/* Chunk Keyframe / Video Thumbnail */}
+          {/* Chunk Keyframe / Video Thumbnail — the primary result in visual search: a viewer
+              searching "on-screen" is asking what something looked like, so the frame leads
+              and is shown at every breakpoint (not hidden on mobile like the spoken-mode icon). */}
           {displayThumbnail && (
-            <div className="relative shrink-0 hidden sm:block">
+            <div className={`relative shrink-0 ${isVisualMode ? 'block w-full sm:w-64' : 'hidden sm:block'}`}>
               <img
                 src={displayThumbnail}
                 alt={`${result.video_title} at ${result.start_timestamp}`}
-                className="w-28 h-[72px] object-cover rounded border border-hairline bg-canvas-soft"
+                className={
+                  isVisualMode
+                    ? 'w-full sm:w-64 aspect-video object-cover rounded-lg border-2 border-accent-sunset/60 bg-canvas-soft'
+                    : 'w-28 h-[72px] object-cover rounded border border-hairline bg-canvas-soft'
+                }
                 onError={(e) => {
                   (e.target as HTMLImageElement).style.display = 'none';
                 }}
@@ -235,12 +261,23 @@ export const ResultCard: React.FC<ResultCardProps> = ({
               </div>
             )}
 
-            {/* Spoken Text Snippet with Coherent Single Phrase Highlight */}
-            <div className="bg-canvas-soft/60 border border-hairline/60 rounded-md p-3.5 text-sm text-ink-body leading-relaxed font-sans">
-              <span className="text-ink-mute text-xs font-mono select-none mr-1.5">"</span>
-              {renderHighlightedSnippet(result.text, searchQuery, result.implicit_concepts)}
-              <span className="text-ink-mute text-xs font-mono select-none ml-1.5">"</span>
-            </div>
+            {/* Spoken Text Snippet — full-weight quote block in spoken mode (the text IS the
+                match); a small, muted, clamped caption in visual mode, since the frame above
+                is the match and this is just supporting context for it. */}
+            {isVisualMode ? (
+              <div className="space-y-1">
+                <span className="text-[9px] font-mono text-ink-mute uppercase tracking-wider">Spoken at this frame</span>
+                <p className="text-xs text-ink-mute leading-relaxed font-sans line-clamp-2">
+                  {renderHighlightedSnippet(result.text, searchQuery, result.implicit_concepts)}
+                </p>
+              </div>
+            ) : (
+              <div className="bg-canvas-soft/60 border border-hairline/60 rounded-md p-3.5 text-sm text-ink-body leading-relaxed font-sans">
+                <span className="text-ink-mute text-xs font-mono select-none mr-1.5">"</span>
+                {renderHighlightedSnippet(result.text, searchQuery, result.implicit_concepts)}
+                <span className="text-ink-mute text-xs font-mono select-none ml-1.5">"</span>
+              </div>
+            )}
 
             {/* Questions Answered (if available) */}
             {result.questions_answered && result.questions_answered.length > 0 && (

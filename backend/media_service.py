@@ -16,7 +16,9 @@ reads dimensions/fps/duration with OpenCV instead (mirrors the approach already 
 multimodal_engine.py's extract_keyframe_and_embed).
 """
 import os
+import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from typing import Optional
 
@@ -124,44 +126,56 @@ def _download_youtube(video_id: str, youtube_id: str) -> str:
         )
 
     final_path = os.path.join(paths.MEDIA_DIR, f"{video_id}.mp4")
-    # Download to a .part path and atomically rename, so a process kill mid-download can
-    # never leave a truncated file that a later call mistakes for a valid cache hit.
-    part_path = final_path + ".part"
 
-    ydl_opts = {
-        "format": "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
-        "outtmpl": part_path,
-        "merge_output_format": "mp4",
-        "quiet": True,
-        "no_warnings": True,
-        "ffmpeg_location": os.path.dirname(ffmpeg_exe()),
-        "noplaylist": True,
-    }
-
-    url = f"https://www.youtube.com/watch?v={youtube_id}"
+    # Download into an isolated temp directory rather than a fixed "{video_id}.mp4.part"
+    # outtmpl: yt-dlp's merge_output_format postprocessor renames the downloaded file by
+    # swapping its LAST extension segment for the merge format, so a literal ".mp4.part"
+    # outtmpl can come out on disk as ".mp4.mp4" instead of ".mp4.part" — the exact "yt-dlp
+    # reported success but produced no output file" failure this replaces. Downloading into an
+    # empty temp dir and picking up whatever file actually landed there sidesteps guessing
+    # yt-dlp's postprocessor naming, and a kill mid-download only orphans the temp dir rather
+    # than corrupting final_path — the same atomicity the old .part path was meant to give.
+    tmp_dir = tempfile.mkdtemp(prefix=f"ytdl-{video_id}-", dir=paths.MEDIA_DIR)
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
-    except Exception as e:
-        if os.path.exists(part_path):
-            try:
-                os.remove(part_path)
-            except OSError:
-                pass
-        raise MediaUnavailable(
-            f"Could not download source video for '{video_id}' (YouTube ID {youtube_id}): "
-            f"{e}. The video may be private, age-restricted, region-locked, or removed — or "
-            f"yt-dlp may need an update to handle a recent YouTube change."
-        )
+        ydl_opts = {
+            "format": "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+            "outtmpl": os.path.join(tmp_dir, "%(id)s.%(ext)s"),
+            "merge_output_format": "mp4",
+            "quiet": True,
+            "no_warnings": True,
+            "ffmpeg_location": os.path.dirname(ffmpeg_exe()),
+            "noplaylist": True,
+        }
 
-    if not os.path.exists(part_path) or os.path.getsize(part_path) == 0:
-        raise MediaUnavailable(
-            f"yt-dlp reported success but produced no output file for '{video_id}' "
-            f"(YouTube ID {youtube_id})."
-        )
+        url = f"https://www.youtube.com/watch?v={youtube_id}"
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
+        except Exception as e:
+            raise MediaUnavailable(
+                f"Could not download source video for '{video_id}' (YouTube ID {youtube_id}): "
+                f"{e}. The video may be private, age-restricted, region-locked, or removed — or "
+                f"yt-dlp may need an update to handle a recent YouTube change."
+            )
 
-    os.replace(part_path, final_path)
-    return final_path
+        produced = [
+            os.path.join(tmp_dir, name) for name in os.listdir(tmp_dir)
+            if os.path.getsize(os.path.join(tmp_dir, name)) > 0
+        ]
+        if not produced:
+            raise MediaUnavailable(
+                f"yt-dlp reported success but produced no output file for '{video_id}' "
+                f"(YouTube ID {youtube_id})."
+            )
+        # Prefer the merged .mp4 if leftover partial audio/video-only streams are also
+        # present; otherwise there's exactly one file and it's the right one.
+        mp4_candidates = [p for p in produced if p.lower().endswith(".mp4")]
+        source = mp4_candidates[0] if mp4_candidates else produced[0]
+
+        os.replace(source, final_path)
+        return final_path
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 def probe(path: str) -> MediaInfo:
