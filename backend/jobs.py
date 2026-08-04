@@ -107,6 +107,11 @@ def list_for_video(video_id: str) -> List[JobRecord]:
         return [JobRecord(**j.to_dict()) for j in _jobs.values() if j.video_id == video_id]
 
 
+def list_all() -> List[JobRecord]:
+    with _lock:
+        return [JobRecord(**j.to_dict()) for j in _jobs.values()]
+
+
 def submit(kind: str, fn: Callable[[Callable[[str, float, str], None]], Dict[str, Any]],
            video_id: Optional[str] = None) -> str:
     """

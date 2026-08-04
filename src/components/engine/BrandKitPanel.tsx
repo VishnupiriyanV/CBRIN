@@ -5,6 +5,7 @@ import { engineGetBrandKit, engineUpdateBrandKit, engineAutoseedBrandKit } from 
 
 const CAPTION_FONTS = ['Inter', 'Anton', 'Archivo Black'];
 const CAPTION_POSITIONS = ['bottom-center', 'top-center', 'center'];
+const CAPTION_SIZES = ['small', 'medium', 'large'];
 
 export const BrandKitPanel: React.FC = () => {
   const [kit, setKit] = useState<BrandKit | null>(null);
@@ -127,8 +128,8 @@ export const BrandKitPanel: React.FC = () => {
         </div>
       </div>
 
-      {/* Caption position + case */}
-      <div className="grid grid-cols-2 gap-3">
+      {/* Caption position + size + case */}
+      <div className="grid grid-cols-3 gap-3">
         <div className="space-y-1.5">
           <span className="text-[10px] font-mono text-ink-mute">Position</span>
           <select
@@ -138,6 +139,18 @@ export const BrandKitPanel: React.FC = () => {
           >
             {CAPTION_POSITIONS.map((p) => (
               <option key={p} value={p}>{p}</option>
+            ))}
+          </select>
+        </div>
+        <div className="space-y-1.5">
+          <span className="text-[10px] font-mono text-ink-mute">Size</span>
+          <select
+            value={kit.caption.size || 'medium'}
+            onChange={(e) => applyPatch({ caption: { ...kit.caption, size: e.target.value } })}
+            className="w-full bg-canvas-soft border border-hairline rounded-lg px-2 py-1.5 text-[11px] text-ink outline-none"
+          >
+            {CAPTION_SIZES.map((s) => (
+              <option key={s} value={s}>{s}</option>
             ))}
           </select>
         </div>

@@ -108,6 +108,37 @@ def _repair_stale_chunks(store: "VectorStore"):
     store.finalize_schema_migration()
 
 
+def _reconcile_interrupted_ingest_jobs(store: "VectorStore"):
+    """
+    jobs.py marks any job still 'running'/'queued' at process start as failed with
+    "interrupted by server restart" (a prior server crash/restart mid-upload) — but jobs.py
+    is deliberately store-agnostic, so it never touches videos.json itself. Without this,
+    an ingest interrupted mid-flight just vanishes: no success, no failure row, nothing in
+    /api/library for the user to see or retry — the upload silently disappears. Back-fill a
+    failed video record for any such job whose video_id never made it into store.videos, so
+    the failure is visible with a retry option instead of invisible.
+    """
+    for job in jobs.list_all():
+        if job.kind not in ("ingest_upload", "ingest_youtube"):
+            continue
+        if job.status != "failed" or job.error != "interrupted by server restart":
+            continue
+        if not job.video_id or job.video_id in store.videos:
+            continue
+
+        is_local = job.kind == "ingest_upload"
+        store.add_failed_video(
+            video_id=job.video_id,
+            # The job record doesn't carry the original filename/URL, only video_id — this
+            # is the best title recoverable after the fact.
+            title="Interrupted Upload" if is_local else "Interrupted YouTube Ingest",
+            channel="Local Upload" if is_local else "YouTube Creator",
+            error_msg="Ingest was interrupted by a server restart before it could finish. Please retry.",
+            is_local=is_local,
+        )
+        print(f"[Vault API] Recorded interrupted ingest job as failed video: {job.video_id}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Pre-load all machine learning models into memory on server startup."""
@@ -136,6 +167,11 @@ async def lifespan(app: FastAPI):
         _repair_stale_chunks(store)
     except Exception as e:
         print(f"[Vault API] Stale chunk repair pass failed: {e}")
+
+    try:
+        _reconcile_interrupted_ingest_jobs(store)
+    except Exception as e:
+        print(f"[Vault API] Interrupted-ingest reconciliation pass failed: {e}")
 
     print("[Cbrin API] Model preloading completed. Server ready on http://localhost:8000.")
     yield
@@ -370,7 +406,7 @@ def _run_youtube_ingest_job(youtube_url: str):
                 "new_chunks_count": len(new_chunks)
             }
 
-        except ValueError as e:
+        except Exception as e:
             try:
                 yt_video_id = get_youtube_video_id(youtube_url)
             except ValueError:
@@ -441,10 +477,24 @@ def _run_upload_job(temp_file_path: str, filename: str, file_ext: str, model_tie
             report("chunk", 0.55, "Segmenting transcript and extracting keyframes...")
             new_chunks = store.chunk_transcript(segments, video_meta, media_path=persistent_media_path)
 
+            # Whisper can return a few segments that are all filler/noise/too-short and get
+            # filtered out entirely during sentence-chunking, leaving new_chunks empty even
+            # though transcription itself "succeeded". Silently reporting success here (as
+            # this used to) meant store.add_video() never ran and the upload vanished from
+            # the library with no success AND no failure record — nothing to see or retry.
+            # Match the YouTube ingest path's existing behavior: treat "nothing chunkable" as
+            # a real failure so it's visible.
+            if not new_chunks:
+                raise ValueError(
+                    "Transcription produced no usable speech segments (silent, music-only, "
+                    "or too little spoken content to chunk). Visual-only indexing isn't "
+                    "supported yet — every chunk (and its keyframe) is derived from a "
+                    "transcript segment, so a video with no chunkable speech gets none."
+                )
+
             report("embed", 0.85, "Embedding chunks into the vector index...")
-            if new_chunks:
-                store.add_video(video_meta)
-                store.add_chunks(new_chunks)
+            store.add_video(video_meta)
+            store.add_chunks(new_chunks)
 
             report("done", 1.0, f"Indexed {len(new_chunks)} chunk(s).")
             return {
@@ -453,7 +503,7 @@ def _run_upload_job(temp_file_path: str, filename: str, file_ext: str, model_tie
                 "video": video_meta,
                 "new_chunks_count": len(new_chunks)
             }
-        except ValueError as e:
+        except Exception as e:
             vid_id = content_hash_id(temp_file_path) if os.path.exists(temp_file_path) else f"local-failed-{abs(hash(filename)) % 100000}"
             clean_title = os.path.splitext(filename)[0].replace("-", " ").replace("_", " ").title()
             store.add_failed_video(
@@ -833,7 +883,10 @@ def engine_get_clip_file(clip_id: str, preset: str):
     file_path = os.path.join(paths.CLIPS_DIR, clip_id, f"{preset}.mp4")
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail=f"'{preset}' has not been rendered for clip '{clip_id}' yet.")
-    return FileResponse(file_path, media_type="video/mp4")
+    # Without an explicit filename, the browser infers one from the URL path
+    # (/api/engine/clip_file/{clip_id}/{preset}, no .mp4 in it) — give it a real name with
+    # the correct extension instead of leaving that to guesswork.
+    return FileResponse(file_path, media_type="video/mp4", filename=f"{clip_id}-{preset}.mp4")
 
 
 @app.get("/api/engine/brand_kit")

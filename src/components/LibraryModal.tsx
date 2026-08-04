@@ -42,6 +42,12 @@ const ModelTierSelector: React.FC<{
   </div>
 );
 
+interface QueueItem {
+  file: File;
+  status: 'pending' | 'uploading' | 'queued' | 'processing' | 'done' | 'failed' | 'skipped';
+  message: string;
+}
+
 interface LibraryModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -81,6 +87,11 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
   const [ingestStatusMsg, setIngestStatusMsg] = useState<string | null>(null);
   const [ingestError, setIngestError] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState<string | null>(null);
+  // Per-file status for a multi-file/folder upload — each file's upload request is submitted
+  // immediately (fast: just the HTTP POST + dedup check), so they queue on the backend's
+  // single-worker job executor in submission order instead of the frontend blocking on one
+  // file's full transcribe/chunk/embed cycle before even starting the next upload.
+  const [uploadQueue, setUploadQueue] = useState<QueueItem[]>([]);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [importMode, setImportMode] = useState<'merge' | 'replace'>('merge');
   // Whisper accuracy/speed tier for local uploads (PRD §7.2) — 'base' mangles proper nouns
@@ -152,54 +163,80 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
     setIsIngesting(true);
     setIngestStatusMsg(null);
     setIngestError(null);
+    setUploadQueue(mediaFiles.map((file) => ({ file, status: 'pending', message: 'Waiting to upload...' })));
+
+    const updateItem = (idx: number, patch: Partial<QueueItem>) => {
+      setUploadQueue((prev) => prev.map((item, i) => (i === idx ? { ...item, ...patch } : item)));
+    };
 
     let processedCount = 0;
     let failedCount = 0;
+    const jobPromises: Promise<void>[] = [];
 
+    // Submit every file's upload request in sequence (each is just an HTTP POST + a cheap
+    // content-hash dedup check, not the slow part) without waiting for its job to finish —
+    // that's what actually queues them on the backend's single-worker executor in submission
+    // order. Processing (transcribe/chunk/embed) then happens for real one at a time on the
+    // backend regardless, so this doesn't overload anything; it just stops the frontend from
+    // blocking file 2's upload behind file 1's entire multi-minute transcription.
     for (let i = 0; i < mediaFiles.length; i++) {
       const file = mediaFiles[i];
-      const prefix = `${i + 1}/${mediaFiles.length}: ${file.name}`;
-      setUploadProgress(`${prefix} — uploading...`);
+      updateItem(i, { status: 'uploading', message: 'Uploading...' });
 
       try {
         const started = await uploadLocalFile(file, modelTier);
 
         if (isIngestJobStart(started)) {
-          const job = await pollJob(started.job_id, (j) => {
-            setUploadProgress(`${prefix} — ${j.message || j.stage || 'processing'}...`);
-          });
-          if (job.status === 'failed') {
-            console.error('Upload job failed:', file.name, job.error);
-            failedCount++;
-          } else if (job.result?.success) {
-            processedCount++;
-          } else {
-            failedCount++;
-          }
+          updateItem(i, { status: 'queued', message: 'Queued — waiting for the backend worker...' });
+          const jobPromise = pollJob(started.job_id, (j) => {
+            updateItem(i, { status: 'processing', message: j.message || `${j.stage || 'processing'}...` });
+          })
+            .then((job) => {
+              if (job.status === 'failed') {
+                failedCount++;
+                updateItem(i, { status: 'failed', message: job.error || 'Processing failed.' });
+              } else if (job.result?.success) {
+                processedCount++;
+                updateItem(i, { status: 'done', message: job.result.message || 'Indexed.' });
+              } else {
+                failedCount++;
+                updateItem(i, { status: 'failed', message: job.result?.message || 'Did not complete successfully.' });
+              }
+              onVideoIngested(); // reflect each file in the library as soon as it finishes, not just at the very end
+            })
+            .catch((err: any) => {
+              failedCount++;
+              updateItem(i, { status: 'failed', message: err.message || 'Processing failed.' });
+            });
+          jobPromises.push(jobPromise);
         } else if (started.success) {
           processedCount++;
+          updateItem(i, { status: 'done', message: started.message || 'Indexed.' });
+          onVideoIngested();
         } else {
-          failedCount++;
+          updateItem(i, { status: 'skipped', message: started.message || 'Already indexed.' });
         }
       } catch (err: any) {
-        console.error('Error uploading file:', file.name, err);
         failedCount++;
+        updateItem(i, { status: 'failed', message: err.message || 'Upload failed.' });
       }
     }
 
-    setUploadProgress(null);
+    await Promise.all(jobPromises);
+
     setIsIngesting(false);
     onVideoIngested();
 
     if (processedCount > 0) {
       setIngestStatusMsg(`Indexed ${processedCount} media file(s).${failedCount > 0 ? ` ${failedCount} failed.` : ''}`);
-    } else {
+    } else if (failedCount > 0) {
       setIngestError(`All ${failedCount} file(s) failed to process. Ensure OPENAI_API_KEY is set or local Whisper is installed.`);
     }
 
     setTimeout(() => {
       setIngestStatusMsg(null);
       setIngestError(null);
+      setUploadQueue([]);
     }, 8000);
   };
 
@@ -374,9 +411,9 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
               >
                 <Upload className="w-5 h-5 text-ink-mute group-hover:text-accent-sunset transition-colors" />
                 <span className="text-xs font-medium text-ink">
-                  Click to select local video or audio files (.mp4, .mov, .mp3, .wav)
+                  Click to select one or more local video/audio files (.mp4, .mov, .mp3, .wav)
                 </span>
-                <span className="text-[10px] font-mono text-ink-mute">WHISPER TRANSCRIPTION & CLIP VISUAL INDEXING AUTOMATIC</span>
+                <span className="text-[10px] font-mono text-ink-mute">SELECT MULTIPLE FILES TO QUEUE THEM — PROCESSED ONE AT A TIME AUTOMATICALLY</span>
               </button>
             </div>
           )}
@@ -453,7 +490,41 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
             </div>
           )}
 
-          {/* Upload Progress */}
+          {/* Multi-file Upload Queue (file / folder modes) */}
+          {uploadQueue.length > 0 && (
+            <div className="border border-hairline-bright rounded-lg overflow-hidden animate-fade-in">
+              <div className="px-3 py-2 bg-canvas-soft border-b border-hairline flex items-center justify-between">
+                <span className="text-[10px] font-mono text-ink-mute uppercase tracking-wider">
+                  Upload queue ({uploadQueue.filter((q) => q.status === 'done').length}/{uploadQueue.length} done)
+                </span>
+              </div>
+              <div className="max-h-48 overflow-y-auto divide-y divide-hairline/40">
+                {uploadQueue.map((item, idx) => (
+                  <div key={idx} className="px-3 py-2 flex items-center gap-2 bg-canvas">
+                    <div className="shrink-0">
+                      {item.status === 'done' ? (
+                        <Check className="w-3.5 h-3.5 text-emerald-500" />
+                      ) : item.status === 'failed' ? (
+                        <AlertCircle className="w-3.5 h-3.5 text-red-400" />
+                      ) : item.status === 'skipped' ? (
+                        <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+                      ) : item.status === 'pending' ? (
+                        <div className="w-3.5 h-3.5 rounded-full border border-hairline-bright" />
+                      ) : (
+                        <Loader2 className="w-3.5 h-3.5 text-accent-sunset animate-spin" />
+                      )}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs text-ink truncate">{item.file.name}</p>
+                      <p className="text-[10px] font-mono text-ink-mute truncate">{item.message}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Upload Progress (single-item flows: YouTube URL, import backup) */}
           {uploadProgress && (
             <div className="p-3 bg-canvas border border-hairline-bright rounded-lg text-xs text-ink flex items-center gap-2 animate-fade-in font-mono">
               <Loader2 className="w-4 h-4 text-accent-sunset animate-spin shrink-0" />

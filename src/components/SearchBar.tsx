@@ -93,8 +93,8 @@ export const SearchBar: React.FC<SearchBarProps> = ({
         {/* Input Bar Form */}
         <form onSubmit={handleSubmit} className="relative group">
           <div className="relative flex items-center">
-            <div className="absolute left-4.5 text-ink-mute group-focus-within:text-accent-sunset transition-colors pointer-events-none">
-              <Search className="w-5 h-5" />
+            <div className="absolute left-4 text-ink-mute group-focus-within:text-accent-sunset transition-colors pointer-events-none z-10">
+              <Search className="w-4.5 h-4.5 sm:w-5 sm:h-5" />
             </div>
 
             <input
@@ -104,7 +104,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Type a topic, spoken phrase, or natural question... (press / to focus)"
               disabled={disabled}
-              className="w-full pl-12 pr-32 py-4 bg-canvas border border-hairline rounded-lg text-ink placeholder:text-ink-mute/70 focus:outline-none focus:border-hairline-bright focus:ring-1 focus:ring-accent-sunset/30 transition-all text-sm sm:text-base disabled:opacity-40 font-sans"
+              className="w-full pl-11 sm:pl-12 pr-28 sm:pr-32 py-3.5 sm:py-4 bg-canvas border border-hairline rounded-lg text-ink placeholder:text-ink-mute/70 focus:outline-none focus:border-hairline-bright focus:ring-1 focus:ring-accent-sunset/30 transition-all text-sm sm:text-base disabled:opacity-40 font-sans"
             />
 
             {/* Clear Button */}
@@ -112,7 +112,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
               <button
                 type="button"
                 onClick={() => { setQuery(''); onSearch('', searchMode); }}
-                className="absolute right-28 p-1.5 text-ink-mute hover:text-ink hover:bg-canvas-soft rounded-full transition-colors"
+                className="absolute right-24 sm:right-28 p-1.5 text-ink-mute hover:text-ink hover:bg-canvas-soft rounded-full transition-colors z-10"
                 title="Clear search"
               >
                 <X className="w-4 h-4" />
@@ -123,7 +123,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
             <button
               type="submit"
               disabled={isSearching || !query.trim() || disabled}
-              className="absolute right-2.5 px-4.5 py-2.5 rounded-lg border border-accent-sunset/40 bg-accent-sunset/15 hover:bg-accent-sunset hover:text-black hover:border-accent-sunset text-xs font-semibold text-accent-sunset disabled:opacity-40 disabled:cursor-not-allowed transition-all flex items-center gap-1.5"
+              className="absolute right-2 sm:right-2.5 px-3.5 sm:px-4 py-2 sm:py-2.5 rounded-md border border-accent-sunset/40 bg-accent-sunset/15 hover:bg-accent-sunset hover:text-black hover:border-accent-sunset text-xs font-semibold text-accent-sunset disabled:opacity-40 disabled:cursor-not-allowed transition-all flex items-center gap-1.5 z-10 shrink-0"
             >
               {isSearching ? (
                 <span className="w-3.5 h-3.5 border-2 border-accent-sunset border-t-transparent rounded-full animate-spin"></span>
