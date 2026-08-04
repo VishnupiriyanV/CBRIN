@@ -32,6 +32,7 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
   // Fix: every hook below runs unconditionally on every render; only the JSX return is
   // conditional on `result`.
   const startSec = result?.start_sec || 0;
+  const endSec = result?.end_sec || 0;
 
   // Auto-seek local video when loaded
   useEffect(() => {
@@ -43,6 +44,25 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
       }
     }
   }, [result, startSec, hasMediaError]);
+
+  // Auto-stop local video at the segment's end_sec, so "jump to moment" plays exactly the
+  // matched window instead of running on into the rest of the video. Fires only once per
+  // result (a `stopped` flag, not a bare currentTime>=endSec check on every tick) so a viewer
+  // who manually scrubs past the end afterward and hits play isn't fought by a repeated pause.
+  useEffect(() => {
+    const el = mediaRef.current;
+    if (!el || !(endSec > startSec) || hasMediaError) return;
+
+    let stopped = false;
+    const handleTimeUpdate = () => {
+      if (!stopped && el.currentTime >= endSec) {
+        stopped = true;
+        el.pause();
+      }
+    };
+    el.addEventListener('timeupdate', handleTimeUpdate);
+    return () => el.removeEventListener('timeupdate', handleTimeUpdate);
+  }, [result, startSec, endSec, hasMediaError]);
 
   // Close on Escape key
   useEffect(() => {

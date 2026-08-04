@@ -1,7 +1,10 @@
 """
 ReAct Agent Execution Engine for CreatorBrain Studio Copilot.
-Handles multi-turn conversational reasoning and tool execution loop.
-Includes robust fallback parsing for Llama-3 / Groq provider tool_use_failed errors.
+Handles multi-turn conversational reasoning and tool execution loop. Default provider is
+Gemini (see llm_client.py / .env.example) but stays OpenAI-wire-compatible, so Groq/Cerebras/
+OpenRouter/Ollama all work via VAULT_LLM_BASE_URL/VAULT_LLM_MODEL with no code change.
+Includes robust fallback parsing for Llama-3 / Groq's specific tool_use_failed error shape —
+a no-op on providers that don't emit it (Gemini's OpenAI-compat layer hasn't been observed to).
 """
 
 import json
@@ -127,7 +130,7 @@ def run_agent_turn(
             elif _is_rate_limit_error(err_msg):
                 try:
                     response = client.chat.completions.create(
-                        model="llama-3.1-8b-instant",
+                        model=llm_client.MODEL,
                         messages=formatted_messages,
                         tools=agent_tools.TOOL_SCHEMAS,
                         tool_choice="auto",
