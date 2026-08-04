@@ -27,7 +27,7 @@ import time
 from typing import Any, Dict, Optional
 
 def get_base_url() -> str:
-    return os.getenv("VAULT_LLM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/")
+    return os.getenv("VAULT_LLM_BASE_URL", "https://api.sambanova.ai/v1")
 
 
 def get_api_key() -> Optional[str]:
@@ -35,7 +35,7 @@ def get_api_key() -> Optional[str]:
 
 
 def get_model() -> str:
-    return os.getenv("VAULT_LLM_MODEL", "gemini-2.0-flash")
+    return os.getenv("VAULT_LLM_MODEL", "Meta-Llama-3.3-70B-Instruct")
 
 
 def __getattr__(name: str) -> Any:

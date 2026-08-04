@@ -12,9 +12,10 @@ interface EmptyStateProps {
   message?: string;
   onJumpToMoment?: (result: ChunkResult) => void;
   onToggleHighlight?: (result: ChunkResult) => void;
+  searchMode?: string;
 }
 
-export const EmptyState: React.FC<EmptyStateProps> = ({ query, nearMisses = [], message, onJumpToMoment, onToggleHighlight }) => {
+export const EmptyState: React.FC<EmptyStateProps> = ({ query, nearMisses = [], message, onJumpToMoment, onToggleHighlight, searchMode }) => {
   return (
     <div className="space-y-6 my-8">
       <div className="bg-canvas-soft border border-hairline rounded-lg p-10 text-center max-w-2xl mx-auto space-y-4">
@@ -52,6 +53,7 @@ export const EmptyState: React.FC<EmptyStateProps> = ({ query, nearMisses = [], 
                 searchQuery={query}
                 onJumpToMoment={onJumpToMoment}
                 onToggleHighlight={onToggleHighlight}
+                searchMode={searchMode}
               />
             ))}
           </div>

@@ -63,3 +63,62 @@ class TestYoutubeDownloadFailureIsActionable:
 
         assert "yt-somevideo" in str(exc_info.value)
         assert "dQw4w9WgXcQ" in str(exc_info.value)
+
+    def test_no_file_actually_produced_raises_actionable_error(self):
+        """yt-dlp's download() can return without raising even when nothing was written
+        (e.g. every format candidate got filtered out) — must not be mistaken for success."""
+        fake_yt_dlp = MagicMock()
+        fake_ydl_instance = MagicMock()
+        fake_ydl_instance.download.return_value = None  # "succeeds" but writes nothing
+        fake_yt_dlp.YoutubeDL.return_value.__enter__.return_value = fake_ydl_instance
+
+        with patch.dict("sys.modules", {"yt_dlp": fake_yt_dlp}):
+            with patch("media_service.ffmpeg_exe", return_value="C:/fake/ffmpeg.exe"):
+                with pytest_raises_media_unavailable() as exc_info:
+                    ms.ensure_media("yt-nofile", youtube_id="dQw4w9WgXcQ")
+
+        assert "yt-nofile" in str(exc_info.value)
+
+    def test_merge_postprocessor_renamed_file_is_still_picked_up(self):
+        """Regression for the real failure hit in production: yt-dlp's merge_output_format
+        postprocessor renames the downloaded file by swapping its last extension segment, so
+        a fixed "{video_id}.mp4.part" outtmpl could come out on disk as "{video_id}.mp4.mp4"
+        instead — "yt-dlp reported success but produced no output file" even though a real
+        file existed, just not at the literal path the old code assumed. Downloading into a
+        throwaway temp dir and picking up whatever landed there (regardless of exact name)
+        must still resolve to the expected final_path."""
+        def fake_download(urls):
+            # Simulate yt-dlp writing to *some* filename inside the outtmpl's directory,
+            # deliberately not matching any literal path the caller might have assumed.
+            outtmpl = fake_ydl_instance._last_opts["outtmpl"]
+            tmp_dir = os.path.dirname(outtmpl)
+            produced_name = "dQw4w9WgXcQ.mp4"  # yt-dlp's own %(id)s.%(ext)s naming
+            with open(os.path.join(tmp_dir, produced_name), "wb") as f:
+                f.write(b"fake-merged-mp4-bytes")
+
+        fake_yt_dlp = MagicMock()
+        fake_ydl_instance = MagicMock()
+        fake_ydl_instance.download.side_effect = fake_download
+
+        def capture_opts(opts):
+            fake_ydl_instance._last_opts = opts
+            return fake_ydl_instance
+
+        fake_yt_dlp.YoutubeDL.side_effect = capture_opts
+        fake_ydl_instance.__enter__ = MagicMock(return_value=fake_ydl_instance)
+        fake_ydl_instance.__exit__ = MagicMock(return_value=False)
+
+        with patch.dict("sys.modules", {"yt_dlp": fake_yt_dlp}):
+            with patch("media_service.ffmpeg_exe", return_value="C:/fake/ffmpeg.exe"):
+                result = ms.ensure_media("yt-dQw4w9WgXcQ", youtube_id="dQw4w9WgXcQ")
+
+        assert result == os.path.join(paths.MEDIA_DIR, "yt-dQw4w9WgXcQ.mp4")
+        assert os.path.exists(result)
+        with open(result, "rb") as f:
+            assert f.read() == b"fake-merged-mp4-bytes"
+        # The temp download directory must not be left behind.
+        leftover_tmp_dirs = [
+            name for name in os.listdir(paths.MEDIA_DIR)
+            if name.startswith("ytdl-yt-dQw4w9WgXcQ-")
+        ]
+        assert leftover_tmp_dirs == []

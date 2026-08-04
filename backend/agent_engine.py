@@ -58,7 +58,13 @@ def _try_parse_failed_generation(error_str: str) -> Optional[tuple[str, Dict[str
 
 def _is_rate_limit_error(err_msg: str) -> bool:
     lowered = err_msg.lower()
-    return "rate_limit" in lowered or "429" in err_msg or "rate limit" in lowered
+    return (
+        "rate_limit" in lowered
+        or "429" in err_msg
+        or "rate limit" in lowered
+        or "resource_exhausted" in lowered
+        or "quota" in lowered
+    )
 
 
 def _build_formatted_messages(
@@ -128,16 +134,24 @@ def run_agent_turn(
             if parsed_fallback:
                 fallback_tool_call = parsed_fallback
             elif _is_rate_limit_error(err_msg):
-                try:
-                    response = client.chat.completions.create(
-                        model=llm_client.MODEL,
-                        messages=formatted_messages,
-                        tools=agent_tools.TOOL_SCHEMAS,
-                        tool_choice="auto",
-                        temperature=0.3
-                    )
-                except Exception as fallback_exc:
-                    raise llm_client.LLMUnavailable(f"LLM provider rate limit reached: {fallback_exc}")
+                retry_success = False
+                for attempt in range(2):
+                    import time
+                    time.sleep(2.0 * (attempt + 1))
+                    try:
+                        response = client.chat.completions.create(
+                            model=llm_client.MODEL,
+                            messages=formatted_messages,
+                            tools=agent_tools.TOOL_SCHEMAS,
+                            tool_choice="auto",
+                            temperature=0.3
+                        )
+                        retry_success = True
+                        break
+                    except Exception:
+                        pass
+                if not retry_success:
+                    raise llm_client.LLMUnavailable("LLM provider rate limit reached. Please wait a few seconds before trying again.")
             else:
                 raise RuntimeError(f"LLM API request failed during agent loop: {exc}")
 

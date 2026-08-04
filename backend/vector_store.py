@@ -1042,31 +1042,59 @@ class VectorStore:
 
         idf_lookup = MultimodalEngine.compute_corpus_idf([c.get('text', '') for c in self.chunks if not c.get('is_visual_only')])
 
+        GENERIC_STOP_CONCEPTS = {
+            "available", "right", "going", "said", "think", "know", "really", "good",
+            "make", "well", "like", "time", "people", "want", "get", "thing", "video",
+            "first", "something", "anything", "everything", "welcome", "today", "greatest",
+            "world", "parents", "brother", "sister", "friend", "guy", "guys", "day", "way",
+            "see", "look", "come", "go", "back", "take", "give", "also", "even", "much",
+            "many", "some", "other", "new", "old", "one", "two", "three", "number", "part",
+            "lot", "lots", "kind", "kinds", "sort", "sorts", "type", "types", "need", "work",
+            "call", "tell", "say", "talk", "talking", "used", "using", "use", "sure", "okay",
+            "yeah", "right", "here", "there", "never", "always", "every", "feel", "feels"
+        }
+
+        def _is_meaningful(concept: str) -> bool:
+            c_lower = concept.strip().lower()
+            if not c_lower or len(c_lower) < 3:
+                return False
+            if " " not in c_lower and c_lower in GENERIC_STOP_CONCEPTS:
+                return False
+            return True
+
         concept_freq: Dict[str, int] = {}
         concept_display: Dict[str, str] = {}
         for chunk in self.chunks:
             if chunk.get('is_visual_only') or chunk.get('text', '').startswith('[Visual Scene'):
                 continue
+
+            sec_topic = chunk.get('section_topic', '')
+            if sec_topic and len(sec_topic) > 3:
+                for part in sec_topic.split('&'):
+                    p = part.strip()
+                    if _is_meaningful(p):
+                        k = p.lower()
+                        concept_freq[k] = concept_freq.get(k, 0) + 2
+                        concept_display.setdefault(k, p)
+
             for concept in chunk.get('implicit_concepts', []):
-                key = concept.lower().strip()
-                if not key:
-                    continue
-                concept_freq[key] = concept_freq.get(key, 0) + 1
-                concept_display.setdefault(key, concept)
+                if _is_meaningful(concept):
+                    key = concept.lower().strip()
+                    concept_freq[key] = concept_freq.get(key, 0) + 1
+                    concept_display.setdefault(key, concept)
 
         def _score(key: str) -> float:
             words = key.split()
             weights = [idf_lookup.get(w, 1.0) for w in words if w]
             idf_weight = sum(weights) / len(weights) if weights else 1.0
-            # log(1+freq) rewards concepts that recur (a real, recurring topic) without
-            # letting raw frequency alone dominate distinctiveness.
             return idf_weight * math.log1p(concept_freq[key])
 
         ranked = sorted(concept_freq.keys(), key=_score, reverse=True)
 
         suggestions = []
         for key in ranked:
-            phrase = f"Where did I talk about {concept_display[key]}?"
+            disp = concept_display[key].strip()
+            phrase = f"Where did I talk about {disp}?"
             if phrase not in suggestions:
                 suggestions.append(phrase)
             if len(suggestions) >= 4:
