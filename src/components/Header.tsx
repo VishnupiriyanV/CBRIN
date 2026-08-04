@@ -55,7 +55,7 @@ export const Header: React.FC<HeaderProps> = ({
       <div className="relative max-w-7xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between gap-4">
         
         {/* Left: Brand Header & Telemetry */}
-        <div className="flex items-center gap-3 shrink-0 max-w-[calc(50%-90px)] sm:max-w-[calc(50%-110px)]">
+        <div className="flex items-center gap-3 shrink-0 max-w-[calc(50%-145px)]">
           <div className="flex items-center gap-2 shrink-0">
             <CbrinLogo />
             <h1 className="text-base font-semibold tracking-wider text-ink font-mono">CBRIN</h1>
