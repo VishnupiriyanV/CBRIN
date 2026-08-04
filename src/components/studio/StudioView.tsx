@@ -30,9 +30,6 @@ const TOOL_COMPONENTS: Record<string, React.ComponentType<{ videos: VideoItem[] 
 
 // STUDIO (Layer 4): six text-in/text-out creator tools sharing the Voice Profile, Platform
 // Rules, run history, and usage meter built in the shared foundation
-// (creator-tools-integration-spec.md). Unlike Vault/ENGINE, there is no heuristic fallback
-// for text generation — a rule-based "repurpose my newsletter" would be worse than nothing —
-// so the whole surface hard-gates on llm_configured rather than degrading.
 export const StudioView: React.FC<StudioViewProps> = ({ videos, backendOnline }) => {
   const [tools, setTools] = useState<StudioToolInfo[]>([]);
   const [llmConfigured, setLlmConfigured] = useState<boolean | null>(null);
@@ -52,6 +49,20 @@ export const StudioView: React.FC<StudioViewProps> = ({ videos, backendOnline })
   const ActiveTool = TOOL_COMPONENTS[section];
   const activeToolInfo = tools.find((t) => t.id === section);
 
+  const getSectionTitle = () => {
+    if (section === 'voice_profile') return 'Voice Profile';
+    if (section === 'platform_rules') return 'Platform Rules';
+    if (section === 'history') return 'Run History';
+    return activeToolInfo?.label || 'Studio Tool';
+  };
+
+  const getSectionDescription = () => {
+    if (section === 'voice_profile') return 'Creator brand tone, bio, and banned words configuration';
+    if (section === 'platform_rules') return 'Social network formatting and platform constraints';
+    if (section === 'history') return 'Past tool execution outputs and token usage history';
+    return activeToolInfo?.description || '';
+  };
+
   if (llmConfigured === false) {
     return (
       <div className="max-w-lg mx-auto text-center py-16 space-y-4">
@@ -60,9 +71,8 @@ export const StudioView: React.FC<StudioViewProps> = ({ videos, backendOnline })
         </div>
         <h3 className="text-base font-medium text-ink">No LLM API key configured</h3>
         <p className="text-xs text-ink-body leading-relaxed">
-          STUDIO's six tools have no heuristic fallback — generating text without a real
-          model would be worse than nothing. Set <code className="bg-canvas-soft px-1.5 py-0.5 rounded text-ink">VAULT_LLM_API_KEY</code> (and
-          optionally <code className="bg-canvas-soft px-1.5 py-0.5 rounded text-ink">VAULT_LLM_MODEL</code>) in the backend's environment and restart.
+          STUDIO tools require an LLM API key. Set <code className="bg-canvas-soft px-1.5 py-0.5 rounded text-ink">VAULT_LLM_API_KEY</code> (and
+          optionally <code className="bg-canvas-soft px-1.5 py-0.5 rounded text-ink">VAULT_LLM_MODEL</code>) in the backend environment and restart.
         </p>
       </div>
     );
@@ -74,8 +84,8 @@ export const StudioView: React.FC<StudioViewProps> = ({ videos, backendOnline })
       <div className="flex-1 min-w-0 space-y-4">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-lg font-medium text-ink">{activeToolInfo?.label || (section === 'voice_profile' ? 'Voice Profile' : section === 'platform_rules' ? 'Platform Rules' : 'Run History')}</h2>
-            {activeToolInfo?.description && <p className="text-xs text-ink-mute mt-0.5">{activeToolInfo.description}</p>}
+            <h2 className="text-lg font-medium text-ink">{getSectionTitle()}</h2>
+            <p className="text-xs text-ink-mute mt-0.5">{getSectionDescription()}</p>
           </div>
           <UsageBadge refreshKey={section === 'history' ? 1 : 0} />
         </div>

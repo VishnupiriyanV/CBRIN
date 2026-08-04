@@ -34,6 +34,23 @@ except ImportError:
           "unavailable — install it with `pip install -r backend/requirements.txt`, or set "
           "OPENAI_API_KEY to use the hosted Whisper API instead.")
 
+# faster-whisper (CTranslate2) is preferred over openai-whisper when available: same model
+# weights, ~4x faster on GPU, native word-level timestamps. Purely additive — if it's not
+# installed (or CT2/cuDNN isn't set up right), everything below falls back to openai-whisper
+# unchanged, so this never blocks a build that skipped the extra native dependency.
+_FasterWhisperModel = None
+HAS_FASTER_WHISPER = False
+
+try:
+    from faster_whisper import WhisperModel as _FasterWhisperModel
+    HAS_FASTER_WHISPER = True
+    print("[Vault] faster-whisper available — will be preferred for local transcription.")
+except ImportError:
+    HAS_FASTER_WHISPER = False
+    print("[Vault] 'faster-whisper' is not installed — falling back to openai-whisper for "
+          "local transcription. For ~4x faster GPU transcription, "
+          "`pip install faster-whisper` (requires CUDA + cuDNN for GPU mode).")
+
 # 'base' mangles proper nouns and technical vocabulary — exactly the high-value search terms
 # (PRD §7.2, IMPROVEMENT-PLAN.md 3.4) — so the default tier is 'small'. Still overridable via
 # env, and selectable per-upload (see WHISPER_MODEL_TIERS / transcribe_file_with_whisper's
@@ -77,13 +94,123 @@ def _get_local_whisper_model(model_tier: str, force_cpu: bool = False):
     return _LOCAL_WHISPER_MODELS[cache_key]
 
 
+_FASTER_WHISPER_MODELS: Dict[str, Any] = {}
+
+
+def _get_faster_whisper_model(model_tier: str, force_cpu: bool = False):
+    """Load (or return the cached) faster-whisper model for the given tier. CUDA float16
+    first, falling back to CPU int8 on load failure — same tier-cache-key shape as
+    _get_local_whisper_model so both engines can be swapped without touching call sites."""
+    cache_key = f"{model_tier}_cpu" if force_cpu else model_tier
+    if cache_key not in _FASTER_WHISPER_MODELS:
+        use_cuda = not force_cpu and HAS_TORCH and torch is not None and torch.cuda.is_available()
+        device = "cuda" if use_cuda else "cpu"
+        compute_type = "float16" if use_cuda else "int8"
+
+        print(f"[Vault] Loading faster-whisper '{model_tier}' model on {device.upper()} ({compute_type})...")
+        try:
+            _FASTER_WHISPER_MODELS[cache_key] = _FasterWhisperModel(model_tier, device=device, compute_type=compute_type)
+            print(f"[Vault] faster-whisper '{model_tier}' model loaded on {device.upper()} and ready.")
+        except Exception as e:
+            if device != "cpu":
+                print(f"[Vault] Could not load faster-whisper on CUDA ({e}). Falling back to CPU int8...")
+                _FASTER_WHISPER_MODELS[cache_key] = _FasterWhisperModel(model_tier, device="cpu", compute_type="int8")
+                print(f"[Vault] faster-whisper '{model_tier}' model loaded on CPU fallback.")
+            else:
+                raise
+    return _FASTER_WHISPER_MODELS[cache_key]
+
+
+def _transcribe_local(file_path: str, model_tier: str, word_timestamps: bool = False) -> Dict[str, Any]:
+    """
+    Unified local transcription used by both transcribe_file_with_whisper's local-fallback
+    path and word_timing.ensure_words. Prefers faster-whisper (CTranslate2 — ~4x faster,
+    native GPU fp16, built-in word timestamps); falls back to openai-whisper if
+    faster-whisper isn't installed or fails to load/run for any reason. Returns a shape
+    that's identical regardless of which engine actually ran:
+        {"engine": "faster-whisper"|"openai-whisper",
+         "segments": [{"text", "start", "end", "words"?: [{"word","start","end"}]}]}
+    """
+    if HAS_FASTER_WHISPER:
+        try:
+            model = _get_faster_whisper_model(model_tier)
+            segments_iter, _info = model.transcribe(file_path, word_timestamps=word_timestamps)
+            segments = []
+            for seg in segments_iter:
+                entry: Dict[str, Any] = {
+                    "text": (seg.text or "").strip(),
+                    "start": float(seg.start),
+                    "end": float(seg.end),
+                }
+                if word_timestamps and seg.words:
+                    entry["words"] = [
+                        {"word": (w.word or "").strip(), "start": float(w.start), "end": float(w.end)}
+                        for w in seg.words if (w.word or "").strip()
+                    ]
+                segments.append(entry)
+            return {"engine": "faster-whisper", "segments": segments}
+        except Exception as e:
+            print(f"[Vault] faster-whisper transcription failed ({e}). Falling back to openai-whisper...")
+
+    if not HAS_LOCAL_WHISPER or local_whisper is None:
+        raise RuntimeError(
+            "No local transcription engine available — install faster-whisper or "
+            "openai-whisper (see backend/requirements.txt)."
+        )
+
+    model = _get_local_whisper_model(model_tier)
+    is_cuda = hasattr(model, "device") and model.device.type == "cuda"
+    try:
+        result = model.transcribe(file_path, word_timestamps=word_timestamps, fp16=is_cuda)
+    except Exception as cuda_err:
+        if is_cuda:
+            print(f"[Vault] CUDA error during Whisper transcription: {cuda_err}. Retrying on CPU fallback...")
+            cpu_model = _get_local_whisper_model(model_tier, force_cpu=True)
+            result = cpu_model.transcribe(file_path, word_timestamps=word_timestamps, fp16=False)
+        else:
+            raise
+
+    segments = []
+    for seg in result.get('segments', []):
+        entry = {
+            "text": (seg.get('text') or '').strip(),
+            "start": float(seg.get('start', 0.0)),
+            "end": float(seg.get('end', 0.0)),
+        }
+        if word_timestamps:
+            entry["words"] = [
+                {
+                    "word": (w.get('word') or '').strip(),
+                    "start": float(w.get('start', 0.0)),
+                    "end": float(w.get('end', 0.0)),
+                }
+                for w in (seg.get('words') or []) if (w.get('word') or '').strip()
+            ]
+        segments.append(entry)
+    return {"engine": "openai-whisper", "segments": segments}
+
+
 def preload_whisper_model():
-    """Preload the default-tier local Whisper model into memory on startup, if the package
-    is installed. Other tiers load lazily on first use (see _get_local_whisper_model)."""
+    """Preload the default-tier local transcription model into memory on startup. Prefers
+    faster-whisper when installed, falls back to openai-whisper. Other tiers load lazily on
+    first use. Logs the selected engine + device so it's visible at boot whether GPU
+    transcription is actually engaged."""
+    tier = _resolve_model_tier(None)
+    device_note = "CUDA" if (HAS_TORCH and torch is not None and torch.cuda.is_available()) else "CPU"
+
+    if HAS_FASTER_WHISPER:
+        try:
+            _get_faster_whisper_model(tier)
+            print(f"[Vault] Transcription engine: faster-whisper, preferred device: {device_note}.")
+            return
+        except Exception as e:
+            print(f"[Vault] Could not preload faster-whisper model: {e}. Falling back to openai-whisper preload...")
+
     global HAS_LOCAL_WHISPER
     if HAS_LOCAL_WHISPER and local_whisper is not None:
         try:
-            _get_local_whisper_model(_resolve_model_tier(None))
+            _get_local_whisper_model(tier)
+            print(f"[Vault] Transcription engine: openai-whisper, preferred device: {device_note}.")
         except Exception as e:
             print(f"[Vault] Could not preload local Whisper model: {e}")
 
@@ -264,29 +391,18 @@ def transcribe_file_with_whisper(file_path: str, file_name: str, model_tier: Opt
         except Exception as e:
             print(f"[Vault] Whisper API error for {file_name}: {e}. Falling back to local Whisper...")
 
-    # 2. Local Whisper model fallback
-    if HAS_LOCAL_WHISPER:
+    # 2. Local transcription fallback (faster-whisper preferred, openai-whisper fallback)
+    if HAS_FASTER_WHISPER or HAS_LOCAL_WHISPER:
         try:
-            model = _get_local_whisper_model(resolved_tier)
-            is_cuda = hasattr(model, "device") and model.device.type == "cuda"
-            try:
-                result = model.transcribe(file_path, fp16=is_cuda)
-            except Exception as cuda_err:
-                if is_cuda:
-                    print(f"[Vault] CUDA error during Whisper transcription: {cuda_err}. Retrying on CPU fallback...")
-                    cpu_model = _get_local_whisper_model(resolved_tier, force_cpu=True)
-                    result = cpu_model.transcribe(file_path, fp16=False)
-                else:
-                    raise
+            local_result = _transcribe_local(file_path, resolved_tier)
 
             segments = []
-            for seg in result.get('segments', []):
-                text = seg.get('text', '').strip()
-                if text:
+            for seg in local_result["segments"]:
+                if seg["text"]:
                     segments.append({
-                        "text": text,
-                        "start": float(seg.get('start', 0.0)),
-                        "duration": float(seg.get('end', 0.0) - seg.get('start', 0.0))
+                        "text": seg["text"],
+                        "start": seg["start"],
+                        "duration": seg["end"] - seg["start"]
                     })
 
             if not segments:
@@ -351,7 +467,7 @@ def transcribe_file_with_whisper(file_path: str, file_name: str, model_tier: Opt
             raise ValueError(f"Local Whisper transcription failed for {file_name}: {str(e)}")
 
     raise ValueError(
-        f"Transcription failed for '{file_name}'. Local 'openai-whisper' is not installed and "
-        "no OPENAI_API_KEY is set — install requirements (`pip install -r backend/requirements.txt`) "
-        "or set OPENAI_API_KEY."
+        f"Transcription failed for '{file_name}'. No local transcription engine (faster-whisper "
+        "or openai-whisper) is installed and no OPENAI_API_KEY is set — install requirements "
+        "(`pip install -r backend/requirements.txt`) or set OPENAI_API_KEY."
     )

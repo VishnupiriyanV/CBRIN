@@ -1,10 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Plus, Search, Sparkles, FileVideo, CheckCircle2, AlertTriangle, Bookmark, FileDown, Eye, ChevronDown, Activity, Wand2 } from 'lucide-react';
+import { Plus, Search, Sparkles, FileVideo, CheckCircle2, AlertTriangle, Bookmark, FileDown, Eye, ChevronDown, Activity, Wand2, Bot } from 'lucide-react';
 import { CbrinLogo } from './CbrinLogo';
 import { LibraryStats } from '../types';
 import { exportLibraryJSON, exportLibraryZIP, exportHighlightsJSON } from '../services/api';
 
-export type AppView = 'search' | 'engine' | 'studio';
+export type AppView = 'agent' | 'search' | 'engine' | 'studio';
 
 interface HeaderProps {
   totalVideos: number;
@@ -28,7 +28,7 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenHighlights,
   onOpenProgress,
   highlightCount,
-  activeView = 'search',
+  activeView = 'agent',
   onChangeView,
 }) => {
   const isFullyIndexed = stats?.is_fully_indexed ?? (totalVideos > 0);
@@ -120,6 +120,17 @@ export const Header: React.FC<HeaderProps> = ({
         {onChangeView && (
           <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-auto z-10">
             <div className="flex items-center gap-0.5 p-0.5 rounded-full border border-hairline bg-canvas-soft">
+              <button
+                onClick={() => onChangeView('agent')}
+                className={`px-3.5 py-1 rounded-full text-[11px] font-mono transition-all flex items-center gap-1 ${
+                  activeView === 'agent'
+                    ? 'bg-accent-sunset text-black font-medium'
+                    : 'text-ink-mute hover:text-ink'
+                }`}
+              >
+                <Bot className="w-3 h-3" />
+                <span>Agent</span>
+              </button>
               <button
                 onClick={() => onChangeView('search')}
                 className={`px-3.5 py-1 rounded-full text-[11px] font-mono transition-all ${

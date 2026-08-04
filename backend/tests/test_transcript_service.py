@@ -90,3 +90,92 @@ class TestNonSpeechVideoTranscription:
         finally:
             os.remove(temp_path)
 
+
+class TestTranscribeLocalEngineSelection:
+    """_transcribe_local prefers faster-whisper when available and falls back to
+    openai-whisper transparently — same unified {"engine","segments"} shape either way."""
+
+    def test_prefers_faster_whisper_when_available(self, monkeypatch):
+        import transcript_service
+
+        class FakeWord:
+            def __init__(self, word, start, end):
+                self.word, self.start, self.end = word, start, end
+
+        class FakeSegment:
+            def __init__(self, text, start, end, words=None):
+                self.text, self.start, self.end, self.words = text, start, end, words
+
+        class FakeFasterWhisperModel:
+            def transcribe(self, file_path, word_timestamps=False):
+                segments = [FakeSegment("hello world", 0.0, 1.5, words=[FakeWord("hello", 0.0, 0.5), FakeWord("world", 0.6, 1.5)] if word_timestamps else None)]
+                return iter(segments), object()
+
+        monkeypatch.setattr(transcript_service, "HAS_FASTER_WHISPER", True)
+        monkeypatch.setattr(transcript_service, "_FASTER_WHISPER_MODELS", {})
+        monkeypatch.setattr(transcript_service, "_get_faster_whisper_model", lambda tier, force_cpu=False: FakeFasterWhisperModel())
+
+        result = transcript_service._transcribe_local("fake.mp4", "small")
+        assert result["engine"] == "faster-whisper"
+        assert result["segments"][0]["text"] == "hello world"
+        assert result["segments"][0]["start"] == 0.0
+        assert result["segments"][0]["end"] == 1.5
+
+    def test_faster_whisper_word_timestamps_mapped_to_unified_shape(self, monkeypatch):
+        import transcript_service
+
+        class FakeWord:
+            def __init__(self, word, start, end):
+                self.word, self.start, self.end = word, start, end
+
+        class FakeSegment:
+            def __init__(self, text, start, end, words):
+                self.text, self.start, self.end, self.words = text, start, end, words
+
+        class FakeFasterWhisperModel:
+            def transcribe(self, file_path, word_timestamps=False):
+                segments = [FakeSegment("hi there", 0.0, 1.0, words=[FakeWord("hi", 0.0, 0.3), FakeWord("there", 0.4, 1.0)])]
+                return iter(segments), object()
+
+        monkeypatch.setattr(transcript_service, "HAS_FASTER_WHISPER", True)
+        monkeypatch.setattr(transcript_service, "_get_faster_whisper_model", lambda tier, force_cpu=False: FakeFasterWhisperModel())
+
+        result = transcript_service._transcribe_local("fake.mp4", "small", word_timestamps=True)
+        words = result["segments"][0]["words"]
+        assert words == [{"word": "hi", "start": 0.0, "end": 0.3}, {"word": "there", "start": 0.4, "end": 1.0}]
+
+    def test_falls_back_to_openai_whisper_when_faster_whisper_raises(self, monkeypatch):
+        import transcript_service
+
+        def broken_loader(tier, force_cpu=False):
+            raise RuntimeError("CUDA/cuDNN not available")
+
+        class DummyWhisperModel:
+            device = type("Device", (), {"type": "cpu"})()
+
+            def transcribe(self, file_path, **kwargs):
+                return {"segments": [{"text": "fallback text", "start": 0.0, "end": 2.0}]}
+
+        monkeypatch.setattr(transcript_service, "HAS_FASTER_WHISPER", True)
+        monkeypatch.setattr(transcript_service, "_get_faster_whisper_model", broken_loader)
+        monkeypatch.setattr(transcript_service, "HAS_LOCAL_WHISPER", True)
+        monkeypatch.setattr(transcript_service, "local_whisper", type("LW", (), {"load_model": lambda *a, **k: DummyWhisperModel()})())
+        monkeypatch.setattr(transcript_service, "_LOCAL_WHISPER_MODELS", {})
+
+        result = transcript_service._transcribe_local("fake.mp4", "small")
+        assert result["engine"] == "openai-whisper"
+        assert result["segments"][0]["text"] == "fallback text"
+
+    def test_raises_when_no_engine_available(self, monkeypatch):
+        import transcript_service
+
+        monkeypatch.setattr(transcript_service, "HAS_FASTER_WHISPER", False)
+        monkeypatch.setattr(transcript_service, "HAS_LOCAL_WHISPER", False)
+        monkeypatch.setattr(transcript_service, "local_whisper", None)
+
+        try:
+            transcript_service._transcribe_local("fake.mp4", "small")
+            assert False, "expected RuntimeError"
+        except RuntimeError as e:
+            assert "faster-whisper" in str(e) or "openai-whisper" in str(e)
+

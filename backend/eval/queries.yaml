@@ -1,112 +1,75 @@
 # Eval set for Vault's 'spoken' search mode (IMPROVEMENT-PLAN.md 2.1).
 #
-# Grounded in the actual current library (2 videos, 67 chunks post-1.1/1.2 fix):
-#   - local-39470   "Test2" (an English-lesson vlog, ~3 min, local upload)
-#   - yt-6szdySvorzA "The fascinating history of Databases" (~9.5 min, YouTube)
+# Grounded in the actual current library (1 video, 50 chunks, as of the agentic-pivot audit):
+#   - local-f718cb618763   "Test2" (an English-lesson vlog, ~3 min, local upload)
+#
+# The "yt-6szdySvorzA" YouTube video ("The fascinating history of Databases") this file
+# used to be grounded in (and the 8 database-related positive queries below it) is no
+# longer in the library — it was removed from backend/data/ at some point before this
+# audit, independent of this change. Per this file's own rule ("don't pad it with queries
+# that don't map to real content"), those 8 queries are removed rather than left permanently
+# failing and silently dragging down the recall numbers below. Re-add them (with fresh
+# expected_start_sec/end_sec against the new ingest's chunking) if/when that video is
+# re-ingested.
+#
+# This audit also found and removed a leaked pytest-fixture chunk (video_id "vid-b",
+# text "This video covers python testing frameworks like pytest") that had contaminated
+# the real backend/data/chunks.json — see repair_index.py's docstring for the known
+# test-suite data-clobber bug this matches. That contamination (not a threshold/retrieval
+# change) was the actual cause of a 0%-recall run observed right after an index-consistency
+# repair; it wasn't visible in repair_index.py's diagnose output because an orphaned chunk
+# with no videos.json entry looks structurally "fixable," not obviously fake.
 #
 # Positive queries are paraphrased, not copy-pasted from the transcript, so this actually
 # tests semantic/lexical retrieval rather than exact substring matching. Negative queries
-# are genuinely unrelated to either video's subject matter — the "non-negotiable" set per
+# are genuinely unrelated to the video's subject matter — the "non-negotiable" set per
 # the improvement plan, since a negative query returning *anything* is the failure mode
 # that makes a demo confidently return a wrong clip.
 #
 # expected_start_sec/expected_end_sec is the acceptable window — a result counts as correct
 # if its video_id matches AND its own [start_sec, end_sec] overlaps this window at all.
 #
-# NOTE: this is 14 positive + 10 negative, short of the plan's 25-40 target (3.5 calls for
-# a 15-video test library; we only have 2 real videos to ground queries in). Extend this
-# file as the library grows — do not pad it with synthetic queries that don't map to real
-# content, that would defeat the point of an eval harness.
+# NOTE: this is 6 positive + 10 negative, short of the plan's 25-40 target (3.5 calls for
+# a 15-video test library; we only have 1 real video to ground queries in right now). Extend
+# this file as the library grows — do not pad it with synthetic queries that don't map to
+# real content, that would defeat the point of an eval harness.
 
 positive:
   - query: "why did the weather ruin the lesson plan"
-    video_id: local-39470
+    video_id: local-f718cb618763
     expected_start_sec: 20
     expected_end_sec: 43
     notes: "chunks 6-9, ~20-32s: weather not cooperating with the recording plan"
 
   - query: "what does it mean when the stars align"
-    video_id: local-39470
+    video_id: local-f718cb618763
     expected_start_sec: 100
     expected_end_sec: 114
     notes: "chunk 26, ~103-111s: idiom explanation"
 
   - query: "flowers printed on the umbrella"
-    video_id: local-39470
+    video_id: local-f718cb618763
     expected_start_sec: 110
     expected_end_sec: 120
     notes: "chunk 28, ~113-117s"
 
   - query: "the speaker can't help but teach English on camera"
-    video_id: local-39470
+    video_id: local-f718cb618763
     expected_start_sec: 125
     expected_end_sec: 140
     notes: "chunks 33-34, ~128-138s"
 
   - query: "sign off and see you again next week"
-    video_id: local-39470
+    video_id: local-f718cb618763
     expected_start_sec: 164
     expected_end_sec: 178
     notes: "chunks 44-46, ~166-177s: closing"
 
   - query: "making a lesson available every Tuesday"
-    video_id: local-39470
+    video_id: local-f718cb618763
     expected_start_sec: 0
     expected_end_sec: 20
     notes: "chunk 3, ~6-15s"
-
-  - query: "why Oracle's second product was labeled version two"
-    video_id: yt-6szdySvorzA
-    expected_start_sec: 335
-    expected_end_sec: 370
-    notes: "chunk 13, ~338-368s. NOTE: an earlier version of this query ('Larry Ellison and
-      the history of Oracle database') was ambiguous — the video mentions Larry Ellison at
-      both ~0-31s (chunk 1, the cold open) and here (chunk 13) — and got marked NOT FOUND
-      purely because search correctly returned the chunk-13 mention while the benchmark
-      only accepted chunk-1. That's a benchmark-authoring bug, not a search bug; narrowed
-      the query to target one unambiguous location instead."
-
-  - query: "storing data in a spreadsheet instead of a real database"
-    video_id: yt-6szdySvorzA
-    expected_start_sec: 50
-    expected_end_sec: 85
-    notes: "chunk 3, ~52-81s: the Excel comparison"
-
-  - query: "IBM's early information management system"
-    video_id: yt-6szdySvorzA
-    expected_start_sec: 160
-    expected_end_sec: 225
-    notes: "chunks 7-8, ~164-221s: IMS"
-
-  - query: "why MySQL became so popular"
-    video_id: yt-6szdySvorzA
-    expected_start_sec: 390
-    expected_end_sec: 432
-    notes: "chunk 15, ~395-429s"
-
-  - query: "NoSQL databases for large scale data"
-    video_id: yt-6szdySvorzA
-    expected_start_sec: 450
-    expected_end_sec: 492
-    notes: "chunk 17, ~454-489s"
-
-  - query: "graph databases modeling social network relationships"
-    video_id: yt-6szdySvorzA
-    expected_start_sec: 510
-    expected_end_sec: 550
-    notes: "chunk 19, ~514-546s"
-
-  - query: "a database combining relational and NoSQL"
-    video_id: yt-6szdySvorzA
-    expected_start_sec: 540
-    expected_end_sec: 578
-    notes: "chunk 20, ~544-575s"
-
-  - query: "comparing old database access to cassette tapes"
-    video_id: yt-6szdySvorzA
-    expected_start_sec: 75
-    expected_end_sec: 113
-    notes: "chunk 4, ~79-110s: the cassette analogy"
 
 negative:
   - query: "best recipe for sourdough bread"
