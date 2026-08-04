@@ -342,3 +342,76 @@ export interface Highlight {
   note: string;
   highlighted_at: string;
 }
+
+// --- STUDIO COPILOT (Layer 4 Agent) ---
+
+export interface AgentToolStep {
+  tool: string;
+  args: Record<string, any>;
+  summary: string;
+  data?: Record<string, any>;
+}
+
+export interface AgentChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  steps?: AgentToolStep[];
+  timestamp: string;
+}
+
+export interface AgentUsage {
+  prompt_tokens: number;
+  completion_tokens: number;
+  model: string;
+}
+
+export interface AgentChatResponse {
+  reply: string;
+  steps: AgentToolStep[];
+  usage?: AgentUsage;
+}
+
+// Typed SSE events from POST /api/studio/agent/chat/stream — see agent_engine.run_agent_turn_stream.
+export type AgentStreamEvent =
+  | { type: 'token'; content: string }
+  | { type: 'tool_start'; tool: string; args: Record<string, any> }
+  | { type: 'tool_result'; tool: string; args: Record<string, any>; summary: string; data?: Record<string, any> }
+  | { type: 'step'; summary: string }
+  | { type: 'usage'; usage: AgentUsage }
+  | { type: 'done'; reply: string }
+  | { type: 'error'; message: string };
+
+// --- Autonomous Content Pack artifact (agent_tools.generate_content_pack) ---
+
+export interface ContentPackClip {
+  rank: number;
+  title: string;
+  hook: string;
+  start_time?: string;
+  end_time?: string;
+  duration?: number;
+  score?: number;
+  transcript?: string;
+}
+
+export interface ContentPack {
+  video_id: string;
+  video_title: string;
+  goal?: string;
+  clips: ContentPackClip[];
+  repurposed: Record<string, any> | null;
+  titles: Record<string, any> | null;
+  show_notes: Record<string, any> | null;
+  captions: Record<string, any> | null;
+  sources: Array<{ video_id: string; title: string }>;
+  errors: Record<string, string>;
+}
+
+// A parsed "[video title @ mm:ss]" inline citation from an agent reply.
+export interface Citation {
+  raw: string;
+  title: string;
+  timestamp: string;
+  seconds: number;
+}

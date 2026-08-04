@@ -16,9 +16,9 @@ import os
 import time
 from typing import Any, Dict, Optional
 
-BASE_URL = os.getenv("VAULT_LLM_BASE_URL", "https://api.groq.com/openai/v1")
+BASE_URL = os.getenv("VAULT_LLM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/")
 API_KEY = os.getenv("VAULT_LLM_API_KEY")
-MODEL = os.getenv("VAULT_LLM_MODEL", "llama-3.3-70b-versatile")
+MODEL = os.getenv("VAULT_LLM_MODEL", "gemini-2.5-flash")
 
 _client = None
 
