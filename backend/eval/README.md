@@ -29,14 +29,16 @@ window overlaps the query's expected window.
 
 ## Current library
 
-`queries.yaml` is grounded in the only 2 real videos in the library right now:
-- `local-39470` — a short English-lesson vlog
-- `yt-6szdySvorzA` — "The fascinating history of Databases"
+`queries.yaml` is grounded in the only real video in the library right now:
+- `local-f718cb618763` — a short English-lesson vlog ("Test2")
 
-14 positive + 10 negative queries. The plan's target is 25-40 positive queries across a
-15-video test library (3.5) — that requires real source videos this environment doesn't
-have. Extend `queries.yaml` as the library grows; don't pad it with queries that don't map
-to real content, that defeats the point.
+6 positive + 10 negative queries. The YouTube "fascinating history of Databases" video
+(`yt-6szdySvorzA`) this file used to also cover is no longer in the library (removed at
+some point independent of the eval harness) — its 8 positive queries were dropped rather
+than left permanently failing. Re-add them if that video is re-ingested. The plan's target
+is 25-40 positive queries across a 15-video test library (3.5) — that requires real source
+videos this environment doesn't have. Extend `queries.yaml` as the library grows; don't pad
+it with queries that don't map to real content, that defeats the point.
 
 ## History
 
@@ -100,6 +102,37 @@ tune retrieval by, only to notice this gap exists.
 change and require both: recall goes up, false-positive rate on negatives stays at (or
 near) 0%. If a change trades one for the other, it's not obviously a win — decide
 deliberately.
+
+**v4 — agentic-pivot audit, same threshold (0.08), library down to 1 video.** Running
+`scripts/repair_index.py --rebuild` to fix an out-of-sync `visual_embeddings.npy` surfaced
+(but didn't cause) a real data problem: a leaked pytest-fixture chunk (`video_id: "vid-b"`,
+text "This video covers python testing frameworks like pytest", `indexed_at:
+2026-01-01T00:00:00`) had contaminated the live `backend/data/chunks.json` — exactly the
+test-suite data-clobber failure mode `repair_index.py`'s own docstring describes. Because
+that chunk was orphaned (no `videos.json` entry), the *first* `--rebuild` pass "recovered"
+it by fabricating a videos.json entry for it, and a subsequent eval run scored **0%
+recall** — not a real regression, but `queries.yaml` referencing a stale local video ID
+(`local-39470`, pre-dating a re-ingest under a new content-hash ID) and a YouTube video that
+had separately been removed from the library at some point. Removed the `vid-b`
+contamination via `VectorStore.delete_video()` (keeps chunks/embeddings in lockstep, unlike
+hand-editing the JSON/npy files), corrected `queries.yaml`'s video ID, and dropped the 8
+queries for the now-missing YouTube video (see "Current library" above). Re-ran clean:
+
+```
+Positive queries: 6   Negative queries: 10
+Recall@1: 83.3%   Recall@3: 83.3%   Recall@5: 83.3%
+MRR: 0.83
+Mean seek error: 15.40s (among queries with a correct result found)
+False positive rate on negatives: 0.0%
+```
+
+Consistent with v3's calibration (78.6-85.7% recall band) — the threshold did not need to
+move. The one miss ("flowers printed on the umbrella") is the same known gap from v3: the
+correct chunk doesn't enter the top-30 candidate pool for that phrasing at all, so it's a
+retrieval-recall gap, not a threshold problem. `agent_tools.deep_research`'s multi-query
+expansion (paraphrase the query, search each, fuse via RRF) is the intended fix for exactly
+this failure mode — added as part of the agentic pivot, not evaluated against this harness
+yet since `run_eval.py` only exercises `store.search()` directly, not the agent tool layer.
 
 ---
 

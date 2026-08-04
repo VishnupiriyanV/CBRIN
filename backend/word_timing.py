@@ -50,10 +50,10 @@ def ensure_words(
     report: Optional[Callable[[str, float, str], None]] = None,
 ) -> List[Word]:
     """
-    Return word-level timestamps for `video_id`, transcribing with Whisper
-    (word_timestamps=True) if not already cached. Reuses
-    transcript_service.preload_whisper_model()'s loaded model rather than a separate
-    faster-whisper instance (ENGINE-PLAN.md explicitly defers that upgrade).
+    Return word-level timestamps for `video_id`, transcribing with word_timestamps=True if
+    not already cached. Goes through transcript_service._transcribe_local, which prefers
+    faster-whisper (native word timestamps, ~4x faster on GPU) and falls back to
+    openai-whisper transparently — this module doesn't need to know which one ran.
     """
     cached = load_words(video_id)
     if cached is not None:
@@ -62,44 +62,28 @@ def ensure_words(
         return cached
 
     if report:
-        report("words", 0.05, "loading Whisper model")
+        report("words", 0.05, "loading transcription model")
 
     media_service.ffmpeg_exe()  # ensures ffmpeg is on PATH before Whisper shells out to it
-    if not transcript_service.HAS_LOCAL_WHISPER or transcript_service.local_whisper is None:
+    if not transcript_service.HAS_FASTER_WHISPER and (
+        not transcript_service.HAS_LOCAL_WHISPER or transcript_service.local_whisper is None
+    ):
         raise RuntimeError(
-            "Local Whisper ('openai-whisper') is not installed — word-level timing "
-            "requires it. Install backend/requirements.txt."
+            "No local transcription engine available — word-level timing requires "
+            "faster-whisper or openai-whisper. Install backend/requirements.txt."
         )
-    # Reuses whichever tier the ingest path last loaded for this process (cached per-tier in
-    # transcript_service._LOCAL_WHISPER_MODELS) rather than a separate faster-whisper instance
-    # (ENGINE-PLAN.md explicitly defers that upgrade).
-    model = transcript_service._get_local_whisper_model(transcript_service._resolve_model_tier(None))
 
     if report:
         report("words", 0.15, "transcribing with word-level timestamps")
 
-    is_cuda = hasattr(model, "device") and model.device.type == "cuda"
-    try:
-        result = model.transcribe(media_path, word_timestamps=True, fp16=is_cuda)
-    except Exception as cuda_err:
-        if is_cuda:
-            print(f"[Vault] CUDA error during word timing transcription: {cuda_err}. Retrying on CPU fallback...")
-            cpu_model = transcript_service._get_local_whisper_model(transcript_service._resolve_model_tier(None), force_cpu=True)
-            result = cpu_model.transcribe(media_path, word_timestamps=True, fp16=False)
-        else:
-            raise
+    local_result = transcript_service._transcribe_local(
+        media_path, transcript_service._resolve_model_tier(None), word_timestamps=True
+    )
 
     words: List[Word] = []
-    for seg in result.get('segments', []):
-        for w in seg.get('words', []) or []:
-            text = (w.get('word') or '').strip()
-            if not text:
-                continue
-            words.append({
-                "word": text,
-                "start": float(w.get('start', 0.0)),
-                "end": float(w.get('end', 0.0)),
-            })
+    for seg in local_result["segments"]:
+        for w in seg.get("words", []) or []:
+            words.append({"word": w["word"], "start": w["start"], "end": w["end"]})
 
     os.makedirs(paths.WORDS_DIR, exist_ok=True)
     with open(_words_path(video_id), 'w', encoding='utf-8') as f:

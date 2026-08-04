@@ -9,13 +9,14 @@ import { IndexingProgressModal } from './components/IndexingProgressModal';
 import { EmptyState } from './components/EmptyState';
 import { ClipStudio } from './components/engine/ClipStudio';
 import { StudioView } from './components/studio/StudioView';
+import { AgentWorkspace } from './components/agent/AgentWorkspace';
 import { ChunkResult, VideoItem, SearchResponse, LibraryStats, Highlight } from './types';
 import { performSearch, fetchLibraryVideos, fetchLibraryStats, checkBackendHealth, fetchSuggestedQueries, addHighlight, removeHighlight, fetchHighlights, exportSearchJSON, exportSearchCSV } from './services/api';
 import { getQueryHistory, addToQueryHistory } from './services/queryHistory';
 import { Plus, Video, WifiOff, FileDown, ChevronDown, Info, Filter } from 'lucide-react';
 
 export const App: React.FC = () => {
-  const [activeView, setActiveView] = useState<AppView>('search');
+  const [activeView, setActiveView] = useState<AppView>('agent');
   const [query, setQuery] = useState('');
   const [searchMode, setSearchMode] = useState('spoken');
   const [isSearching, setIsSearching] = useState(false);
@@ -235,9 +236,11 @@ export const App: React.FC = () => {
       />
 
       {/* Main Container */}
-      <main className={`flex-1 w-full mx-auto px-4 sm:px-6 py-8 sm:py-12 space-y-10 ${activeView === 'engine' || activeView === 'studio' ? 'max-w-6xl' : 'max-w-5xl'}`}>
+      <main className={`flex-1 w-full mx-auto px-4 sm:px-6 py-8 sm:py-12 space-y-10 ${activeView === 'engine' || activeView === 'studio' || activeView === 'agent' ? 'max-w-6xl' : 'max-w-5xl'}`}>
 
-        {activeView === 'engine' ? (
+        {activeView === 'agent' ? (
+          <AgentWorkspace videos={videos} backendOnline={backendOnline ?? false} />
+        ) : activeView === 'engine' ? (
           <ClipStudio videos={videos} backendOnline={backendOnline ?? false} />
         ) : activeView === 'studio' ? (
           <StudioView videos={videos} backendOnline={backendOnline ?? false} />

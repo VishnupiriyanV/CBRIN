@@ -43,6 +43,7 @@ import voice_profile
 import platform_rules
 import tool_runs
 import usage
+import agent_engine
 
 
 def _repair_stale_chunks(store: "VectorStore"):
@@ -1087,9 +1088,55 @@ def studio_update_platform_rules(patch: Dict[str, Dict[str, Any]]):
     return platform_rules.apply_edit(patch)
 
 
-@app.get("/api/studio/usage")
-def studio_get_usage():
-    return usage.summary()
+class AgentChatRequest(BaseModel):
+    messages: List[Dict[str, Any]]
+    video_id: Optional[str] = None
+
+
+@app.post("/api/studio/agent/chat")
+def studio_agent_chat(req: AgentChatRequest):
+    """
+    Studio Copilot endpoint: executes natural language multi-turn agent turns,
+    calling Vault, ENGINE, Studio tools, and Voice Profile automatically.
+    """
+    try:
+        res = agent_engine.run_agent_turn(messages=req.messages, store=store, video_id=req.video_id)
+        if res.get("usage"):
+            usage.record("studio_copilot", res["usage"])
+        return res
+    except llm_client.LLMUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Agent copilot error: {str(e)}")
+
+
+@app.post("/api/studio/agent/chat/stream")
+def studio_agent_chat_stream(req: AgentChatRequest):
+    """
+    Streaming counterpart to /api/studio/agent/chat: emits Server-Sent Events as the agent
+    reasons, so the UI shows live tokens and tool activity instead of one blocking wait.
+    Each event is `data: {json}\\n\\n` with a "type" field (token/tool_start/tool_result/
+    step/usage/done/error) — see agent_engine.run_agent_turn_stream for the exact shapes.
+    """
+    if not llm_client.is_configured():
+        raise HTTPException(status_code=503, detail="VAULT_LLM_API_KEY is not configured in .env.")
+
+    def _event_stream():
+        try:
+            for event in agent_engine.run_agent_turn_stream(
+                messages=req.messages, store=store, video_id=req.video_id
+            ):
+                if event.get("type") == "usage" and event.get("usage"):
+                    usage.record("studio_copilot", event["usage"])
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        _event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 if __name__ == "__main__":
