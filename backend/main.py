@@ -486,10 +486,7 @@ def _run_upload_job(temp_file_path: str, filename: str, file_ext: str, model_tie
             # a real failure so it's visible.
             if not new_chunks:
                 raise ValueError(
-                    "Transcription produced no usable speech segments (silent, music-only, "
-                    "or too little spoken content to chunk). Visual-only indexing isn't "
-                    "supported yet — every chunk (and its keyframe) is derived from a "
-                    "transcript segment, so a video with no chunkable speech gets none."
+                    f"No indexable visual or text content could be extracted from '{filename}'."
                 )
 
             report("embed", 0.85, "Embedding chunks into the vector index...")

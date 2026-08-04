@@ -346,7 +346,18 @@ class VectorStore:
         if not transcript_segments:
             return chunks
 
-        sentences = MultimodalEngine.segment_transcript_into_sentences(transcript_segments)
+        if any(s.get('is_visual_only') for s in transcript_segments):
+            sentences = [
+                {
+                    "sentence_idx": i,
+                    "text": s.get('text', ''),
+                    "start_sec": math.floor(s.get('start', 0.0)),
+                    "end_sec": math.ceil(s.get('start', 0.0) + s.get('duration', 0.0))
+                }
+                for i, s in enumerate(transcript_segments)
+            ]
+        else:
+            sentences = MultimodalEngine.segment_transcript_into_sentences(transcript_segments)
 
         # Fallback to sliding windows if sentence segmentation yields nothing
         if not sentences:
@@ -409,6 +420,7 @@ class VectorStore:
                 "channel": video_meta.get('channel', 'Creator Library'),
                 "youtube_id": video_meta.get('youtube_id'),
                 "is_local": video_meta.get('is_local', False),
+                "is_visual_only": sent.get('is_visual_only', False) or sent_text.startswith('[Visual Scene'),
                 "sentence_idx": s_idx,
                 "start_sec": start_sec,
                 "end_sec": end_sec,
@@ -623,7 +635,7 @@ class VectorStore:
             )
             self.dense_embeddings = embeddings
         else:
-            if corpus:
+            if corpus and hasattr(self, 'vectorizer') and self.vectorizer is not None:
                 self.tfidf_matrix = self.vectorizer.fit_transform(corpus)
 
         self._rebuild_bm25()
@@ -751,9 +763,11 @@ class VectorStore:
             elif HAS_DENSE_MODEL and self.dense_embeddings is not None:
                 query_vec = EMBEDDING_MODEL.encode([search_query], convert_to_numpy=True, normalize_embeddings=True)[0]
                 similarities = np.dot(self.dense_embeddings, query_vec)
-            else:
+            elif hasattr(self, 'vectorizer') and self.vectorizer is not None and self.tfidf_matrix is not None:
                 query_vec = self.vectorizer.transform([search_query])
                 similarities = cosine_similarity(query_vec, self.tfidf_matrix)[0]
+            else:
+                similarities = np.zeros(len(self.chunks))
         else:
             dense_sims = None
             if HAS_DENSE_MODEL and self.dense_embeddings is not None:
@@ -775,6 +789,11 @@ class VectorStore:
                 similarities = bm25_sims
             else:
                 similarities = np.zeros(len(self.chunks))
+
+            # Suppress non-speech / visual-only synthetic chunks from spoken transcript search
+            for i, c in enumerate(self.chunks):
+                if c.get('is_visual_only') or c.get('text', '').startswith('[Visual Scene'):
+                    similarities[i] = -999.0
 
         if relevance_threshold is not None:
             scored_indices = [(idx, float(score)) for idx, score in enumerate(similarities) if float(score) >= relevance_threshold]
@@ -1020,11 +1039,13 @@ class VectorStore:
             self._suggested_queries_cache = []
             return []
 
-        idf_lookup = MultimodalEngine.compute_corpus_idf([c.get('text', '') for c in self.chunks])
+        idf_lookup = MultimodalEngine.compute_corpus_idf([c.get('text', '') for c in self.chunks if not c.get('is_visual_only')])
 
         concept_freq: Dict[str, int] = {}
         concept_display: Dict[str, str] = {}
         for chunk in self.chunks:
+            if chunk.get('is_visual_only') or chunk.get('text', '').startswith('[Visual Scene'):
+                continue
             for concept in chunk.get('implicit_concepts', []):
                 key = concept.lower().strip()
                 if not key:
