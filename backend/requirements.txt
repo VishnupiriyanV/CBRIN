@@ -12,6 +12,13 @@ python-dotenv>=1.0.0,<2.0.0
 # Local (offline) transcription — used by /api/upload_transcribe when OPENAI_API_KEY is unset.
 openai-whisper>=20231117
 
+# Preferred local transcription engine (~4x faster than openai-whisper, native GPU fp16,
+# built-in word-level timestamps). Purely additive: transcript_service.py falls back to
+# openai-whisper above if this isn't installed or fails to load, so it's optional but
+# strongly recommended. GPU mode needs a working CUDA + cuDNN install on top of a CUDA
+# build of torch; without that it still runs, just on CPU (int8).
+faster-whisper>=1.0.0,<2.0.0
+
 # Multimodal engine: keyframe extraction (OpenCV), image decoding (Pillow), CLIP backbone (torch).
 # headless: this is a backend server, no GUI bindings needed.
 opencv-python-headless>=4.8.0,<5.0.0

@@ -1,7 +1,7 @@
 import {
   SearchResponse, VideoItem, LibraryStats, Highlight, EngineJob, ClipCandidate, BrandKit,
   StudioToolInfo, VoiceProfile, PlatformRules, PlatformRule, StudioUsageSummary, ToolRun,
-  ParsedTranscriptInfo, TranscriptSourceSentence,
+  ParsedTranscriptInfo, TranscriptSourceSentence, AgentChatResponse, AgentStreamEvent,
 } from '../types';
 
 // Configurable via VITE_API_URL so changing the backend's port/host doesn't require a code
@@ -523,6 +523,68 @@ export function studioUpdatePlatformRules(patch: Record<string, Partial<Platform
 
 export function studioGetUsage(): Promise<StudioUsageSummary> {
   return getJson('/studio/usage');
+}
+
+export function studioAgentChat(
+  messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>,
+  videoId?: string
+): Promise<AgentChatResponse> {
+  return postJson('/studio/agent/chat', { messages, video_id: videoId });
+}
+
+/**
+ * Streaming counterpart to studioAgentChat: reads Server-Sent Events off
+ * POST /studio/agent/chat/stream and invokes onEvent for each typed event (token/
+ * tool_start/tool_result/step/usage/done/error) as it arrives, instead of blocking for the
+ * full agent turn. Throws if the stream never starts (e.g. 503 no LLM key) — callers should
+ * fall back to studioAgentChat() in that case. Resolves once the stream closes normally
+ * (after a "done" or "error" event); does not throw for an "error" event itself, since that's
+ * a valid application-level event the caller already receives via onEvent.
+ */
+export async function studioAgentChatStream(
+  messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>,
+  videoId: string | undefined,
+  onEvent: (event: AgentStreamEvent) => void,
+  signal?: AbortSignal
+): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/studio/agent/chat/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ messages, video_id: videoId }),
+    signal,
+  });
+
+  if (!response.ok || !response.body) {
+    const detail = await response.json().catch(() => ({ detail: 'Agent stream failed to start' }));
+    throw new Error(detail.detail || `Agent stream failed (${response.status})`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    let sepIndex = buffer.indexOf('\n\n');
+    while (sepIndex !== -1) {
+      const frame = buffer.slice(0, sepIndex);
+      buffer = buffer.slice(sepIndex + 2);
+
+      const dataLine = frame.split('\n').find((l) => l.startsWith('data: '));
+      if (dataLine) {
+        try {
+          const event = JSON.parse(dataLine.slice('data: '.length)) as AgentStreamEvent;
+          onEvent(event);
+        } catch (err) {
+          console.error('Failed to parse agent stream event:', err, dataLine);
+        }
+      }
+      sepIndex = buffer.indexOf('\n\n');
+    }
+  }
 }
 
 /**
