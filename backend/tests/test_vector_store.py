@@ -160,14 +160,18 @@ class TestVisualOnlyChunksSuppressionInSpokenSearch:
                 "video_id": "vid-visual",
                 "text": "[Visual Scene 00:00 - 00:15]",
                 "is_visual_only": True,
-                "visual_status": "ok"
+                "visual_status": "ok",
+                "start_sec": 0.0,
+                "end_sec": 15.0
             },
             {
                 "id": "chunk-2",
                 "video_id": "vid-speech",
                 "text": "This is a real spoken sentence about artificial intelligence.",
                 "is_visual_only": False,
-                "visual_status": "failed"
+                "visual_status": "failed",
+                "start_sec": 0.0,
+                "end_sec": 10.0
             }
         ]
         store.is_fitted = True
