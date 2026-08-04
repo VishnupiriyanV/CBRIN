@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { Header, AppView } from './components/Header';
+import { Sidebar } from './components/Sidebar';
 import { SearchBar } from './components/SearchBar';
 import { ResultCard } from './components/ResultCard';
 import { VideoPlayerModal } from './components/VideoPlayerModal';
@@ -16,7 +17,7 @@ import { getQueryHistory, addToQueryHistory } from './services/queryHistory';
 import { Plus, Video, WifiOff, FileDown, ChevronDown, Info, Filter } from 'lucide-react';
 
 export const App: React.FC = () => {
-  const [activeView, setActiveView] = useState<AppView>('agent');
+  const [activeView, setActiveView] = useState<AppView>('search');
   const [query, setQuery] = useState('');
   const [searchMode, setSearchMode] = useState('spoken');
   const [isSearching, setIsSearching] = useState(false);
@@ -211,32 +212,50 @@ export const App: React.FC = () => {
   }, [filteredResults, selectedIndex]);
 
   return (
-    <div className="min-h-screen bg-canvas text-ink flex flex-col antialiased selection:bg-accent-sunset selection:text-black">
+    <div className="min-h-screen bg-canvas text-ink flex flex-row antialiased selection:bg-accent-sunset selection:text-black">
 
-      {/* Backend Offline Notification Banner */}
-      {backendOnline === false && (
-        <div className="bg-red-950/60 border-b border-red-800/40 px-4 py-2.5 flex items-center justify-center gap-2 text-xs font-mono text-red-300 animate-fade-in">
-          <WifiOff className="w-3.5 h-3.5" />
-          <span>BACKEND OFFLINE — Start Python server: <code className="bg-red-900/40 px-1.5 py-0.5 rounded text-red-200">python backend/main.py</code></span>
-        </div>
-      )}
-
-      {/* Top Bar */}
-      <Header
+      {/* Left Navigation Sidebar */}
+      <Sidebar
+        activeView={activeView}
+        onChangeView={setActiveView}
         totalVideos={videos.length}
         totalChunks={totalChunks}
         stats={stats}
+        highlightCount={highlights.length}
+        backendOnline={backendOnline}
         onOpenLibrary={() => setIsLibraryOpen(true)}
         onOpenIngest={() => setIsLibraryOpen(true)}
         onOpenHighlights={() => setIsHighlightsOpen(true)}
         onOpenProgress={() => setIsProgressOpen(true)}
-        highlightCount={highlights.length}
-        activeView={activeView}
-        onChangeView={setActiveView}
       />
 
-      {/* Main Container */}
-      <main className={`flex-1 w-full mx-auto px-4 sm:px-6 py-8 sm:py-12 space-y-10 ${activeView === 'engine' || activeView === 'studio' || activeView === 'agent' ? 'max-w-6xl' : 'max-w-5xl'}`}>
+      {/* Main Content Workspace Column */}
+      <div className="flex-1 flex flex-col min-w-0 h-screen overflow-y-auto">
+
+        {/* Backend Offline Notification Banner */}
+        {backendOnline === false && (
+          <div className="bg-red-950/60 border-b border-red-800/40 px-4 py-2.5 flex items-center justify-center gap-2 text-xs font-mono text-red-300 animate-fade-in shrink-0">
+            <WifiOff className="w-3.5 h-3.5" />
+            <span>BACKEND OFFLINE — Start Python server: <code className="bg-red-900/40 px-1.5 py-0.5 rounded text-red-200">python backend/main.py</code></span>
+          </div>
+        )}
+
+        {/* Top Header Workspace Bar */}
+        <Header
+          totalVideos={videos.length}
+          totalChunks={totalChunks}
+          stats={stats}
+          onOpenLibrary={() => setIsLibraryOpen(true)}
+          onOpenIngest={() => setIsLibraryOpen(true)}
+          onOpenHighlights={() => setIsHighlightsOpen(true)}
+          onOpenProgress={() => setIsProgressOpen(true)}
+          highlightCount={highlights.length}
+          activeView={activeView}
+          onChangeView={setActiveView}
+        />
+
+        {/* Main Container */}
+        <main className={`flex-1 w-full mx-auto px-4 sm:px-6 py-8 sm:py-12 space-y-10 ${activeView === 'engine' || activeView === 'studio' || activeView === 'agent' ? 'max-w-6xl' : 'max-w-5xl'}`}>
 
         {activeView === 'agent' ? (
           <AgentWorkspace videos={videos} backendOnline={backendOnline ?? false} />
@@ -515,6 +534,7 @@ export const App: React.FC = () => {
         backendOnline={backendOnline ?? false}
         onRefresh={refreshData}
       />
+      </div>
     </div>
   );
 };

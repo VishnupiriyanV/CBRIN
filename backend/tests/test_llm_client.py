@@ -2,6 +2,11 @@
 Tests for llm_client.py's schema-validation retry and unavailable-provider handling
 (ENGINE-PLAN.md Phase 2). No real network calls — the OpenAI client is mocked throughout.
 
+BASE_URL/API_KEY/MODEL are resolved dynamically via get_base_url()/get_api_key()/get_model()
+(module __getattr__, PEP 562) rather than constants frozen at import time, so tests patch
+those accessor functions directly instead of patching module attributes — patching
+`lc.API_KEY` wouldn't touch what get_api_key() actually reads (os.environ).
+
 Run with: python -m pytest backend/tests/test_llm_client.py -v
 """
 import json
@@ -24,11 +29,11 @@ def _mock_response(content: str):
 
 class TestIsConfigured:
     def test_not_configured_without_api_key(self):
-        with patch.object(lc, "API_KEY", None):
+        with patch.object(lc, "get_api_key", return_value=None):
             assert lc.is_configured() is False
 
     def test_configured_with_api_key(self):
-        with patch.object(lc, "API_KEY", "fake-key-123"):
+        with patch.object(lc, "get_api_key", return_value="fake-key-123"):
             assert lc.is_configured() is True
 
 
@@ -39,7 +44,7 @@ class TestCompleteJsonHappyPath:
         mock_client.chat.completions.create.return_value = _mock_response(
             json.dumps({"beats": [{"beat_type": "hook"}]})
         )
-        with patch.object(lc, "API_KEY", "fake-key"), patch.object(lc, "_get_client", return_value=mock_client):
+        with patch.object(lc, "get_api_key", return_value="fake-key"), patch.object(lc, "_get_client", return_value=mock_client):
             result = lc.complete_json("system", "user", schema)
         assert result == [{"beat_type": "hook"}]
         assert mock_client.chat.completions.create.call_count == 1
@@ -51,14 +56,14 @@ class TestCompleteJsonHappyPath:
         mock_client.chat.completions.create.return_value = _mock_response(
             json.dumps({"replies": [{"index": 0, "suggested_reply": "Thanks!"}], "notes": "some text"})
         )
-        with patch.object(lc, "API_KEY", "fake-key"), patch.object(lc, "_get_client", return_value=mock_client):
+        with patch.object(lc, "get_api_key", return_value="fake-key"), patch.object(lc, "_get_client", return_value=mock_client):
             result = lc.complete_json("system", "user", schema)
         assert result == [{"index": 0, "suggested_reply": "Thanks!"}]
 
 
 class TestCompleteJsonNotConfigured:
     def test_raises_llm_unavailable_when_no_key(self):
-        with patch.object(lc, "API_KEY", None):
+        with patch.object(lc, "get_api_key", return_value=None):
             with pytest.raises(lc.LLMUnavailable):
                 lc.complete_json("system", "user", {"type": "array", "items": {"required": []}})
 
@@ -71,7 +76,7 @@ class TestSchemaValidationRetry:
             _mock_response(json.dumps({"beats": [{"missing_field": True}]})),  # invalid: no beat_type
             _mock_response(json.dumps({"beats": [{"beat_type": "hook"}]})),    # valid retry
         ]
-        with patch.object(lc, "API_KEY", "fake-key"), patch.object(lc, "_get_client", return_value=mock_client):
+        with patch.object(lc, "get_api_key", return_value="fake-key"), patch.object(lc, "_get_client", return_value=mock_client):
             result = lc.complete_json("system", "user", schema, max_retries=1)
         assert result == [{"beat_type": "hook"}]
         assert mock_client.chat.completions.create.call_count == 2
@@ -82,7 +87,7 @@ class TestSchemaValidationRetry:
         mock_client.chat.completions.create.return_value = _mock_response(
             json.dumps({"beats": [{"missing_field": True}]})
         )
-        with patch.object(lc, "API_KEY", "fake-key"), patch.object(lc, "_get_client", return_value=mock_client):
+        with patch.object(lc, "get_api_key", return_value="fake-key"), patch.object(lc, "_get_client", return_value=mock_client):
             with pytest.raises(lc.LLMUnavailable):
                 lc.complete_json("system", "user", schema, max_retries=1)
         assert mock_client.chat.completions.create.call_count == 2
@@ -95,7 +100,7 @@ class TestCompleteJsonWithUsage:
         resp = _mock_response(json.dumps({"beats": [{"beat_type": "hook"}]}))
         resp.usage = MagicMock(prompt_tokens=120, completion_tokens=40)
         mock_client.chat.completions.create.return_value = resp
-        with patch.object(lc, "API_KEY", "fake-key"), patch.object(lc, "_get_client", return_value=mock_client):
+        with patch.object(lc, "get_api_key", return_value="fake-key"), patch.object(lc, "_get_client", return_value=mock_client):
             parsed, usage = lc.complete_json_with_usage("system", "user", schema)
         assert parsed == [{"beat_type": "hook"}]
         assert usage["prompt_tokens"] == 120
@@ -107,7 +112,7 @@ class TestCompleteJsonWithUsage:
         resp = _mock_response(json.dumps({"beats": [{"beat_type": "hook"}]}))
         del resp.usage  # simulate a provider that omits usage entirely
         mock_client.chat.completions.create.return_value = resp
-        with patch.object(lc, "API_KEY", "fake-key"), patch.object(lc, "_get_client", return_value=mock_client):
+        with patch.object(lc, "get_api_key", return_value="fake-key"), patch.object(lc, "_get_client", return_value=mock_client):
             parsed, usage = lc.complete_json_with_usage("system", "user", schema)
         assert usage["prompt_tokens"] == 0
         assert usage["completion_tokens"] == 0
@@ -118,7 +123,7 @@ class TestCompleteJsonWithUsage:
         mock_client.chat.completions.create.return_value = _mock_response(
             json.dumps({"beats": [{"beat_type": "hook"}]})
         )
-        with patch.object(lc, "API_KEY", "fake-key"), patch.object(lc, "_get_client", return_value=mock_client):
+        with patch.object(lc, "get_api_key", return_value="fake-key"), patch.object(lc, "_get_client", return_value=mock_client):
             lc.complete_json("system", "user", schema, temperature=0.8, max_tokens=500)
         _, kwargs = mock_client.chat.completions.create.call_args
         assert kwargs["temperature"] == 0.8
@@ -131,8 +136,34 @@ class TestModelErrorSurfacesClearly:
         mock_client.chat.completions.create.side_effect = Exception(
             "Error code: 404 - model 'bogus-model' not found"
         )
-        with patch.object(lc, "API_KEY", "fake-key"), patch.object(lc, "_get_client", return_value=mock_client), \
-             patch.object(lc, "MODEL", "bogus-model"):
+        with patch.object(lc, "get_api_key", return_value="fake-key"), patch.object(lc, "_get_client", return_value=mock_client), \
+             patch.object(lc, "get_model", return_value="bogus-model"):
             with pytest.raises(lc.LLMUnavailable) as exc_info:
                 lc.complete_json("system", "user", {"type": "array", "items": {"required": []}})
         assert "bogus-model" in str(exc_info.value)
+
+
+class TestDynamicConfigAccessors:
+    """Regression guard: every call site inside llm_client.py must use get_model()/
+    get_api_key()/get_base_url() rather than the bare MODEL/API_KEY/BASE_URL names — a bare
+    name inside this module's own functions resolves via LOAD_GLOBAL against this module's
+    real globals and never reaches __getattr__, so it would raise NameError at call time
+    instead of picking up the current env var."""
+
+    def test_model_change_is_picked_up_without_reimport(self):
+        with patch.object(lc, "get_api_key", return_value="fake-key"):
+            mock_client = MagicMock()
+            mock_client.chat.completions.create.return_value = _mock_response(
+                json.dumps({"beats": [{"beat_type": "hook"}]})
+            )
+            with patch.object(lc, "_get_client", return_value=mock_client), \
+                 patch.object(lc, "get_model", return_value="gemini-2.0-flash"):
+                lc.complete_json("system", "user", {"type": "array", "items": {"required": ["beat_type"]}})
+            _, kwargs = mock_client.chat.completions.create.call_args
+            assert kwargs["model"] == "gemini-2.0-flash"
+
+    def test_external_module_attribute_access_still_works(self):
+        """agent_engine.py reads llm_client.MODEL/.BASE_URL as cross-module attribute
+        access — that path IS covered by __getattr__, unlike bare names inside this file."""
+        with patch.dict(os.environ, {"VAULT_LLM_MODEL": "gemini-2.5-flash"}):
+            assert lc.MODEL == "gemini-2.5-flash"
