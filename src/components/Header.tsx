@@ -52,11 +52,11 @@ export const Header: React.FC<HeaderProps> = ({
 
   return (
     <header className="border-b border-hairline/80 sticky top-0 z-40 bg-canvas/85">
-      <div className="relative max-w-6xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between gap-4">
+      <div className="relative max-w-7xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between gap-4">
         
         {/* Left: Brand Header & Telemetry */}
-        <div className="flex items-center gap-3 shrink-0">
-          <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3 shrink-0 max-w-[calc(50%-90px)] sm:max-w-[calc(50%-110px)]">
+          <div className="flex items-center gap-2 shrink-0">
             <CbrinLogo />
             <h1 className="text-base font-semibold tracking-wider text-ink font-mono">CBRIN</h1>
           </div>
@@ -65,52 +65,53 @@ export const Header: React.FC<HeaderProps> = ({
           {totalVideos > 0 && (
             <button
               onClick={onOpenProgress}
-              className="hidden xl:flex items-center gap-3 px-3 py-1 rounded-full border border-hairline/80 bg-canvas-card/80 hover:bg-canvas-soft hover:border-hairline-bright transition-all text-[11px] font-mono group cursor-pointer"
+              className="hidden xl:flex items-center gap-2 px-2.5 py-1 rounded-full border border-hairline/80 bg-canvas-card/80 hover:bg-canvas-soft hover:border-hairline-bright transition-all text-[11px] font-mono group cursor-pointer overflow-hidden shrink"
               title="Click to view full indexing pipeline telemetry & progress"
             >
               {failedCount > 0 ? (
-                <div className="flex items-center gap-1.5 text-red-400">
+                <div className="flex items-center gap-1.5 text-red-400 shrink-0">
                   <AlertTriangle className="w-3 h-3 shrink-0" />
                   <span>{failedCount} FAILED</span>
                 </div>
               ) : isFullyIndexed ? (
-                <div className="flex items-center gap-1.5 text-emerald-400">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-                  <span>100% INDEXED</span>
+                <div className="flex items-center gap-1.5 text-emerald-400 shrink-0">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0"></span>
+                  <span className="shrink-0">100% INDEXED</span>
                 </div>
               ) : (
-                <div className="flex items-center gap-1.5 text-amber-400">
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
-                  <span>INDEXING</span>
+                <div className="flex items-center gap-1.5 text-amber-400 shrink-0">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0"></span>
+                  <span className="shrink-0">INDEXING</span>
                 </div>
               )}
 
-              <span className="text-hairline-bright">•</span>
+              <span className="text-hairline-bright shrink-0">•</span>
 
-              <div className="flex items-center gap-1 text-ink-mute group-hover:text-ink">
-                <FileVideo className="w-3 h-3 text-ink-mute" />
-                <span>{totalVideos} MEDIA</span>
-              </div>
-
-              <span className="text-hairline-bright">•</span>
-
-              <div className="flex items-center gap-1 text-ink-mute group-hover:text-ink">
-                <Sparkles className="w-3 h-3 text-accent-sunset" />
+              <div className="flex items-center gap-1 text-ink-mute group-hover:text-ink shrink-0">
+                <Sparkles className="w-3 h-3 text-accent-sunset shrink-0" />
                 <span>{totalChunks} CHUNKS</span>
               </div>
 
-              {totalChunks > 0 && (
-                <>
-                  <span className="text-hairline-bright">•</span>
-                  <div className="flex items-center gap-1 text-ink-mute group-hover:text-ink">
-                    <Eye className="w-3 h-3 text-ink-mute" />
-                    <span>{visualIndexedCount}/{totalChunks} VISUAL</span>
-                  </div>
-                </>
-              )}
+              <div className="hidden 2xl:flex items-center gap-2 shrink-0">
+                <span className="text-hairline-bright">•</span>
+                <div className="flex items-center gap-1 text-ink-mute group-hover:text-ink">
+                  <FileVideo className="w-3 h-3 text-ink-mute shrink-0" />
+                  <span>{totalVideos} MEDIA</span>
+                </div>
 
-              <span className="text-hairline-bright">•</span>
-              <Activity className="w-3 h-3 text-accent-sunset opacity-60 group-hover:opacity-100 transition-opacity" />
+                {totalChunks > 0 && (
+                  <>
+                    <span className="text-hairline-bright">•</span>
+                    <div className="flex items-center gap-1 text-ink-mute group-hover:text-ink">
+                      <Eye className="w-3 h-3 text-ink-mute shrink-0" />
+                      <span>{visualIndexedCount}/{totalChunks} VISUAL</span>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              <span className="text-hairline-bright shrink-0">•</span>
+              <Activity className="w-3 h-3 text-accent-sunset opacity-60 group-hover:opacity-100 transition-opacity shrink-0" />
             </button>
           )}
         </div>
