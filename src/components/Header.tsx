@@ -51,7 +51,7 @@ export const Header: React.FC<HeaderProps> = ({
   }, [exportOpen]);
 
   return (
-    <header className="border-b border-hairline/80 sticky top-0 z-40 backdrop-blur-xl bg-canvas/85">
+    <header className="border-b border-hairline/80 sticky top-0 z-40 bg-canvas/85">
       <div className="relative max-w-6xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between gap-4">
         
         {/* Left: Brand Header & Telemetry */}
@@ -65,7 +65,7 @@ export const Header: React.FC<HeaderProps> = ({
           {totalVideos > 0 && (
             <button
               onClick={onOpenProgress}
-              className="hidden xl:flex items-center gap-3 px-3 py-1 rounded-full border border-hairline/80 bg-canvas-card/80 hover:bg-canvas-soft hover:border-hairline-bright transition-all text-[11px] font-mono shadow-sm group cursor-pointer"
+              className="hidden xl:flex items-center gap-3 px-3 py-1 rounded-full border border-hairline/80 bg-canvas-card/80 hover:bg-canvas-soft hover:border-hairline-bright transition-all text-[11px] font-mono group cursor-pointer"
               title="Click to view full indexing pipeline telemetry & progress"
             >
               {failedCount > 0 ? (
@@ -75,12 +75,12 @@ export const Header: React.FC<HeaderProps> = ({
                 </div>
               ) : isFullyIndexed ? (
                 <div className="flex items-center gap-1.5 text-emerald-400">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
                   <span>100% INDEXED</span>
                 </div>
               ) : (
                 <div className="flex items-center gap-1.5 text-amber-400">
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
                   <span>INDEXING</span>
                 </div>
               )}
@@ -118,12 +118,12 @@ export const Header: React.FC<HeaderProps> = ({
         {/* Center: Tool Selector (Search vs Engine) - Absolute Centered relative to page container */}
         {onChangeView && (
           <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-auto z-10">
-            <div className="flex items-center gap-0.5 p-0.5 rounded-full border border-hairline bg-canvas-soft shadow-md">
+            <div className="flex items-center gap-0.5 p-0.5 rounded-full border border-hairline bg-canvas-soft">
               <button
                 onClick={() => onChangeView('search')}
                 className={`px-3.5 py-1 rounded-full text-[11px] font-mono transition-all ${
                   activeView === 'search'
-                    ? 'bg-canvas-card text-ink border border-hairline-bright font-medium shadow-sm'
+                    ? 'bg-canvas-card text-ink border border-hairline-bright font-medium'
                     : 'text-ink-mute hover:text-ink'
                 }`}
               >
@@ -133,7 +133,7 @@ export const Header: React.FC<HeaderProps> = ({
                 onClick={() => onChangeView('engine')}
                 className={`px-3.5 py-1 rounded-full text-[11px] font-mono transition-all flex items-center gap-1 ${
                   activeView === 'engine'
-                    ? 'bg-canvas-card text-accent-sunset border border-hairline-bright font-medium shadow-sm'
+                    ? 'bg-canvas-card text-accent-sunset border border-hairline-bright font-medium'
                     : 'text-ink-mute hover:text-ink'
                 }`}
               >
@@ -175,7 +175,7 @@ export const Header: React.FC<HeaderProps> = ({
               </button>
 
               {exportOpen && (
-                <div className="absolute right-0 mt-2 w-48 bg-canvas-card border border-hairline-bright rounded-xl shadow-2xl overflow-hidden z-50 animate-fade-in py-1">
+                <div className="absolute right-0 mt-2 w-48 bg-canvas-card border border-hairline-bright rounded-lg overflow-hidden z-50 animate-fade-in py-1">
                   <button
                     onClick={() => { exportLibraryJSON(); setExportOpen(false); }}
                     className="w-full px-4 py-2 text-left text-xs text-ink hover:bg-canvas-soft transition-colors flex items-center gap-2"
@@ -216,7 +216,7 @@ export const Header: React.FC<HeaderProps> = ({
           {/* Index New Action */}
           <button
             onClick={onOpenIngest}
-            className="px-3.5 py-1.5 rounded-full border border-accent-sunset/40 bg-accent-sunset/10 hover:bg-accent-sunset hover:text-black hover:border-accent-sunset text-xs font-medium text-accent-sunset hover:text-black transition-all flex items-center gap-1.5 shadow-sm"
+            className="px-3.5 py-1.5 rounded-full border border-accent-sunset/40 bg-accent-sunset/10 hover:bg-accent-sunset hover:text-black hover:border-accent-sunset text-xs font-medium text-accent-sunset hover:text-black transition-all flex items-center gap-1.5"
           >
             <Plus className="w-3.5 h-3.5" />
             <span>Index New</span>

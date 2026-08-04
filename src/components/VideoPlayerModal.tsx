@@ -63,15 +63,15 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
   }, [onClose]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-black/85 backdrop-blur-md animate-fade-in">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-black/85 animate-fade-in">
       <div
-        className="bg-canvas-card border border-hairline-bright rounded-2xl w-full max-w-4xl overflow-hidden shadow-2xl flex flex-col max-h-[92vh]"
+        className="bg-canvas-card border border-hairline-bright rounded-lg w-full max-w-4xl overflow-hidden flex flex-col max-h-[92vh]"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Modal Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-hairline bg-canvas">
           <div className="flex items-center gap-3">
-            <div className="w-2.5 h-2.5 rounded-full bg-accent-sunset animate-pulse"></div>
+            <div className="w-2.5 h-2.5 rounded-full bg-accent-sunset"></div>
             <div>
               <span className="eyebrow-mono text-[9px] block">JUMPED TO MOMENT // {result.start_timestamp}</span>
               <h2 className="text-sm sm:text-base font-semibold text-ink truncate max-w-md sm:max-w-lg">
@@ -139,12 +139,12 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
                 />
               )}
 
-              <div className="relative z-10 space-y-4 max-w-md bg-canvas-card/90 border border-hairline p-6 rounded-2xl backdrop-blur-xl shadow-2xl">
+              <div className="relative z-10 space-y-4 max-w-md bg-canvas-card/90 border border-hairline p-6 rounded-lg">
                 {displayPoster && (
                   <img
                     src={displayPoster}
                     alt={result.video_title}
-                    className="w-32 h-20 object-cover rounded-lg mx-auto border border-hairline shadow-md"
+                    className="w-32 h-20 object-cover rounded-lg mx-auto border border-hairline"
                   />
                 )}
 
@@ -164,7 +164,7 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
                       href={directYoutubeLink}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="w-full sm:w-auto px-5 py-2.5 rounded-full bg-accent-sunset hover:bg-amber-400 text-black text-xs font-semibold transition-all flex items-center justify-center gap-2 shadow-md"
+                      className="w-full sm:w-auto px-5 py-2.5 rounded-full bg-accent-sunset hover:bg-amber-400 text-black text-xs font-semibold transition-all flex items-center justify-center gap-2"
                     >
                       <Play className="w-4 h-4 fill-current" />
                       <span>Open on YouTube at {result.start_timestamp}</span>
@@ -205,7 +205,7 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
             </div>
           )}
 
-          <div className="bg-canvas-soft border border-hairline rounded-xl p-4 text-sm text-ink-body leading-relaxed">
+          <div className="bg-canvas-soft border border-hairline rounded-lg p-4 text-sm text-ink-body leading-relaxed">
             <p className="eyebrow-mono text-[9px] mb-1.5 text-accent-sunset">SPOKEN TRANSCRIPT</p>
             <p className="italic text-ink font-sans">"{result.text}"</p>
           </div>

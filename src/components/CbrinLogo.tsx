@@ -17,7 +17,7 @@ export const CbrinLogo: React.FC<CbrinLogoProps> = ({
 }) => {
   return (
     <div
-      className={`relative rounded-lg bg-[#121215] border border-hairline flex items-center justify-center shrink-0 shadow-sm transition-all duration-300 group-hover:border-accent-sunset/60 group-hover:bg-canvas-card ${className}`}
+      className={`relative rounded-lg bg-[#121215] border border-hairline flex items-center justify-center shrink-0 transition-all duration-300 group-hover:border-accent-sunset/60 group-hover:bg-canvas-card ${className}`}
     >
       <svg
         viewBox="-3 -3 38 38"

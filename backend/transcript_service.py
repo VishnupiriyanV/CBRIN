@@ -4,7 +4,7 @@ import math
 import urllib.request
 import json
 import hashlib
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from youtube_transcript_api import YouTubeTranscriptApi
 
 try:
@@ -14,7 +14,6 @@ except ImportError:
     HAS_OPENAI = False
 
 local_whisper = None
-LOCAL_WHISPER_MODEL = None
 HAS_LOCAL_WHISPER = False
 
 try:
@@ -28,18 +27,42 @@ except ImportError:
           "unavailable — install it with `pip install -r backend/requirements.txt`, or set "
           "OPENAI_API_KEY to use the hosted Whisper API instead.")
 
-# Defaults to 'base'; override via env for accuracy vs. speed (see IMPROVEMENT-PLAN.md 3.4).
-WHISPER_MODEL_SIZE = os.getenv("VAULT_WHISPER_MODEL", "base")
+# 'base' mangles proper nouns and technical vocabulary — exactly the high-value search terms
+# (PRD §7.2, IMPROVEMENT-PLAN.md 3.4) — so the default tier is 'small'. Still overridable via
+# env, and selectable per-upload (see WHISPER_MODEL_TIERS / transcribe_file_with_whisper's
+# model_tier param).
+WHISPER_MODEL_SIZE = os.getenv("VAULT_WHISPER_MODEL", "small")
+WHISPER_MODEL_TIERS = ("base", "small", "medium")
+
+# One loaded model per tier, cached lazily — a user picking 'medium' for one upload shouldn't
+# force every other tier to reload from scratch on next use.
+_LOCAL_WHISPER_MODELS: Dict[str, Any] = {}
+
+
+def _resolve_model_tier(model_tier: Any = None) -> str:
+    """Fall back to the configured default for anything not in WHISPER_MODEL_TIERS, rather
+    than letting a bad/empty value reach whisper.load_model() as an opaque failure."""
+    if model_tier in WHISPER_MODEL_TIERS:
+        return model_tier
+    return WHISPER_MODEL_SIZE if WHISPER_MODEL_SIZE in WHISPER_MODEL_TIERS else "small"
+
+
+def _get_local_whisper_model(model_tier: str):
+    """Load (or return the cached) local Whisper model for the given tier."""
+    if model_tier not in _LOCAL_WHISPER_MODELS:
+        print(f"[Vault] Loading local Whisper '{model_tier}' model...")
+        _LOCAL_WHISPER_MODELS[model_tier] = local_whisper.load_model(model_tier)
+        print(f"[Vault] Local Whisper '{model_tier}' model loaded and ready.")
+    return _LOCAL_WHISPER_MODELS[model_tier]
 
 
 def preload_whisper_model():
-    """Preload the local Whisper model into memory on startup, if the package is installed."""
-    global LOCAL_WHISPER_MODEL, local_whisper, HAS_LOCAL_WHISPER
-    if HAS_LOCAL_WHISPER and LOCAL_WHISPER_MODEL is None and local_whisper is not None:
+    """Preload the default-tier local Whisper model into memory on startup, if the package
+    is installed. Other tiers load lazily on first use (see _get_local_whisper_model)."""
+    global HAS_LOCAL_WHISPER
+    if HAS_LOCAL_WHISPER and local_whisper is not None:
         try:
-            print(f"[Vault] Preloading local Whisper '{WHISPER_MODEL_SIZE}' model into GPU/RAM...")
-            LOCAL_WHISPER_MODEL = local_whisper.load_model(WHISPER_MODEL_SIZE)
-            print("[Vault] Local Whisper model loaded and ready.")
+            _get_local_whisper_model(_resolve_model_tier(None))
         except Exception as e:
             print(f"[Vault] Could not preload local Whisper model: {e}")
 
@@ -158,14 +181,17 @@ def fetch_youtube_transcript(youtube_url: str) -> Dict[str, Any]:
         raise ValueError(f"Failed to fetch transcript for YouTube video '{meta['title']}': {str(e)}")
 
 
-def transcribe_file_with_whisper(file_path: str, file_name: str) -> Dict[str, Any]:
+def transcribe_file_with_whisper(file_path: str, file_name: str, model_tier: Optional[str] = None) -> Dict[str, Any]:
     """
     Transcribes audio/video files using:
-    1. OpenAI Whisper API (if OPENAI_API_KEY is set)
-    2. Local Whisper model (preloaded or loaded on demand)
+    1. OpenAI Whisper API (if OPENAI_API_KEY is set) — always uses OpenAI's hosted model;
+       `model_tier` only applies to the local fallback below, since the API isn't sized the
+       same way.
+    2. Local Whisper model, loaded (or reused from cache) at `model_tier`
+       ('base' / 'small' / 'medium', default 'small' — see WHISPER_MODEL_TIERS).
     Raises explicit error if transcription fails.
     """
-    global LOCAL_WHISPER_MODEL, local_whisper
+    resolved_tier = _resolve_model_tier(model_tier)
     api_key = os.getenv("OPENAI_API_KEY")
     clean_title = os.path.splitext(file_name)[0].replace("-", " ").replace("_", " ").title()
 
@@ -220,11 +246,8 @@ def transcribe_file_with_whisper(file_path: str, file_name: str) -> Dict[str, An
     # 2. Local Whisper model fallback
     if HAS_LOCAL_WHISPER:
         try:
-            if LOCAL_WHISPER_MODEL is None and local_whisper is not None:
-                print(f"[Vault] Loading local Whisper '{WHISPER_MODEL_SIZE}' model for {file_name}...")
-                LOCAL_WHISPER_MODEL = local_whisper.load_model(WHISPER_MODEL_SIZE)
-
-            result = LOCAL_WHISPER_MODEL.transcribe(file_path)
+            model = _get_local_whisper_model(resolved_tier)
+            result = model.transcribe(file_path)
 
             segments = []
             for seg in result.get('segments', []):
