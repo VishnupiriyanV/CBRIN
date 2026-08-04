@@ -148,3 +148,33 @@ class TestDeleteVideoCleansUpKeyframes:
             "source media file — otherwise keyframes for deleted videos leak on disk forever"
         )
         assert all(c["video_id"] != "vid-a" for c in store.chunks)
+
+
+class TestVisualOnlyChunksSuppressionInSpokenSearch:
+    def test_visual_only_chunks_suppressed_in_spoken_search(self):
+        from vector_store import VectorStore
+        store = VectorStore()
+        store.chunks = [
+            {
+                "id": "chunk-1",
+                "video_id": "vid-visual",
+                "text": "[Visual Scene 00:00 - 00:15]",
+                "is_visual_only": True,
+                "visual_status": "ok"
+            },
+            {
+                "id": "chunk-2",
+                "video_id": "vid-speech",
+                "text": "This is a real spoken sentence about artificial intelligence.",
+                "is_visual_only": False,
+                "visual_status": "failed"
+            }
+        ]
+        store.is_fitted = True
+
+        resp = store.search(query="Visual Scene", search_mode="spoken")
+        # Visual Scene synthetic chunk must not appear in spoken search results
+        for r in resp["results"]:
+            assert r.get("text") != "[Visual Scene 00:00 - 00:15]"
+            assert r.get("is_visual_only") is not True
+

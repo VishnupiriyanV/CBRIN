@@ -289,33 +289,61 @@ def transcribe_file_with_whisper(file_path: str, file_name: str, model_tier: Opt
                         "duration": float(seg.get('end', 0.0) - seg.get('start', 0.0))
                     })
 
-            if segments:
-                total_seconds = int(segments[-1]['start'] + segments[-1]['duration'])
-                hours = total_seconds // 3600
-                minutes = (total_seconds % 3600) // 60
-                secs = total_seconds % 60
-                duration_formatted = f"{hours}:{minutes:02d}:{secs:02d}" if hours > 0 else f"{minutes:02d}:{secs:02d}"
+            if not segments:
+                # Whisper ran fine but found no speech (silent video, music, visual demo).
+                # Create synthetic visual scene segments so non-speech video can still be indexed for visual/image search.
+                print(f"[Vault] No speech detected in {file_name}. Generating visual scene segments for image search...")
+                duration_sec = 0.0
+                try:
+                    import media_service
+                    info = media_service.probe(file_path)
+                    duration_sec = info.duration_sec
+                except Exception as probe_err:
+                    print(f"[Vault] Media probe error for non-speech file {file_name}: {probe_err}")
 
-                video_meta = {
-                    "id": content_hash_id(file_path),
-                    "title": clean_title,
-                    "channel": "Local Media",
-                    "is_local": True,
-                    "total_seconds": total_seconds,
-                    "duration_formatted": duration_formatted,
-                    "thumbnail_url": "",
-                    "uploaded_at": __import__('datetime').datetime.now().isoformat(),
-                    "category": "Local Upload",
-                    "status": "fully_indexed",
-                    "error_message": None
-                }
-                return {"video_meta": video_meta, "segments": segments}
+                if duration_sec > 0:
+                    interval = 15.0
+                    curr = 0.0
+                    while curr < duration_sec:
+                        dur = min(interval, duration_sec - curr)
+                        s_min, s_sec = int(curr // 60), int(curr % 60)
+                        e_min, e_sec = int((curr + dur) // 60), int((curr + dur) % 60)
+                        segments.append({
+                            "text": f"[Visual Scene {s_min:02d}:{s_sec:02d} - {e_min:02d}:{e_sec:02d}]",
+                            "start": round(curr, 2),
+                            "duration": round(dur, 2),
+                            "is_visual_only": True
+                        })
+                        curr += interval
+                else:
+                    segments.append({
+                        "text": "[Visual Scene 00:00 - 00:15]",
+                        "start": 0.0,
+                        "duration": 15.0,
+                        "is_visual_only": True
+                    })
 
-            # Whisper ran fine but found no recognizable speech (silence, music-only, a tone/
-            # test file). Falling through to the "openai-whisper is not installed" message
-            # below would be actively wrong here — it IS installed and just ran — so raise a
-            # specific error instead of misdiagnosing a working install as a missing one.
-            raise ValueError(f"No speech was detected in '{file_name}'.")
+            total_seconds = int(segments[-1]['start'] + segments[-1]['duration'])
+            hours = total_seconds // 3600
+            minutes = (total_seconds % 3600) // 60
+            secs = total_seconds % 60
+            duration_formatted = f"{hours}:{minutes:02d}:{secs:02d}" if hours > 0 else f"{minutes:02d}:{secs:02d}"
+
+            video_meta = {
+                "id": content_hash_id(file_path),
+                "title": clean_title,
+                "channel": "Local Media",
+                "is_local": True,
+                "total_seconds": total_seconds,
+                "duration_formatted": duration_formatted,
+                "thumbnail_url": "",
+                "uploaded_at": __import__('datetime').datetime.now().isoformat(),
+                "category": "Local Upload",
+                "status": "fully_indexed",
+                "error_message": None,
+                "is_non_speech": any(s.get('is_visual_only') for s in segments)
+            }
+            return {"video_meta": video_meta, "segments": segments}
 
         except ValueError:
             raise
