@@ -153,6 +153,177 @@ export interface BrandKit {
 export const RENDER_PRESETS = ['tiktok', 'shorts', 'linkedin', 'x'] as const;
 export type RenderPreset = typeof RENDER_PRESETS[number];
 
+// --- STUDIO (Layer 4): text-in/text-out creator tools ---
+
+export interface StudioToolInfo {
+  id: string;
+  label: string;
+  description: string;
+  needs_timestamps: boolean;
+}
+
+export interface VoiceProfile {
+  niche: string;
+  audience: string;
+  tone: string[];
+  banned_words: string[];
+  sample_content: string[];
+  default_platforms: string[];
+  cta_style: string;
+  auto_seeded: boolean;
+}
+
+export interface PlatformRule {
+  label: string;
+  style: string;
+  char_limit: number;
+  hashtag_min: number;
+  hashtag_max: number;
+  hashtag_placement: string;
+  links_clickable: boolean;
+}
+
+export type PlatformRules = Record<string, PlatformRule>;
+
+export interface StudioUsageSummary {
+  runs_this_hour: number;
+  runs_today: number;
+  runs_this_month: number;
+  tokens_in_month: number;
+  tokens_out_month: number;
+  model: string;
+  limits: { max_input_words: number; max_runs_per_hour: number };
+}
+
+export interface ToolRun {
+  id: string;
+  tool_id: string;
+  inputs: Record<string, any>;
+  output: Record<string, any>;
+  meta: Record<string, any>;
+  created_at: number;
+}
+
+export interface ParsedTranscriptInfo {
+  format: 'srt' | 'vtt' | 'plain';
+  has_timestamps: boolean;
+  sentence_count: number;
+  duration_sec: number | null;
+  word_count: number;
+}
+
+export interface TranscriptSourceSentence {
+  sentence_idx: number;
+  text: string;
+  start_sec: number;
+  end_sec: number;
+}
+
+export interface GuardrailNotes {
+  frameworks_missing?: string[];
+  banned_words_removed?: string[];
+  low_diversity?: boolean;
+  dominant_formula?: string;
+}
+
+export interface RepurposerOutput {
+  linkedin: { hook: string; body: string; cta: string };
+  thread: { n: number; text: string }[];
+  notes: string[];
+  carousel: { title: string; slides: { n: number; headline: string; body: string }[]; caption: string };
+  extraction: { core_argument: string; frameworks: string[]; strongest_example: string; contrarian_line: string };
+  guardrail_notes: GuardrailNotes;
+  run_id: string;
+  tool_id: string;
+}
+
+export interface ShowNotesChapter {
+  time: string | null;
+  title: string;
+  estimated: boolean;
+}
+
+export interface ShowNotesOutput {
+  summary: string;
+  show_notes: string[];
+  chapters: ShowNotesChapter[];
+  titles: string[];
+  promo: string;
+  timestamp_mode: 'real' | 'estimated' | 'none';
+  run_id: string;
+  tool_id: string;
+}
+
+export interface TitleIdea {
+  text: string;
+  formula: string;
+  why: string;
+  promise: string;
+  char_count: number;
+  over_limit: boolean;
+}
+
+export interface HookIdea {
+  text: string;
+  style: string;
+}
+
+export interface ThumbnailIdea {
+  text: string;
+  word_count: number;
+  over_word_limit: boolean;
+}
+
+export interface TitlesOutput {
+  titles: TitleIdea[];
+  hooks: HookIdea[];
+  thumbnail_text: ThumbnailIdea[];
+  guardrail_notes: GuardrailNotes;
+  run_id: string;
+  tool_id: string;
+}
+
+export type CommentFlag = 'hostile' | 'sensitive' | 'business' | 'spam' | null;
+
+export interface ReplyItem {
+  comment: string;
+  flag: CommentFlag;
+  flag_reason: string;
+  suggested_reply: string | null;
+}
+
+export interface RepliesOutput {
+  replies: ReplyItem[];
+  run_id: string;
+  tool_id: string;
+}
+
+export interface CaptionResult {
+  caption: string;
+  hashtags: string[];
+  char_count: number;
+  char_limit: number;
+  over_limit: boolean;
+}
+
+export type CaptionsOutput = Record<string, CaptionResult | string | undefined>;
+
+export interface MomentItem {
+  start: string;
+  end: string;
+  score: number;
+  reason: string;
+  suggested_title: string;
+  type: string;
+  visual_dependent: boolean;
+}
+
+export interface MomentsOutput {
+  moments: MomentItem[];
+  run_id: string;
+  tool_id: string;
+}
+
 export interface Highlight {
   chunk_id: string;
   video_id: string;

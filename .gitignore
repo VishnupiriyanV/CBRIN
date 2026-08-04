@@ -70,3 +70,4 @@ backend/data/
 .cache/
 .vite/
 .turbo/
+.pytest_cache/

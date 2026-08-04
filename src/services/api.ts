@@ -1,4 +1,8 @@
-import { SearchResponse, VideoItem, LibraryStats, Highlight, EngineJob, ClipCandidate, BrandKit } from '../types';
+import {
+  SearchResponse, VideoItem, LibraryStats, Highlight, EngineJob, ClipCandidate, BrandKit,
+  StudioToolInfo, VoiceProfile, PlatformRules, PlatformRule, StudioUsageSummary, ToolRun,
+  ParsedTranscriptInfo, TranscriptSourceSentence,
+} from '../types';
 
 // Configurable via VITE_API_URL so changing the backend's port/host doesn't require a code
 // change — and, critically, doesn't strand every already-persisted chunk whose keyframe_url
@@ -414,6 +418,111 @@ export async function engineSendFeedback(clipId: string, verdict: 'winner' | 'du
     throw new Error(detail.detail || `Feedback failed (${response.status})`);
   }
   return await response.json();
+}
+
+// --- STUDIO (Layer 4): text-in/text-out creator tools ---
+//
+// Generic JSON request helpers — the eight-line "fetch, check .ok, parse detail, throw"
+// block above is repeated ~25 times in this file for every hand-written endpoint; STUDIO's
+// dozen routes go through these instead rather than repeating it a dozen more times.
+
+async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}${path}`, init);
+  if (!response.ok) {
+    const detail = await response.json().catch(() => ({ detail: `Request to ${path} failed` }));
+    throw new Error(detail.detail || `Request to ${path} failed (${response.status})`);
+  }
+  return await response.json();
+}
+
+function getJson<T>(path: string): Promise<T> {
+  return requestJson<T>(path);
+}
+
+function postJson<T>(path: string, body?: unknown): Promise<T> {
+  return requestJson<T>(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+}
+
+function putJson<T>(path: string, body: unknown): Promise<T> {
+  return requestJson<T>(path, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+function deleteJson<T>(path: string): Promise<T> {
+  return requestJson<T>(path, { method: 'DELETE' });
+}
+
+export function studioListTools(): Promise<{ tools: StudioToolInfo[]; llm_configured: boolean }> {
+  return getJson('/studio/tools');
+}
+
+/** Pre-flight classification of a paste — call before enabling generation so tool 6 can be
+ * blocked and tool 2 can warn about estimates without spending a run. */
+export function studioParseTranscript(text: string): Promise<ParsedTranscriptInfo> {
+  return postJson('/studio/parse_transcript', { text });
+}
+
+export function studioTranscriptSource(
+  videoId: string
+): Promise<{ video_id: string; sentences: TranscriptSourceSentence[]; sentence_count: number }> {
+  return getJson(`/studio/transcript_source/${encodeURIComponent(videoId)}`);
+}
+
+/** Every STUDIO tool runs as a background job (uniform code path, free progress) — poll the
+ * returned job_id with the existing pollJob()/getJob() helpers above. */
+export function studioRun(
+  toolId: string, inputs: Record<string, any>, useVoiceProfile: boolean = true
+): Promise<{ job_id: string }> {
+  return postJson('/studio/run', { tool_id: toolId, inputs, use_voice_profile: useVoiceProfile });
+}
+
+export function studioRegenerate(runId: string, block: string): Promise<{ job_id: string }> {
+  return postJson('/studio/regenerate', { run_id: runId, block });
+}
+
+export function studioListRuns(toolId?: string, limit: number = 50): Promise<ToolRun[]> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (toolId) params.set('tool_id', toolId);
+  return getJson(`/studio/runs?${params.toString()}`);
+}
+
+export function studioGetRun(runId: string): Promise<ToolRun> {
+  return getJson(`/studio/runs/${encodeURIComponent(runId)}`);
+}
+
+export function studioDeleteRun(runId: string): Promise<{ success: boolean }> {
+  return deleteJson(`/studio/runs/${encodeURIComponent(runId)}`);
+}
+
+export function studioGetVoiceProfile(): Promise<VoiceProfile> {
+  return getJson('/studio/voice_profile');
+}
+
+export function studioUpdateVoiceProfile(patch: Partial<VoiceProfile>): Promise<VoiceProfile> {
+  return putJson('/studio/voice_profile', patch);
+}
+
+export function studioAutoseedVoiceProfile(force: boolean = false): Promise<VoiceProfile> {
+  return postJson(`/studio/voice_profile/autoseed?force=${force}`);
+}
+
+export function studioGetPlatformRules(): Promise<PlatformRules> {
+  return getJson('/studio/platform_rules');
+}
+
+export function studioUpdatePlatformRules(patch: Record<string, Partial<PlatformRule>>): Promise<PlatformRules> {
+  return putJson('/studio/platform_rules', patch);
+}
+
+export function studioGetUsage(): Promise<StudioUsageSummary> {
+  return getJson('/studio/usage');
 }
 
 /**

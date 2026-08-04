@@ -1,6 +1,6 @@
 ---
 title: Vault — Improvement Plan
-status: Proposed
+status: Partially landed — see status note below
 date: 2026-08-03
 scope: backend/ + src/ as of current HEAD
 ---
@@ -8,6 +8,8 @@ scope: backend/ + src/ as of current HEAD
 # Vault Improvement Plan
 
 Review of the actual code, not the PRD. Findings are ordered by how much they hurt: correctness bugs first, then accuracy, then honesty-of-UI, then usefulness, then hygiene.
+
+**Status as of the STUDIO (Layer 4) revision (2026-08-04).** Section numbers below are kept stable — `prd.md` cites them directly. Landed since this was written: 1.3 (content-hash IDs), the full test suite (§4 "No tests" — now 204 tests across `backend/tests`), a complete pinned `requirements.txt`, BM25 hybrid retrieval (2.5, `rank_bm25` is a dependency), the background job queue (3.3, `jobs.py`), CORS (1.7, origins are pinned). Everything else below is still open — this is not a full re-audit, just a pointer so the cross-references in `prd.md` don't read as more current than they are.
 
 ---
 

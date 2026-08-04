@@ -51,6 +51,18 @@ class TestJobLifecycle:
         assert record.result == {"ok": True}
         assert seen_stages == ["stage-one", "stage-two"]
 
+    def test_submit_accepts_a_separate_executor(self):
+        from concurrent.futures import ThreadPoolExecutor
+
+        jobs = _fresh_jobs_module()
+        own_pool = ThreadPoolExecutor(max_workers=1)
+        try:
+            job_id = jobs.submit("test-kind", lambda report: {"ok": True}, executor=own_pool)
+            assert _wait_for(lambda: jobs.get(job_id).status in ("done", "failed"))
+            assert jobs.get(job_id).status == "done"
+        finally:
+            own_pool.shutdown(wait=True)
+
     def test_failure_is_captured_not_raised(self):
         jobs = _fresh_jobs_module()
 

@@ -34,6 +34,16 @@ import clip_scoring
 import brand_kit as brand_kit_module
 import clip_renderer
 
+# STUDIO (Layer 4) — text-in/text-out creator tools built on the same llm_client/jobs
+# infrastructure ENGINE introduced. See creator-tools-integration-spec.md.
+import llm_client
+import studio_runner
+import studio_prompts
+import voice_profile
+import platform_rules
+import tool_runs
+import usage
+
 
 def _repair_stale_chunks(store: "VectorStore"):
     """
@@ -243,6 +253,21 @@ class EngineRenderRequest(BaseModel):
 class EngineFeedbackRequest(BaseModel):
     clip_id: str
     verdict: str  # "winner" | "dud"
+
+
+class StudioParseTranscriptRequest(BaseModel):
+    text: str
+
+
+class StudioRunRequest(BaseModel):
+    tool_id: str
+    inputs: Dict[str, Any]
+    use_voice_profile: Optional[bool] = True
+
+
+class StudioRegenerateRequest(BaseModel):
+    run_id: str
+    block: str
 
 
 @app.get("/")
@@ -910,6 +935,161 @@ def engine_feedback(payload: EngineFeedbackRequest):
         raise HTTPException(status_code=400, detail="verdict must be 'winner' or 'dud'.")
     label_count = clip_scoring.record_feedback(payload.clip_id, payload.verdict)
     return {"label_count": label_count}
+
+
+# --- STUDIO (Layer 4): text-in/text-out creator tools ---------------------------------
+
+@app.get("/api/studio/tools")
+def studio_list_tools():
+    """llm_configured tells the UI whether to hard-gate every tool. Unlike Vault/ENGINE,
+    these tools have no honest heuristic fallback — a rule-based 'repurpose my newsletter'
+    would be worse than nothing, so there is no degraded mode here (deliberate divergence,
+    see prd.md)."""
+    return {"tools": studio_prompts.list_tools(), "llm_configured": llm_client.is_configured()}
+
+
+@app.post("/api/studio/parse_transcript")
+def studio_parse_transcript(payload: StudioParseTranscriptRequest):
+    """Pre-flight the UI calls on paste, before a run is spent — classifies SRT/VTT/plain
+    and reports whether real timestamps are available, so tool 6 can be disabled and tool 2
+    can warn about estimates before generation runs."""
+    parsed = studio_runner.parse_transcript_input(payload.text)
+    return {
+        "format": parsed["format"],
+        "has_timestamps": parsed["has_timestamps"],
+        "sentence_count": len(parsed["segments"]),
+        "duration_sec": parsed["duration_sec"],
+        "word_count": studio_runner.word_count(payload.text),
+    }
+
+
+@app.get("/api/studio/transcript_source/{video_id}")
+def studio_transcript_source(video_id: str):
+    """Sentence units for the 'pick an indexed video' path on tools 2 and 6 — reuses the
+    same sentence extraction ENGINE's analyze step uses, so timestamps are real cue data
+    from the library, not a re-parse of anything."""
+    if video_id not in store.videos:
+        raise HTTPException(status_code=404, detail=f"Video '{video_id}' not found.")
+    sentences = _sentences_for_video(video_id)
+    return {"video_id": video_id, "sentences": sentences, "sentence_count": len(sentences)}
+
+
+def _run_studio_tool_job(tool_id: str, inputs: Dict[str, Any], use_voice_profile: bool):
+    def _job(report):
+        report("generating", 0.3, f"running {tool_id}")
+        result = studio_runner.run_tool(tool_id, inputs, use_voice_profile=use_voice_profile)
+        report("done", 1.0, "done")
+        return result
+    return _job
+
+
+@app.post("/api/studio/run")
+def studio_run(payload: StudioRunRequest):
+    spec = studio_prompts.get_tool(payload.tool_id)
+    if spec is None:
+        raise HTTPException(status_code=404, detail=f"Unknown tool '{payload.tool_id}'")
+    if not llm_client.is_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="No LLM API key configured (VAULT_LLM_API_KEY). STUDIO tools have no "
+                   "heuristic fallback for text generation.",
+        )
+    # Cheap checks (word count, hourly rate limit) run synchronously so the UI gets an
+    # immediate, specific error instead of watching a job spin up and fail. Tool-specific
+    # structural validation (e.g. tool 6's hard timestamp requirement) happens inside the
+    # job and surfaces as job.error — the same pattern ENGINE's MediaUnavailable already
+    # uses for _run_analyze_job.
+    try:
+        usage.check_input_words(spec.count_words(payload.inputs))
+        usage.check_rate_limit()
+    except usage.InputTooLong as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except usage.RateLimitExceeded as e:
+        raise HTTPException(status_code=429, detail=str(e))
+
+    use_vp = payload.use_voice_profile if payload.use_voice_profile is not None else True
+    job_id = jobs.submit(
+        f"studio_{payload.tool_id}",
+        _run_studio_tool_job(payload.tool_id, payload.inputs, use_vp),
+        executor=studio_runner.STUDIO_EXECUTOR,
+    )
+    return {"job_id": job_id}
+
+
+@app.post("/api/studio/regenerate")
+def studio_regenerate(payload: StudioRegenerateRequest):
+    run = tool_runs.get(payload.run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"Run '{payload.run_id}' not found.")
+    if not llm_client.is_configured():
+        raise HTTPException(status_code=503, detail="No LLM API key configured (VAULT_LLM_API_KEY).")
+    try:
+        usage.check_rate_limit()
+    except usage.RateLimitExceeded as e:
+        raise HTTPException(status_code=429, detail=str(e))
+
+    def _job(report):
+        report("regenerating", 0.3, f"regenerating '{payload.block}'")
+        result = studio_runner.regenerate_block(payload.run_id, payload.block)
+        report("done", 1.0, "done")
+        return result
+
+    job_id = jobs.submit(f"studio_regenerate_{run.tool_id}", _job, executor=studio_runner.STUDIO_EXECUTOR)
+    return {"job_id": job_id}
+
+
+@app.get("/api/studio/runs")
+def studio_list_runs(tool_id: Optional[str] = Query(None), limit: int = Query(50)):
+    return [r.to_dict() for r in tool_runs.list_runs(tool_id=tool_id, limit=limit)]
+
+
+@app.get("/api/studio/runs/{run_id}")
+def studio_get_run(run_id: str):
+    run = tool_runs.get(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found.")
+    return run.to_dict()
+
+
+@app.delete("/api/studio/runs/{run_id}")
+def studio_delete_run(run_id: str):
+    if not tool_runs.delete(run_id):
+        raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found.")
+    return {"success": True}
+
+
+@app.get("/api/studio/voice_profile")
+def studio_get_voice_profile():
+    return voice_profile.load()
+
+
+@app.put("/api/studio/voice_profile")
+def studio_update_voice_profile(patch: Dict[str, Any]):
+    return voice_profile.apply_edit(patch)
+
+
+@app.post("/api/studio/voice_profile/autoseed")
+def studio_autoseed_voice_profile(force: bool = Query(False)):
+    chunk_texts = [c.get("text", "") for c in store.chunks]
+    try:
+        return voice_profile.autoseed(chunk_texts=chunk_texts, force=force)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
+@app.get("/api/studio/platform_rules")
+def studio_get_platform_rules():
+    return platform_rules.load()
+
+
+@app.put("/api/studio/platform_rules")
+def studio_update_platform_rules(patch: Dict[str, Dict[str, Any]]):
+    return platform_rules.apply_edit(patch)
+
+
+@app.get("/api/studio/usage")
+def studio_get_usage():
+    return usage.summary()
 
 
 if __name__ == "__main__":
