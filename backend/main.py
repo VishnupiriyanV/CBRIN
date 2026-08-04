@@ -863,4 +863,21 @@ def engine_feedback(payload: EngineFeedbackRequest):
 
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    # reload=True makes uvicorn spawn its actual worker as a SEPARATE process via
+    # multiprocessing's "spawn" start method (CreateProcess on Windows), rather than running
+    # in this process. On a venv whose pyvenv.cfg `home` points at the Windows Store Python
+    # package (verified live on this box — `python -m venv` was originally run from the Store
+    # alias), that spawned worker silently escapes the venv's isolated site-packages and runs
+    # against the Store package's own environment instead — even though sys.executable and
+    # multiprocessing.set_executable() both correctly report this venv's python.exe, and even
+    # though everything else (imports, pip, this top-level process) behaves normally. The
+    # practical symptom: packages installed into this venv (e.g. imageio-ffmpeg, yt-dlp)
+    # silently don't exist for real requests, while `pip show` / manual scripts say they do.
+    # This is a known failure mode of venvs created from the Store Python, not fixable from
+    # inside this process — so reload defaults OFF. Opt back in with VAULT_RELOAD=1 if your
+    # venv's `home` (see .venv/pyvenv.cfg) is a normal python.org install instead.
+    reload_enabled = os.environ.get("VAULT_RELOAD", "0") == "1"
+    if not reload_enabled:
+        print("[Vault API] Auto-reload disabled by default (see comment above __main__). "
+              "Restart the server manually after editing backend code, or set VAULT_RELOAD=1.")
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=reload_enabled)

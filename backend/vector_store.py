@@ -631,6 +631,38 @@ class VectorStore:
         print(f"[Vault] Indexed {len(self.chunks)} chunks.")
 
     @staticmethod
+    def _suppress_overlapping(candidates: List[Dict[str, Any]], overlap_threshold: float = 0.5) -> List[Dict[str, Any]]:
+        """
+        Greedy non-max suppression on [start_sec, end_sec] within the same video. Candidates
+        must already be sorted by score descending.
+
+        A small library (total chunk count below the top-30 retrieval pool) makes nearly
+        every sentence a "candidate" regardless of relevance, and the ±1-sentence window-merge
+        step (search() step 3) then produces several large merged windows that substantially
+        overlap in time — e.g. four "results" that all cover roughly the same 90-second span
+        of one video, just anchored on different starting sentences, differing only in which
+        concepts happened to get attached to match_reason. That reads as four distinct answers
+        when it's really the same moment restated. Keep only the highest-scored candidate per
+        overlapping time region instead of returning near-duplicates as if they were different
+        moments.
+        """
+        kept: List[Dict[str, Any]] = []
+        for cand in candidates:
+            cand_dur = cand['end_sec'] - cand['start_sec']
+            is_duplicate = False
+            for k in kept:
+                if k['video_id'] != cand['video_id']:
+                    continue
+                overlap = min(cand['end_sec'], k['end_sec']) - max(cand['start_sec'], k['start_sec'])
+                shorter = min(cand_dur, k['end_sec'] - k['start_sec'])
+                if shorter > 0 and overlap / shorter >= overlap_threshold:
+                    is_duplicate = True
+                    break
+            if not is_duplicate:
+                kept.append(cand)
+        return kept
+
+    @staticmethod
     def _reciprocal_rank_fusion(score_arrays: List[np.ndarray], k: int = 60) -> np.ndarray:
         """
         Fuse multiple rankers (dense cosine, BM25) into one candidate-selection score via
@@ -935,13 +967,14 @@ class VectorStore:
         # single query would silently return zero results despite good candidates existing.
         # Fall back to unranked top-K instead of pretending a calibrated cutoff still applies.
         if search_mode != 'visual_scenes' and not reranker_active and merged_candidates:
-            for item in merged_candidates[:top_k]:
+            for item in self._suppress_overlapping(merged_candidates)[:top_k]:
                 item['confidence'] = 'unranked'
                 results.append(_attach_match_reason(item))
             message = ("Relevance reranker is unavailable right now, so these matches are "
                        "unranked best-effort results rather than confidence-scored ones.")
         else:
             qualifying = [c for c in merged_candidates if c['score'] >= relevance_cutoff]
+            qualifying = self._suppress_overlapping(qualifying)
             if qualifying:
                 for item in qualifying[:top_k]:
                     item['confidence'] = 'strong' if item['score'] >= strong_cutoff else 'possible'
@@ -950,7 +983,7 @@ class VectorStore:
                 # Nothing cleared the relevance bar — this is deliberately an empty result
                 # set, not a best-effort guess (2.2). Surface the closest few candidates
                 # separately so the UI can say "closest matches" instead of a bare void (3.2).
-                for item in merged_candidates[:3]:
+                for item in self._suppress_overlapping(merged_candidates)[:3]:
                     item['confidence'] = 'weak'
                     near_misses.append(_attach_match_reason(item))
 

@@ -281,6 +281,14 @@ def transcribe_file_with_whisper(file_path: str, file_name: str, model_tier: Opt
                 }
                 return {"video_meta": video_meta, "segments": segments}
 
+            # Whisper ran fine but found no recognizable speech (silence, music-only, a tone/
+            # test file). Falling through to the "openai-whisper is not installed" message
+            # below would be actively wrong here — it IS installed and just ran — so raise a
+            # specific error instead of misdiagnosing a working install as a missing one.
+            raise ValueError(f"No speech was detected in '{file_name}'.")
+
+        except ValueError:
+            raise
         except Exception as e:
             raise ValueError(f"Local Whisper transcription failed for {file_name}: {str(e)}")
 

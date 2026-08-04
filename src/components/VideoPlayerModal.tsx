@@ -23,24 +23,15 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
     setIframeError(false);
   }, [result]);
 
-  if (!result) return null;
-
-  const youtubeId = result.youtube_id;
-  const startSec = result.start_sec || 0;
-  const isLocal = result.is_local || !youtubeId;
-
-  // Formulate reliable YouTube Embed URL using standard domain + origin query parameters
-  const originParam = typeof window !== 'undefined' ? encodeURIComponent(window.location.origin) : '';
-  const embedUrl = youtubeId
-    ? `https://www.youtube.com/embed/${youtubeId}?start=${startSec}&autoplay=1&rel=0&enablejsapi=1&origin=${originParam}`
-    : null;
-
-  const directYoutubeLink = youtubeId
-    ? `https://www.youtube.com/watch?v=${youtubeId}&t=${startSec}s`
-    : null;
-
-  const localMediaUrl = isLocal ? `${API_BASE_URL}/media/${result.video_id}` : null;
-  const displayPoster = resolveMediaUrl(result.keyframe_url) || resolveMediaUrl(result.thumbnail_url);
+  // `result` starts null (modal closed) and later becomes a real object once a search result
+  // is clicked. The early `if (!result) return null` used to sit BETWEEN hook declarations —
+  // React calls a different number of hooks depending on whether `result` is null, which
+  // violates the Rules of Hooks (hook order/count must be identical on every render). With no
+  // error boundary above this component, that mismatch crashed the whole render tree the
+  // instant a result was clicked — the reported "jump to moment is just a black screen".
+  // Fix: every hook below runs unconditionally on every render; only the JSX return is
+  // conditional on `result`.
+  const startSec = result?.start_sec || 0;
 
   // Auto-seek local video when loaded
   useEffect(() => {
@@ -61,6 +52,29 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [onClose]);
+
+  if (!result) return null;
+
+  const youtubeId = result.youtube_id;
+  const isLocal = result.is_local || !youtubeId;
+
+  // autoplay=1 without mute=1 gets silently blocked by browser autoplay policy on most
+  // embedded iframes, which can leave the YouTube player stuck on a black frame instead of
+  // falling back to a paused thumbnail — muted autoplay is the reliable cross-browser fix,
+  // and the player's own controls let the viewer unmute immediately. enablejsapi=1/origin=
+  // were previously set for postMessage-based JS API control, but nothing in this codebase
+  // ever creates a YT.Player or listens for player events — dropped as dead config that only
+  // added another way for the handshake to silently fail.
+  const embedUrl = youtubeId
+    ? `https://www.youtube.com/embed/${youtubeId}?start=${startSec}&autoplay=1&mute=1&rel=0`
+    : null;
+
+  const directYoutubeLink = youtubeId
+    ? `https://www.youtube.com/watch?v=${youtubeId}&t=${startSec}s`
+    : null;
+
+  const localMediaUrl = isLocal ? `${API_BASE_URL}/media/${result.video_id}` : null;
+  const displayPoster = resolveMediaUrl(result.keyframe_url) || resolveMediaUrl(result.thumbnail_url);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-black/85 animate-fade-in">
