@@ -54,18 +54,21 @@ export const Header: React.FC<HeaderProps> = ({
     <header className="border-b border-hairline/80 sticky top-0 z-40 bg-canvas/85">
       <div className="relative max-w-7xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between gap-4">
         
-        {/* Left: Brand Header & Telemetry */}
-        <div className="flex items-center gap-3 shrink-0 max-w-[calc(50%-145px)]">
-          <div className="flex items-center gap-2 shrink-0">
-            <CbrinLogo />
-            <h1 className="text-base font-semibold tracking-wider text-ink font-mono">CBRIN</h1>
-          </div>
+        {/* Left: Active View Title & Telemetry */}
+        <div className="flex items-center gap-3 shrink-0">
+          <span className="text-sm font-medium text-ink capitalize flex items-center gap-1.5 font-mono">
+            {activeView === 'search' && <Search className="w-3.5 h-3.5 text-accent-sunset" />}
+            {activeView === 'agent' && <Bot className="w-3.5 h-3.5 text-accent-sunset" />}
+            {activeView === 'engine' && <Sparkles className="w-3.5 h-3.5 text-accent-sunset" />}
+            {activeView === 'studio' && <Wand2 className="w-3.5 h-3.5 text-accent-sunset" />}
+            <span>{activeView}</span>
+          </span>
 
           {/* Library Telemetry Capsule */}
           {totalVideos > 0 && (
             <button
               onClick={onOpenProgress}
-              className="hidden xl:flex items-center gap-2 px-2.5 py-1 rounded-full border border-hairline/80 bg-canvas-card/80 hover:bg-canvas-soft hover:border-hairline-bright transition-all text-[11px] font-mono group cursor-pointer overflow-hidden shrink"
+              className="hidden lg:flex items-center gap-2 px-2.5 py-1 rounded-full border border-hairline/80 bg-canvas-card/80 hover:bg-canvas-soft hover:border-hairline-bright transition-all text-[11px] font-mono group cursor-pointer overflow-hidden shrink"
               title="Click to view full indexing pipeline telemetry & progress"
             >
               {failedCount > 0 ? (
@@ -91,81 +94,9 @@ export const Header: React.FC<HeaderProps> = ({
                 <Sparkles className="w-3 h-3 text-accent-sunset shrink-0" />
                 <span>{totalChunks} CHUNKS</span>
               </div>
-
-              <div className="hidden 2xl:flex items-center gap-2 shrink-0">
-                <span className="text-hairline-bright">•</span>
-                <div className="flex items-center gap-1 text-ink-mute group-hover:text-ink">
-                  <FileVideo className="w-3 h-3 text-ink-mute shrink-0" />
-                  <span>{totalVideos} MEDIA</span>
-                </div>
-
-                {totalChunks > 0 && (
-                  <>
-                    <span className="text-hairline-bright">•</span>
-                    <div className="flex items-center gap-1 text-ink-mute group-hover:text-ink">
-                      <Eye className="w-3 h-3 text-ink-mute shrink-0" />
-                      <span>{visualIndexedCount}/{totalChunks} VISUAL</span>
-                    </div>
-                  </>
-                )}
-              </div>
-
-              <span className="text-hairline-bright shrink-0">•</span>
-              <Activity className="w-3 h-3 text-accent-sunset opacity-60 group-hover:opacity-100 transition-opacity shrink-0" />
             </button>
           )}
         </div>
-
-        {/* Center: Tool Selector (Search vs Engine) - Absolute Centered relative to page container */}
-        {onChangeView && (
-          <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-auto z-10">
-            <div className="flex items-center gap-0.5 p-0.5 rounded-full border border-hairline bg-canvas-soft">
-              <button
-                onClick={() => onChangeView('agent')}
-                className={`px-3.5 py-1 rounded-full text-[11px] font-mono transition-all flex items-center gap-1 ${
-                  activeView === 'agent'
-                    ? 'bg-accent-sunset text-black font-medium'
-                    : 'text-ink-mute hover:text-ink'
-                }`}
-              >
-                <Bot className="w-3 h-3" />
-                <span>Agent</span>
-              </button>
-              <button
-                onClick={() => onChangeView('search')}
-                className={`px-3.5 py-1 rounded-full text-[11px] font-mono transition-all ${
-                  activeView === 'search'
-                    ? 'bg-canvas-card text-ink border border-hairline-bright font-medium'
-                    : 'text-ink-mute hover:text-ink'
-                }`}
-              >
-                Search
-              </button>
-              <button
-                onClick={() => onChangeView('engine')}
-                className={`px-3.5 py-1 rounded-full text-[11px] font-mono transition-all flex items-center gap-1 ${
-                  activeView === 'engine'
-                    ? 'bg-canvas-card text-accent-sunset border border-hairline-bright font-medium'
-                    : 'text-ink-mute hover:text-ink'
-                }`}
-              >
-                <Sparkles className="w-3 h-3" />
-                <span>Engine</span>
-              </button>
-              <button
-                onClick={() => onChangeView('studio')}
-                className={`px-3.5 py-1 rounded-full text-[11px] font-mono transition-all flex items-center gap-1 ${
-                  activeView === 'studio'
-                    ? 'bg-canvas-card text-accent-sunset border border-hairline-bright font-medium'
-                    : 'text-ink-mute hover:text-ink'
-                }`}
-              >
-                <Wand2 className="w-3 h-3" />
-                <span>Studio</span>
-              </button>
-            </div>
-          </div>
-        )}
 
         {/* Right: Actions */}
         <div className="flex items-center gap-2 shrink-0">

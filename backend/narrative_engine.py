@@ -26,8 +26,8 @@ PAYOFF_BEAT_TYPES = {"punchline", "confession", "turning_point", "lesson", "payo
 MIN_CLIP_SEC = 12.0
 MAX_CLIP_SEC = 75.0
 
-# Above roughly this many words, window the transcript for Groq's free-tier token caps
-# (ENGINE-PLAN.md Phase 2: "Above ~8k input tokens, window into 60-sentence passes").
+# Above roughly this many words, window the transcript for the LLM provider's free-tier
+# token caps (ENGINE-PLAN.md Phase 2: "Above ~8k input tokens, window into 60-sentence passes").
 WINDOW_SENTENCE_COUNT = 60
 WINDOW_OVERLAP = 10
 WORD_COUNT_WINDOW_THRESHOLD = 6000

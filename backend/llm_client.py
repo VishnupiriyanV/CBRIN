@@ -1,26 +1,55 @@
 """
 Provider-agnostic OpenAI-wire-compatible chat/JSON adapter for ENGINE's narrative analysis.
 
-Groq's API is OpenAI-wire-compatible, so this needs zero new packages — `openai>=1.0` is
-already a dependency (backend/requirements.txt), currently used only for hosted Whisper at
-transcript_service.py. Keeping the provider behind VAULT_LLM_BASE_URL/VAULT_LLM_MODEL env
-vars means Groq, Cerebras, OpenRouter's free tier, or a local Ollama/llama.cpp server all
-work without a code change.
+Google's Gemini API exposes an OpenAI-wire-compatible endpoint
+(https://generativelanguage.googleapis.com/v1beta/openai/), so this needs zero new packages —
+`openai>=1.0` is already a dependency (backend/requirements.txt), currently also used for
+hosted Whisper at transcript_service.py. Keeping the provider behind VAULT_LLM_BASE_URL/
+VAULT_LLM_MODEL env vars means Gemini, Groq, Cerebras, OpenRouter's free tier, or a local
+Ollama/llama.cpp server all work without a code change — default is Gemini 2.0 Flash's free
+tier (see .env.example).
 
-Verify the exact model ID against the provider's current model list before deploying —
-Groq rotates and retires model IDs, so `llama-3.3-70b-versatile` below is a starting point,
-not a guarantee.
+Verify the exact model ID against the provider's current model list before deploying — free
+tiers rotate and retire model IDs, so `gemini-2.0-flash` below is a starting point, not a
+guarantee.
+
+BASE_URL/API_KEY/MODEL are exposed as module-level "attributes" via __getattr__ (PEP 562)
+rather than constants set once at import time, so a value change to VAULT_LLM_* env vars is
+picked up by every *cross-module* access (e.g. `llm_client.MODEL` from agent_engine.py).
+That mechanism does NOT cover bare-name references inside this module's own functions —
+Python resolves `MODEL` used directly in a function body via LOAD_GLOBAL against this
+module's real globals, never through __getattr__, so every call site in this file must use
+get_model()/get_base_url()/get_api_key() instead of the bare names.
 """
 import json
 import os
 import time
 from typing import Any, Dict, Optional
 
-BASE_URL = os.getenv("VAULT_LLM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/")
-API_KEY = os.getenv("VAULT_LLM_API_KEY")
-MODEL = os.getenv("VAULT_LLM_MODEL", "gemini-2.5-flash")
+def get_base_url() -> str:
+    return os.getenv("VAULT_LLM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/")
+
+
+def get_api_key() -> Optional[str]:
+    return os.getenv("VAULT_LLM_API_KEY")
+
+
+def get_model() -> str:
+    return os.getenv("VAULT_LLM_MODEL", "gemini-2.0-flash")
+
+
+def __getattr__(name: str) -> Any:
+    if name == "BASE_URL":
+        return get_base_url()
+    if name == "API_KEY":
+        return get_api_key()
+    if name == "MODEL":
+        return get_model()
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
+
 
 _client = None
+_client_config = None
 
 
 class LLMUnavailable(Exception):
@@ -29,14 +58,16 @@ class LLMUnavailable(Exception):
 
 
 def is_configured() -> bool:
-    return bool(API_KEY)
+    return bool(get_api_key())
 
 
 def _get_client():
-    global _client
-    if _client is None:
+    global _client, _client_config
+    current_config = (get_base_url(), get_api_key())
+    if _client is None or _client_config != current_config:
         import openai
-        _client = openai.OpenAI(base_url=BASE_URL, api_key=API_KEY)
+        _client = openai.OpenAI(base_url=current_config[0], api_key=current_config[1])
+        _client_config = current_config
     return _client
 
 
@@ -114,7 +145,7 @@ def complete_json_with_usage(
     client = _get_client()
     attempt_user = user
     last_error = None
-    usage = {"prompt_tokens": 0, "completion_tokens": 0, "model": MODEL}
+    usage = {"prompt_tokens": 0, "completion_tokens": 0, "model": get_model()}
 
     for attempt in range(max_retries + 1):
         try:
@@ -172,10 +203,10 @@ def _extract_usage(response) -> Dict[str, Any]:
         return {
             "prompt_tokens": int(getattr(raw_usage, "prompt_tokens", 0) or 0),
             "completion_tokens": int(getattr(raw_usage, "completion_tokens", 0) or 0),
-            "model": MODEL,
+            "model": get_model(),
         }
     except Exception:
-        return {"prompt_tokens": 0, "completion_tokens": 0, "model": MODEL}
+        return {"prompt_tokens": 0, "completion_tokens": 0, "model": get_model()}
 
 
 def _call_with_backoff(
@@ -187,7 +218,7 @@ def _call_with_backoff(
     for attempt in range(max_attempts):
         try:
             kwargs: Dict[str, Any] = dict(
-                model=MODEL,
+                model=get_model(),
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user", "content": user},
@@ -206,7 +237,7 @@ def _call_with_backoff(
                 # A typo'd/retired model ID deserves a clear diagnosis, not a silent
                 # degraded-mode fallback that hides a one-line config fix.
                 raise LLMUnavailable(
-                    f"LLM provider rejected model '{MODEL}': {msg}. Verify VAULT_LLM_MODEL "
+                    f"LLM provider rejected model '{get_model()}': {msg}. Verify VAULT_LLM_MODEL "
                     f"against the provider's current model list."
                 )
             if is_rate_limit and attempt < max_attempts - 1:
