@@ -23,6 +23,7 @@ DEFAULT_BRAND_KIT: Dict[str, Any] = {
     "caption": {
         "position": "bottom-center",
         "case": "upper",
+        "size": "medium",
         "max_words_per_cue": 4,
         "highlight_style": "active-word-accent",
         "animation": "pop",

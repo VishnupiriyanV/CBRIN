@@ -140,6 +140,7 @@ export interface BrandKit {
   caption: {
     position: string;
     case: string;
+    size: string;
     max_words_per_cue: number;
     highlight_style: string;
     animation: string;

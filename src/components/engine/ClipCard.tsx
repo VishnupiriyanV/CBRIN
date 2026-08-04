@@ -180,11 +180,11 @@ export const ClipCard: React.FC<ClipCardProps> = ({ clip, rank }) => {
               <a
                 key={preset}
                 href={engineClipFileUrl(clip.id, preset)}
-                download
-                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-hairline bg-canvas-soft hover:border-hairline-bright text-[10px] font-mono text-ink hover:text-accent-sunset transition-all"
+                download={`${clip.id}-${preset}.mp4`}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-accent-sunset/40 bg-accent-sunset/10 hover:bg-accent-sunset hover:text-black hover:border-accent-sunset text-[10px] font-semibold text-accent-sunset transition-all"
               >
-                <Download className="w-3 h-3" />
-                {PRESET_LABELS[preset as RenderPreset] || preset}
+                <Download className="w-3.5 h-3.5" />
+                <span>Download {PRESET_LABELS[preset as RenderPreset] || preset}</span>
               </a>
             ))}
           </div>

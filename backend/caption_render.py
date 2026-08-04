@@ -16,6 +16,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 FONTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "fonts")
 
+# Caption font size as a fraction of frame height. "medium" (0.045) is the original hardcoded
+# value; small/large give creators a real size control instead of one fixed size for every
+# preset regardless of aspect ratio or how dense the on-screen text needs to be.
+_CAPTION_SIZE_FRACTIONS = {"small": 0.032, "medium": 0.045, "large": 0.062}
+
 _FONT_FILENAMES = {
     "Inter": "Inter-Bold.ttf",
     "Anton": "Anton-Regular.ttf",
@@ -105,12 +110,28 @@ def _draw_frame(cue: Cue, active_idx: int, size: Tuple[int, int], brand_kit: Dic
     position = caption_cfg.get("position", "bottom-center")
     margins = brand_kit.get("safe_margins", {"top": 0.12, "bottom": 0.18})
 
-    font_size = max(18, int(height * 0.045))
-    font = _resolve_font(brand_kit.get("fonts", {}).get("caption", "Inter"), font_size)
+    size_fraction = _CAPTION_SIZE_FRACTIONS.get(caption_cfg.get("size", "medium"), _CAPTION_SIZE_FRACTIONS["medium"])
+    font_size = max(18, int(height * size_fraction))
+    caption_font_name = brand_kit.get("fonts", {}).get("caption", "Inter")
+    font = _resolve_font(caption_font_name, font_size)
 
     line = " ".join(w["text"] for w in cue.words)
     bbox = draw.textbbox((0, 0), line, font=font, stroke_width=2)
     text_w = bbox[2] - bbox[0]
+
+    # A cue at "large" size (or just a long one — max_words_per_cue caps word COUNT, not
+    # rendered width) can end up wider than the frame; there's no line-wrapping here. Shrink
+    # the font down to fit within a safe margin instead of silently overflowing/clipping at
+    # the frame edges — verified live: a long cue at "large" ran off both sides of a
+    # 1080px-wide vertical frame.
+    max_text_w = width * 0.92
+    shrink_attempts = 0
+    while text_w > max_text_w and font_size > 14 and shrink_attempts < 8:
+        font_size = max(14, int(font_size * 0.9))
+        font = _resolve_font(caption_font_name, font_size)
+        bbox = draw.textbbox((0, 0), line, font=font, stroke_width=2)
+        text_w = bbox[2] - bbox[0]
+        shrink_attempts += 1
 
     x = max(0, (width - text_w) // 2)
     if position == "bottom-center":

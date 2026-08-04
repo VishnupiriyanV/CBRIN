@@ -119,6 +119,16 @@ def render_clip(
             "-framerate", "12", "-i", os.path.join(tmp_png_dir, "cap_%05d.png"),
             "-filter_complex", filter_complex,
             "-map", "[out]", "-map", "0:a?",
+            # overlay=format=auto picks its own internal working format when blending the
+            # RGBA caption PNGs onto the (yuv420p) source frames — verified live: it upgrades
+            # to a wider chroma format (yuv444p / H.264 "High 4:4:4 Predictive" profile), and
+            # without an explicit output pixel format libx264 just encodes that as-is. ffmpeg
+            # itself decodes it fine, so it looked like a working file in every check that
+            # used ffmpeg — but that profile has essentially no support outside ffmpeg-based
+            # players: Windows' native player, browsers, and phones all reported it as a
+            # corrupt file. Force back to yuv420p, the universally-compatible standard every
+            # H.264 "High"-profile player supports.
+            "-pix_fmt", "yuv420p",
             "-c:v", "libx264", "-crf", "20", "-preset", "veryfast",
             "-c:a", "aac",
             out_path,
