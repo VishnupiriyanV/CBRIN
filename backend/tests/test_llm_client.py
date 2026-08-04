@@ -44,6 +44,17 @@ class TestCompleteJsonHappyPath:
         assert result == [{"beat_type": "hook"}]
         assert mock_client.chat.completions.create.call_count == 1
 
+    def test_dict_wrapper_unwrapped_to_array(self):
+        schema = {"type": "array", "items": {"required": ["index", "suggested_reply"]}}
+        mock_client = MagicMock()
+        # LLMs in json_object mode often wrap array outputs in dicts like {"replies": [...], "meta": "..."}
+        mock_client.chat.completions.create.return_value = _mock_response(
+            json.dumps({"replies": [{"index": 0, "suggested_reply": "Thanks!"}], "notes": "some text"})
+        )
+        with patch.object(lc, "API_KEY", "fake-key"), patch.object(lc, "_get_client", return_value=mock_client):
+            result = lc.complete_json("system", "user", schema)
+        assert result == [{"index": 0, "suggested_reply": "Thanks!"}]
+
 
 class TestCompleteJsonNotConfigured:
     def test_raises_llm_unavailable_when_no_key(self):

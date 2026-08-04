@@ -124,12 +124,27 @@ def complete_json_with_usage(
             usage = _extract_usage(response)
             raw = response.choices[0].message.content
             parsed = json.loads(raw)
-            # The model may wrap the array in {"items": [...]} since json_object mode
-            # requires a top-level object — unwrap the sole list-valued key if present.
+            # The model may wrap the array in {"items": [...]}, {"replies": [...]}, etc., since
+            # json_object mode requires a top-level object — unwrap the list if present.
             if schema.get("type") == "array" and isinstance(parsed, dict):
-                list_values = [v for v in parsed.values() if isinstance(v, list)]
-                if len(list_values) == 1:
-                    parsed = list_values[0]
+                unwrapped = None
+                # Check standard list wrapper keys first
+                for key in ("items", "comments", "replies", "flags", "results", "data", "list", "array"):
+                    if key in parsed and isinstance(parsed[key], list):
+                        unwrapped = parsed[key]
+                        break
+
+                if unwrapped is None:
+                    list_values = [v for v in parsed.values() if isinstance(v, list)]
+                    if len(list_values) == 1:
+                        unwrapped = list_values[0]
+                    elif len(list_values) > 1:
+                        unwrapped = max(list_values, key=len)
+                    elif parsed and all(isinstance(v, dict) for v in parsed.values()):
+                        unwrapped = list(parsed.values())
+
+                if unwrapped is not None:
+                    parsed = unwrapped
 
             error = _validate(parsed, schema)
             if error is None:
