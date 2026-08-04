@@ -77,6 +77,43 @@ class TestSchemaValidationRetry:
         assert mock_client.chat.completions.create.call_count == 2
 
 
+class TestCompleteJsonWithUsage:
+    def test_returns_usage_alongside_parsed_result(self):
+        schema = {"type": "array", "items": {"required": ["beat_type"]}}
+        mock_client = MagicMock()
+        resp = _mock_response(json.dumps({"beats": [{"beat_type": "hook"}]}))
+        resp.usage = MagicMock(prompt_tokens=120, completion_tokens=40)
+        mock_client.chat.completions.create.return_value = resp
+        with patch.object(lc, "API_KEY", "fake-key"), patch.object(lc, "_get_client", return_value=mock_client):
+            parsed, usage = lc.complete_json_with_usage("system", "user", schema)
+        assert parsed == [{"beat_type": "hook"}]
+        assert usage["prompt_tokens"] == 120
+        assert usage["completion_tokens"] == 40
+
+    def test_missing_usage_block_defaults_to_zero(self):
+        schema = {"type": "array", "items": {"required": ["beat_type"]}}
+        mock_client = MagicMock()
+        resp = _mock_response(json.dumps({"beats": [{"beat_type": "hook"}]}))
+        del resp.usage  # simulate a provider that omits usage entirely
+        mock_client.chat.completions.create.return_value = resp
+        with patch.object(lc, "API_KEY", "fake-key"), patch.object(lc, "_get_client", return_value=mock_client):
+            parsed, usage = lc.complete_json_with_usage("system", "user", schema)
+        assert usage["prompt_tokens"] == 0
+        assert usage["completion_tokens"] == 0
+
+    def test_temperature_and_max_tokens_passed_through(self):
+        schema = {"type": "array", "items": {"required": ["beat_type"]}}
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = _mock_response(
+            json.dumps({"beats": [{"beat_type": "hook"}]})
+        )
+        with patch.object(lc, "API_KEY", "fake-key"), patch.object(lc, "_get_client", return_value=mock_client):
+            lc.complete_json("system", "user", schema, temperature=0.8, max_tokens=500)
+        _, kwargs = mock_client.chat.completions.create.call_args
+        assert kwargs["temperature"] == 0.8
+        assert kwargs["max_tokens"] == 500
+
+
 class TestModelErrorSurfacesClearly:
     def test_model_not_found_raises_llm_unavailable_with_model_name(self):
         mock_client = MagicMock()

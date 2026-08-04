@@ -454,10 +454,11 @@ class VectorStore:
 
         return chunks
 
-    def _format_timestamp(self, seconds: int) -> str:
-        hours = seconds // 3600
-        minutes = (seconds % 3600) // 60
-        secs = seconds % 60
+    def _format_timestamp(self, seconds: float) -> str:
+        sec_int = int(seconds)
+        hours = sec_int // 3600
+        minutes = (sec_int % 3600) // 60
+        secs = sec_int % 60
         if hours > 0:
             return f"{hours:02d}:{minutes:02d}:{secs:02d}"
         return f"{minutes:02d}:{secs:02d}"
@@ -796,9 +797,9 @@ class VectorStore:
                     similarities[i] = -999.0
 
         if relevance_threshold is not None:
-            scored_indices = [(idx, float(score)) for idx, score in enumerate(similarities) if float(score) >= relevance_threshold]
+            scored_indices = [(idx, float(score)) for idx, score in enumerate(similarities) if float(score) >= relevance_threshold and float(score) > -500.0]
         else:
-            scored_indices = [(idx, float(score)) for idx, score in enumerate(similarities)]
+            scored_indices = [(idx, float(score)) for idx, score in enumerate(similarities) if float(score) > -500.0]
         scored_indices.sort(key=lambda x: x[1], reverse=True)
         top_sentence_matches = scored_indices[:30]
 

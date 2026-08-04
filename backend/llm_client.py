@@ -70,11 +70,43 @@ def _validate(parsed: Dict[str, Any], schema: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def complete_json(system: str, user: str, schema: Dict[str, Any], max_retries: int = 1) -> Any:
+def complete_json(
+    system: str,
+    user: str,
+    schema: Dict[str, Any],
+    max_retries: int = 1,
+    temperature: float = 0.2,
+    max_tokens: Optional[int] = None,
+) -> Any:
     """
     Call the configured LLM with response_format=json_object, validate the parse against
     `schema`, retry once with the validation error appended on failure, then raise
     LLMUnavailable. Also retries on HTTP 429 (free-tier rate limits) with jittered backoff.
+
+    `temperature` defaults to the original 0.2 (narrative_engine's extraction use case).
+    STUDIO's idea-generation tools (repurposer, title generator) pass a higher value —
+    0.2 is too conservative for "give me 15 varied title ideas".
+    """
+    parsed, _usage = complete_json_with_usage(
+        system, user, schema, max_retries=max_retries, temperature=temperature, max_tokens=max_tokens
+    )
+    return parsed
+
+
+def complete_json_with_usage(
+    system: str,
+    user: str,
+    schema: Dict[str, Any],
+    max_retries: int = 1,
+    temperature: float = 0.2,
+    max_tokens: Optional[int] = None,
+) -> "tuple[Any, Dict[str, Any]]":
+    """
+    Same contract as complete_json, but also returns a usage dict:
+    {"prompt_tokens": int, "completion_tokens": int, "model": str}. Introduced for
+    STUDIO's usage meter (backend/usage.py) — narrative_engine's existing call sites don't
+    need token counts, so complete_json stays the primary entry point and just discards
+    the second return value.
     """
     if not is_configured():
         raise LLMUnavailable("VAULT_LLM_API_KEY is not set.")
@@ -82,10 +114,14 @@ def complete_json(system: str, user: str, schema: Dict[str, Any], max_retries: i
     client = _get_client()
     attempt_user = user
     last_error = None
+    usage = {"prompt_tokens": 0, "completion_tokens": 0, "model": MODEL}
 
     for attempt in range(max_retries + 1):
         try:
-            response = _call_with_backoff(client, system, attempt_user)
+            response = _call_with_backoff(
+                client, system, attempt_user, temperature=temperature, max_tokens=max_tokens
+            )
+            usage = _extract_usage(response)
             raw = response.choices[0].message.content
             parsed = json.loads(raw)
             # The model may wrap the array in {"items": [...]} since json_object mode
@@ -97,7 +133,7 @@ def complete_json(system: str, user: str, schema: Dict[str, Any], max_retries: i
 
             error = _validate(parsed, schema)
             if error is None:
-                return parsed
+                return parsed, usage
             last_error = error
         except (json.JSONDecodeError, Exception) as e:  # noqa: BLE001 - narrowed by re-raise below
             if isinstance(e, LLMUnavailable):
@@ -112,20 +148,41 @@ def complete_json(system: str, user: str, schema: Dict[str, Any], max_retries: i
     raise LLMUnavailable(f"LLM response failed schema validation after retry: {last_error}")
 
 
-def _call_with_backoff(client, system: str, user: str, max_attempts: int = 3):
+def _extract_usage(response) -> Dict[str, Any]:
+    """Defensive extraction — some OpenAI-wire-compatible providers omit `usage` entirely,
+    and test mocks never populate it. Never let a missing/malformed usage block fail a
+    successful generation."""
+    try:
+        raw_usage = response.usage
+        return {
+            "prompt_tokens": int(getattr(raw_usage, "prompt_tokens", 0) or 0),
+            "completion_tokens": int(getattr(raw_usage, "completion_tokens", 0) or 0),
+            "model": MODEL,
+        }
+    except Exception:
+        return {"prompt_tokens": 0, "completion_tokens": 0, "model": MODEL}
+
+
+def _call_with_backoff(
+    client, system: str, user: str, max_attempts: int = 3, temperature: float = 0.2,
+    max_tokens: Optional[int] = None,
+):
     delay = 1.0
     last_exc = None
     for attempt in range(max_attempts):
         try:
-            return client.chat.completions.create(
+            kwargs: Dict[str, Any] = dict(
                 model=MODEL,
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user", "content": user},
                 ],
                 response_format={"type": "json_object"},
-                temperature=0.2,
+                temperature=temperature,
             )
+            if max_tokens is not None:
+                kwargs["max_tokens"] = max_tokens
+            return client.chat.completions.create(**kwargs)
         except Exception as e:
             msg = str(e)
             is_rate_limit = "429" in msg or "rate" in msg.lower()

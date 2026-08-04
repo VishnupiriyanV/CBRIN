@@ -8,6 +8,12 @@ anything not yet migrated onto this queue.
 ThreadPoolExecutor(max_workers=1): serial by design. Whisper, CLIP, and ffmpeg all saturate a
 single CPU core; running them "in parallel" on a typical dev machine trades one slow success
 for two slow failures fighting over the same cores.
+
+STUDIO's text-generation tools are I/O-bound LLM calls, not CPU-bound media work — they must
+not queue behind a 40-minute transcription. `submit()` accepts an optional `executor` so
+callers with different concurrency needs (see studio_runner.py's own small pool) can opt out
+of the single-worker media queue while still getting the same JobRecord/progress/persistence
+machinery.
 """
 import json
 import os
@@ -113,11 +119,15 @@ def list_all() -> List[JobRecord]:
 
 
 def submit(kind: str, fn: Callable[[Callable[[str, float, str], None]], Dict[str, Any]],
-           video_id: Optional[str] = None) -> str:
+           video_id: Optional[str] = None, executor: Optional[ThreadPoolExecutor] = None) -> str:
     """
-    Submit `fn` to run on the single background worker thread. `fn` receives a `report`
+    Submit `fn` to run on a background worker thread. `fn` receives a `report`
     callback (stage: str, progress: float, message: str) it should call as it makes
     progress; its return value is stored as the job's `result` on success.
+
+    `executor` defaults to the module's single-worker media queue. Pass a different
+    ThreadPoolExecutor (e.g. studio_runner's) to run on a separate pool — JobRecord
+    creation, progress reporting, and disk persistence are identical either way.
     """
     job_id = str(uuid.uuid4())
     job = JobRecord(id=job_id, kind=kind, video_id=video_id, status="queued")
@@ -165,5 +175,5 @@ def submit(kind: str, fn: Callable[[Callable[[str, float, str], None]], Dict[str
                     j.updated_at = time.time()
             _save_all()
 
-    _executor.submit(_run)
+    (executor or _executor).submit(_run)
     return job_id

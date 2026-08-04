@@ -1,17 +1,17 @@
 ---
 title: Vault — Semantic Search for Your Own Content
-status: Active — MVP built, hardening in progress
-version: 0.4 (post-build revision)
+status: Active — MVP built, hardening in progress; ENGINE (Layer 3) and STUDIO (Layer 4) built on top
+version: 0.5 (post-build revision)
 owner: TBD
 last-updated: 2026-08-04
-supersedes: v0.1 (2026-08-03, pre-build draft)
+supersedes: v0.4 (2026-08-04, pre-ENGINE/STUDIO revision)
 ---
 
 # Product Requirements Document: Vault
 
-> Vault is Layer 1 of the CreatorBrain concept — a standalone MVP that proves the core loop before any of the other layers (analytics, clipping, concept testing, localization) get built.
+> Vault is Layer 1 of the CreatorBrain concept. Layer 3 (ENGINE, narrative-aware clip generation) and Layer 4 (STUDIO, six text-in/text-out creator tools) have since been built on top of it — see §4.4 and §4.5. This document remains the record of the core semantic-search loop that the other layers depend on.
 
-**This is a revision, not a fresh draft.** v0.1 described what was going to be built. This version describes what *was* built, where it diverged, and what has to be true before the demo can be shown as evidence for anything. Companion document: `IMPROVEMENT-PLAN.md`, which carries the file-level detail behind every defect referenced here.
+**This is a revision, not a fresh draft.** v0.1 described what was going to be built. This version describes what *was* built, where it diverged, and what has to be true before the demo can be shown as evidence for anything. Companion documents: `IMPROVEMENT-PLAN.md` (file-level defect detail for Vault) and `creator-tools-integration-spec.md` (STUDIO's six tools, mapped to this repo).
 
 ---
 
@@ -72,7 +72,39 @@ Diverges from v0.1 §9 in two significant ways.
 
 ### 4.3 Current library
 
-**2 videos, 22 chunks, ~12 minutes of audio.** v0.1 called for 10–20 videos. Every quality claim in this document is currently unverified.
+The library is currently empty (0 videos) as of this revision — the one test video was removed during manual testing. Every retrieval-quality claim in this document is unverified until a real test library is re-ingested (§9).
+
+### 4.4 ENGINE (Layer 3) — as built
+
+Narrative-aware clip generation on top of Vault's indexed sentences. Delivered per `ENGINE-PLAN.md`'s build plan (that document is now superseded by this section and has been removed — it described a completed build while still reading "not started").
+
+```
+Vault (read-only to ENGINE)        ENGINE
+─────────────────────────         ────────
+store.chunks ──sentences──►  narrative_engine ──beats──► clip_scoring ──► clip_renderer ──► .mp4
+store.videos ──metadata────►                                                    ▲
+data/keyframes/media ───────►  media_service, word_timing ──────────────────────┘
+                                jobs.py drives all of it off the request thread
+```
+
+**Storage** (`backend/data/`): `clips.json`, `brand_kit.json`, `words/{video_id}.json`, `media/{video_id}.mp4`, `clips/{clip_id}/{preset}.mp4`.
+
+**Core guarantee.** Every clip is a contiguous range of `MultimodalEngine.segment_transcript_into_sentences` output with its full dependency chain intact — it is structurally impossible for ENGINE to cut between a setup and its punchline. `clip_eval.py` regression-guards a **0% mid-sentence-start rate**. No fabricated numbers: ranking is five named signals rendered as a breakdown, never a "predicted engagement %".
+
+**Disclosed v1 limitations:**
+- **Static center-crop reframing.** An off-centre speaker is badly framed; face-tracking crop is the known v2 addition. Disclosed in-product next to the aspect-ratio picker.
+- **Captions are Pillow-rendered PNGs, not libass subtitles** — deliberate, since the bundled `imageio-ffmpeg` static build's subtitle-filter support isn't guaranteed. Gives exact control over brand fonts/colors/per-word highlighting at the cost of a custom render pipeline.
+- **Degraded mode**, same pattern as Vault's reranker fallback: no LLM key → heuristic beats (discourse markers, Q/A pairing, cross-encoder similarity to bundled archetypes), `degraded: true` surfaced in the UI.
+
+### 4.5 STUDIO (Layer 4) — as built
+
+Six text-in/text-out AI creator tools from `creator-tools-integration-spec.md`, reusing ENGINE-era infrastructure (`llm_client`, `jobs.py`) rather than the no-code SaaS stack the spec was originally written against. Full detail, guardrail-by-guardrail mapping, and per-tool spec live in `creator-tools-integration-spec.md`.
+
+**Delivered:** shared foundation (Voice Profile, Platform Rules config, run history, usage meter, transcript parser, `studio_runner`/`studio_prompts`), all `/api/studio/*` routes, all six tool backends with their guardrails, and a full frontend (Studio nav, six tool screens, Voice Profile/Platform Rules/Run History panels). 71 backend unit tests cover the guardrail mechanisms with a mocked LLM; one live end-to-end run (Repurposer, through the actual browser UI against a real model) confirmed the run→poll→render→regenerate pipeline and framework-preservation guardrail hold against real output, not just mocks.
+
+**Not yet built:** `backend/eval/studio_eval.py`, the committed-fixture conformance harness against real LLM output the STUDIO integration plan calls for (unit tests mock the LLM; nothing yet runs the guardrails against live generations as a repeatable, CI-style check). This is the same "do not tune by eye" gap `run_eval.py`/`clip_eval.py` already closed for Vault/ENGINE — open until STUDIO gets its own version.
+
+**Deliberate divergence from Vault/ENGINE's degraded-mode pattern:** STUDIO hard-gates on `llm_configured` rather than falling back to a heuristic. A rule-based "repurpose my newsletter" has no honest non-LLM equivalent — unlike search (BM25 fallback) or ENGINE (discourse-marker heuristic), a degraded STUDIO output would be worse than an explicit "no key configured" state.
 
 ---
 
@@ -118,6 +150,17 @@ The "% match" figure is a sigmoid of a cross-encoder logit — a ranking signal 
 
 Stories 6–8 are new — they describe capability that was built but never specified.
 
+**STUDIO (Layer 4) — new stories:**
+
+| # | Story | Priority | Status |
+|---|---|---|---|
+| 9 | I paste a newsletter/blog post and get platform-native repurposed posts, with any framework I coined preserved verbatim. | P1 | Works — verified live |
+| 10 | I paste or pick an indexed transcript and get show notes, chapters, and titles, with timestamps only where real cue data supports them. | P1 | Works (unit-tested; not yet live-verified) |
+| 11 | I get YouTube title/hook/thumbnail-text ideas tagged by formula, never silently truncated past 60 characters. | P2 | Works (unit-tested) |
+| 12 | I paste a batch of comments and get suggested replies, with hostile/sensitive/business ones flagged for me to handle personally instead of auto-replied to. | P1 | Works (unit-tested) |
+| 13 | I paste one caption and get platform-optimized versions for six platforms, editable per-platform rules, never truncated over the limit. | P2 | Works (unit-tested) |
+| 14 | I paste a timestamped stream transcript and get a ranked moment map — the tool refuses untimed input rather than guessing. | P2 | Works (unit-tested) |
+
 ---
 
 ## 7. Requirements
@@ -148,6 +191,15 @@ Stories 6–8 are new — they describe capability that was built but never spec
 - Search bar, result list, per-result jump-to-moment, empty state below threshold.
 - **New:** confidence is shown as a calibrated bucket (Strong / Possible / Weak) or omitted. No raw percentage.
 - **New:** when a query falls just below cutoff, show near-misses under "Nothing strong — closest matches" rather than a bare empty state.
+
+### 7.6 STUDIO requirements
+
+- Hard input cap ~15,000 words, enforced before any LLM call (`usage.check_input_words`), plus a 60-runs/hour rate limit — both checked synchronously in the route handler so the UI gets an immediate error rather than a failed job.
+- **Timestamp honesty is structural, not a prompt instruction.** Show Notes and Clip-Moment Finder models emit sentence indices only; the backend derives every displayed time from parsed cue data. Clip-Moment Finder hard-rejects (422) untimed input rather than producing a plausible-looking but fabricated moment map.
+- **No account-connection invariant.** No platform SDK, no outbound call to any social platform, anywhere in STUDIO. Copy-to-clipboard is the only path from generated text to a platform.
+- Copy-to-clipboard on every output block; regenerate targets one block, not the whole run.
+- Voice Profile (niche/audience/tone/banned words/CTA style/sample content) injected into every tool's system prompt; banned words are additionally enforced as a post-hoc strip, not just a prompt instruction.
+- Usage recorded per run (tokens in/out, model) and surfaced via a usage badge — the reconciliation of the spec's "credit ledger" concept with this app having no accounts or billing.
 
 ---
 
@@ -190,7 +242,9 @@ Criteria 2–5 are new and non-negotiable. Without them there is no way to tell 
 - Multi-user accounts, billing, auth
 - Non-English transcription
 
-**Newly added non-goal:** LLM-generated summaries or answers over retrieved chunks. Retrieval quality has to be trustworthy before anything is layered on top of it.
+**Newly added non-goal:** LLM-generated summaries or answers over *retrieved search results*. This prohibits Vault from silently summarizing what a query returned — it does not prohibit STUDIO's user-initiated generation over user-supplied text (a newsletter, comments, a transcript the user pasted or picked). That boundary was ambiguous before STUDIO existed; it's Vault's retrieval output that stays untouched by generation, not "no generation anywhere in the app."
+
+**Hard architectural invariants (STUDIO and any future layer), promoted from `creator-tools-integration-spec.md`'s platform-constraints section:** no TikTok/Instagram/YouTube posting or account connection, no quota-heavy platform-API discovery/analytics features, no scraping of contact info or competitor content. Check whether a platform already ships a feature natively (e.g. YouTube's own thumbnail A/B testing) before building a competing one.
 
 **Candidate for cut:** CLIP visual search. It's the most complex subsystem, it's fundamentally broken for YouTube content (§5.6), and v0.1 didn't scope it. Cutting it would meaningfully shrink the surface area that has to be correct. Flagged as an open question rather than a decision.
 
@@ -232,6 +286,13 @@ Previously flagged as drift: the build used `shadow-2xl`, `shadow-xl`, `backdrop
 
 **Decision: the kit wins.** All box-shadow and backdrop-blur utility classes were stripped from `App.tsx`, `Header.tsx`, `HighlightsPanel.tsx`, `IndexingProgressModal.tsx`, `LibraryModal.tsx`, `SearchBar.tsx`, and `VideoPlayerModal.tsx`; `animate-pulse` status dots/badges were replaced with static ones; card radii were normalized to `rounded-lg` (8px), leaving `rounded-full` pills untouched. Hairline borders now carry elevation everywhere, as the kit specifies.
 
+**Still open, found while building STUDIO:**
+- `src/components/engine/*` (ClipCard, ClipStudio) still use `rounded-2xl`, not the mandated `rounded-lg` — not reconciled in this revision. New `src/components/ui/*` and `src/components/studio/*` components use `rounded-lg` throughout.
+- `animate-fade-in` is referenced in ~12 places across the codebase but is defined in neither `tailwind.config.js` nor `index.css` — a silent no-op class, not an animation that quietly stopped working.
+- `DESIGN-x_ai.md`, cited above as the source of the design kit, is not present in this repo.
+
+**New primitives** (`src/components/ui/`, previously empty): `cn.ts` (clsx + tailwind-merge, installed but unused until now), `Button`, `Pill`/`Tag`, `Panel`, `CopyButton` (+ `useCopyToClipboard` hook, extracted from `ResultCard.tsx`'s one-off implementation), `OutputBlock`, `CappedTextarea`. Built for STUDIO; available to any future surface.
+
 ---
 
 ## 12. Roadmap
@@ -248,6 +309,10 @@ Sequencing rationale: correctness before measurement, measurement before tuning.
 
 **If only three things get done:** fix the chunking/index mismatch (§5.1–5.2), build the eval harness (§5.3), add BM25 hybrid retrieval (§7.4). The first makes results correct, the second makes them measurable, the third is the largest single accuracy gain available.
 
+| **6** | **STUDIO foundation** — Voice Profile, Platform Rules, transcript parser, usage meter, run history, `studio_runner`/`studio_prompts`, all `/api/studio/*` routes, UI primitives | Delivered | 204/204 backend tests pass; live end-to-end run verified through the browser against a real model |
+| **7** | **STUDIO's six tools** — backend guardrails + frontend screens for Repurposer, Show Notes, Titles, Replies, Captions, Moments | Delivered | All six unit-tested (guardrail register in `creator-tools-integration-spec.md`); only Repurposer live-verified end-to-end so far |
+| **8** | **STUDIO eval harness** — `backend/eval/studio_eval.py`, real-LLM conformance checks against committed fixtures | Not started | Same "don't tune by eye" gap `run_eval.py`/`clip_eval.py` closed for Vault/ENGINE |
+
 ---
 
 ## 13. Open questions
@@ -263,6 +328,10 @@ Sequencing rationale: correctness before measurement, measurement before tuning.
 - **What's the real target library size?** Drives whether the JSON+NumPy persistence layer survives or gets replaced. 20 videos and 2,000 videos are different products.
 - **Does "hybrid" mean modes, or fusion?** Users read the mode pill as a filter; the code intends it as a retrieval strategy. The vocabulary needs settling before more modes get added.
 
+**New from STUDIO:**
+- Which niche should tool 1 (Repurposer) anchor on if this ever becomes more than a local tool? Still open — see `creator-tools-integration-spec.md`.
+- Whether STUDIO ever ships beyond local single-user use — the whole design (no auth, singleton JSON state, usage meter instead of billing) assumes it doesn't.
+
 ---
 
 ## 14. Risks
@@ -272,3 +341,4 @@ Sequencing rationale: correctness before measurement, measurement before tuning.
 - **Small library, small proof.** 2 videos proves nothing; even 15 says little about hundreds of hours. Flag this explicitly whenever the demo is used as evidence for the wider CreatorBrain thesis.
 - **Transcript accuracy is the invisible ceiling.** Whisper `base` errors propagate into chunks, embeddings, concepts, and suggested queries. No amount of retrieval tuning recovers a word the transcriber never got right.
 - **Scope has already grown ~3× past v0.1 while the core loop stayed broken.** Export, import, highlights, and visual search all shipped before basic retrieval correctness was verified. The Phase ordering above exists specifically to counter that pattern.
+- **STUDIO's guardrails are proven against mocks, not yet against a corpus of real model output.** 71 unit tests assert each guardrail (timestamp honesty, framework preservation, flagged-comment isolation, never-truncate, type diversity) holds against a mocked `llm_client.call_llm`. One live run confirmed the mechanism end-to-end on a single real generation. `backend/eval/studio_eval.py` (§12 Phase 8, not started) is what would close this the way `run_eval.py`/`clip_eval.py` did for Vault/ENGINE.

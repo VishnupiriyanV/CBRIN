@@ -1,10 +1,12 @@
-# Creator Tools — Integration Spec
+# STUDIO (Layer 4) — Creator Tools Integration Spec
 
-Six text-in / text-out AI tools for content creators. All six deliberately avoid video processing and platform write-access, so none of them require TikTok/Instagram/YouTube API approval, OAuth, or rendering infrastructure. Each is a one-day no-code build.
+Six text-in / text-out AI tools for content creators, integrated as **STUDIO**, Layer 4 of the CBRIN app (`prd.md` §4.5). All six deliberately avoid video processing and platform write-access, so none of them require TikTok/Instagram/YouTube API approval, OAuth, or rendering infrastructure.
 
-**Status:** spec / pre-build
-**Constraint:** no-code + AI only (Lovable/Bolt, Make.com, Airtable, Claude or OpenAI API, Gumroad/Lemon Squeezy/Whop)
-**Core architectural rule:** the user pastes text in, the tool returns text out. Never connect to a creator's social account.
+**Status: built.** Backend (`backend/studio_runner.py`, `studio_prompts.py`, `voice_profile.py`, `platform_rules.py`, `tool_runs.py`, `usage.py`, plus `/api/studio/*` routes in `main.py`) and frontend (`src/components/studio/*`) are implemented and unit-tested (204 backend tests pass). One tool (Repurposer) has been verified end-to-end through the live UI against a real model; `backend/eval/studio_eval.py` — a conformance harness against real LLM output for all six — has not been built yet (see `prd.md` §12 Phase 8).
+
+**This document was originally written for a no-code SaaS stack** (Lovable/Bolt, Supabase, Make.com, Lemon Squeezy/Whop) that does not describe this repo. This repo is a single-tenant local FastAPI + React app with no auth, no billing, and JSON-file persistence. The build-instruction sections below (§0.4, pricing, distribution) are kept for reference but are **not actionable against this codebase** — see the appendix at the bottom for what was cut and why. The tool specs, prompt designs, and — most importantly — the **guardrail register** (new section, below the six tools) are what this repo actually implements against.
+
+**Core architectural rule, unchanged and load-bearing:** the user pastes text in, the tool returns text out. Never connect to a creator's social account. This is enforced structurally in this repo: no platform SDK is a dependency anywhere in `backend/`, and no route makes an outbound call to any social platform.
 
 ---
 
@@ -30,17 +32,17 @@ UI render + copy-to-clipboard on every block
 Deduct credit → log run to history
 ```
 
-### 0.2 Shared components
+### 0.2 Shared components — as built in this repo
 
-| Component | Purpose | Notes |
+| Component | Spec's original idea | What's actually built |
 |---|---|---|
-| **Auth** | Email magic link | Whatever your no-code platform gives natively — don't build custom |
-| **Voice Profile** | Per-user tone settings reused across all tools | Fields: niche, audience, tone sliders, banned words, 2–3 sample posts |
-| **Credit ledger** | Meter usage without per-seat billing | Simple integer column; decrement on each run |
-| **Run history** | Let users retrieve past outputs | Big retention lever — cheap to build, users expect it |
-| **Copy-to-clipboard** | On every output block, individually | Non-negotiable UX. These tools exist to be copy-pasted |
-| **Regenerate** | Re-run a single block, not the whole job | Costs 0 or 0.5 credits |
-| **Export** | Copy-all as Markdown or plain text | Also enables the CSV path for the caption tool |
+| **Auth** | Email magic link | **Cut.** No accounts — single local user, matching the rest of this app |
+| **Voice Profile** | Per-user tone settings reused across all tools | `backend/voice_profile.py` — same load/save/`apply_edit`/`autoseed` shape as `brand_kit.py`. `GET/PUT/POST autoseed` at `/api/studio/voice_profile*`. `to_prompt_block()` injects it into every tool's system prompt |
+| **Credit ledger** | Meter usage without per-seat billing | **Reframed as a usage meter, not billing.** `backend/usage.py` — 15k-word input cap and 60-runs/hour rate limit enforced before any LLM call, token usage recorded per run, surfaced via `GET /api/studio/usage` and a header badge |
+| **Run history** | Let users retrieve past outputs | `backend/tool_runs.py` — same shape as `jobs.py`, capped at 200 records. `GET/DELETE /api/studio/runs*`, `RunHistoryPanel.tsx` |
+| **Copy-to-clipboard** | On every output block, individually | `src/components/ui/CopyButton.tsx` + `useCopyToClipboard` hook, used by every tool's `OutputBlock` |
+| **Regenerate** | Re-run a single block, not the whole job | `POST /api/studio/regenerate {run_id, block}` → `studio_runner.regenerate_block`. Default implementation re-runs the full pipeline and extracts one block; Captions has a cheaper per-platform `regenerate_fn` |
+| **Export** | Copy-all as Markdown or plain text | Not built — copy-per-block covers the "get this into my workflow" need; a copy-all/export pass was judged lower priority than the six tools themselves |
 
 ### 0.3 Voice Profile schema
 
@@ -59,7 +61,19 @@ Deduct credit → log run to history
 
 Inject this into every system prompt. It's the main differentiator against people just using raw ChatGPT.
 
-### 0.4 Recommended stack
+### 0.4 Stack — as built (supersedes the original no-code recommendation below)
+
+| Layer | As built |
+|---|---|
+| App shell + UI | React + Vite + Tailwind (existing CBRIN frontend), a third `AppView` alongside Search and ENGINE |
+| Database | JSON files under `backend/data/` — `voice_profile.json`, `platform_rules.json`, `tool_runs.json`, `tool_usage.json`. Same read-whole/write-whole convention as `brand_kit.json`/`jobs.json` |
+| LLM | Provider-agnostic over the OpenAI wire protocol via `backend/llm_client.py`, Groq by default (`VAULT_LLM_BASE_URL`/`VAULT_LLM_MODEL`/`VAULT_LLM_API_KEY`) — **not** Claude or OpenAI specifically, and not a build-time choice; swappable via env var |
+| Orchestration | Direct calls from FastAPI route handlers, run as background jobs on `studio_runner.STUDIO_EXECUTOR` (a separate pool from ENGINE's media queue) |
+| Payments | **None.** No billing exists or is planned; see the usage meter in §0.2 |
+| Landing page | None — STUDIO is a view inside the existing app, not a separate product surface |
+
+<details>
+<summary>Original no-code recommendation (not used — kept for reference only)</summary>
 
 | Layer | Pick | Fallback |
 |---|---|---|
@@ -69,6 +83,8 @@ Inject this into every system prompt. It's the main differentiator against peopl
 | Orchestration | Direct API call from app | Make.com scenario if you need multi-step |
 | Payments | Lemon Squeezy or Gumroad | Whop for community bundling |
 | Landing page | Framer or Carrd | The app's own home route |
+
+</details>
 
 ### 0.5 Cost model
 
@@ -440,7 +456,58 @@ r/Twitch, r/streaming, streamer Discords, r/podcasting for the long-form video c
 
 ---
 
+## 7. Repo Mapping
+
+| Tool | `tool_id` | Backend module / route | Frontend component |
+|---|---|---|---|
+| 1. Repurposer | `repurposer` | `studio_prompts._repurpose_run` | `studio/tools/RepurposerTool.tsx` |
+| 2. Show Notes | `show_notes` | `studio_prompts._show_notes_run` | `studio/tools/ShowNotesTool.tsx` |
+| 3. Titles & Hooks | `titles` | `studio_prompts._titles_run` | `studio/tools/TitlesTool.tsx` |
+| 4. Reply Assistant | `replies` | `studio_prompts._replies_run` | `studio/tools/RepliesTool.tsx` |
+| 5. Caption Reformatter | `captions` | `studio_prompts._captions_run` + `platform_rules.py` | `studio/tools/CaptionsTool.tsx` |
+| 6. Clip-Moment Finder | `moments` | `studio_prompts._moments_run` | `studio/tools/MomentsTool.tsx` |
+
+All six run through `POST /api/studio/run {tool_id, inputs, use_voice_profile}` → `studio_runner.run_tool`, submitted as a background job (`GET /api/jobs/{id}` to poll, same envelope ENGINE uses). Regeneration: `POST /api/studio/regenerate {run_id, block}`.
+
+## 8. Guardrail Register
+
+Every "thing to look out for" from the six tool sections above, mapped to the mechanism that enforces it and the test that guards it. This replaces prose advice with code.
+
+| # | Guardrail | Enforcement mechanism | Guarded by |
+|---|---|---|---|
+| 1 | Never fabricate timestamps | Model returns sentence indices only; backend derives all times from parsed cue data | `test_studio_shownotes.py` |
+| 2 | Plain-text input → estimates marked as estimates | `estimated: true` + amber UI badge; `time: null` when no duration supplied | `test_studio_shownotes.py` |
+| 3 | Tool 6 useless without timestamps | 422 (`InputRejected`) on untimed input; UI pre-flight blocks the button before a run is spent | `test_studio_moments.py` |
+| 4 | Never connect to a social account; no auto-posting | No platform SDK, no outbound platform calls anywhere in the codebase | Architecture + `prd.md` §10 |
+| 5 | Flagged comments must not get AI replies | Two-pass classify-then-reply; the reply-generation call never receives a flagged comment's text | `test_studio_replies.py` |
+| 6 | No bulk-accept without reading | No copy-all control on the reply set; per-reply copy only, flagged section has no copy control at all | `RepliesTool.tsx` |
+| 7 | Preserve named frameworks verbatim | Stage-A extraction + verbatim substring check (`appears_in_source`) across all output blocks | `test_studio_repurpose.py` |
+| 8 | No invented facts, stats, or quotes | Same substring-verification technique `narrative_engine.py` uses for `quotable_line` | `test_studio_repurpose.py` |
+| 9 | Banned words list | `studio_runner.enforce_banned_words` walks every string leaf in the output centrally, in `run_tool()`, for all six tools | `test_studio_runner.py` |
+| 10 | Titles under 60 chars | `char_count` computed and `over_limit` flagged — never silently truncated | `test_studio_titles.py` |
+| 11 | No thumbnail A/B-testing promise | Output is text only, validator-checked word count | `test_studio_titles.py` |
+| 12 | Formula variety, not N of the same title | Enum-validated formula tags + >60%-dominance check → one retry with an explicit diversify instruction | `test_studio_titles.py` |
+| 13 | Platform rules in editable config, not the prompt | `platform_rules.py` + `data/platform_rules.json` + `PUT /api/studio/platform_rules` | `test_platform_rules.py` |
+| 14 | Rewrite, don't truncate | Over-limit → one regenerate naming the overflow; slicing is never a code path | `test_studio_captions.py` |
+| 15 | No hashtag walls | Hashtag count trimmed to the configured max | `test_studio_captions.py` |
+| 16 | Diversify moment types | >60%-dominant type is capped, weakest excess instances dropped | `test_studio_moments.py` |
+| 17 | Visual-dependent moments marked lower-confidence | `visual_dependent` field passed through from the model, badge-rendered | `test_studio_moments.py` |
+| 18 | Include lead-in so the clip has setup | `_expand_lead_in` walks the start back ~15s of sentences before the payoff | `test_studio_moments.py` |
+| 19 | Hard input cap ~15k words | `usage.check_input_words` → 422, checked synchronously before any LLM call | `test_usage.py` |
+| 20 | Rate limit per hour | `usage.check_rate_limit` → 429 | `test_usage.py` |
+| 21 | Usage visibility | Token usage recorded per run; `GET /api/studio/usage` + `UsageBadge.tsx` | `test_usage.py` |
+| 22 | Long transcripts exceed context | `studio_runner.window_sentences`, same 60-sentence/10-overlap constants as `narrative_engine.py` | `test_studio_runner.py` |
+| 23 | Copy-to-clipboard on every block | `OutputBlock` always renders a `CopyButton` when `copyText` is supplied | UI review |
+| 24 | Regenerate one block, not the whole job | `POST /api/studio/regenerate` | `test_studio_runner.py` |
+| 25 | SRT/VTT parsing edge cases | BOM, CRLF, `NOTE` blocks, cue settings, inline tags, comma/dot decimals, MM:SS form, rolling-caption dedup, nearly-SRT fallback | `test_transcript_parser.py` |
+| 26 | STUDIO must not starve ENGINE's job queue | Separate `STUDIO_EXECUTOR` pool via `jobs.submit(executor=)` | `test_jobs.py` |
+| 27 | Tests must never touch real creator data | New path constants added in both places in `paths.py`, covered by the existing autouse guard | `test_paths.py` |
+
+Not yet built: `backend/eval/studio_eval.py`, a conformance harness that asserts these guardrails against **real** LLM output on committed fixtures (unit tests above mock the LLM). See `prd.md` §12 Phase 8.
+
 ## Build Order & Rollout
+
+**Note on the per-tool "Build: ~N hours" estimates below:** those were written against the no-code stack in §0.4 and don't hold for this repo — the shared foundation alone (Voice Profile, usage meter, transcript parser, `studio_runner`, UI primitives) was most of a day by itself, and the guardrail mechanisms in §8 are most of the remaining work per tool. As actually built: foundation ~1 day, each tool ~0.4–0.75 day. Treat the numbers below as the original no-code plan's estimate, not this repo's.
 
 ### Recommended sequence
 
@@ -482,8 +549,15 @@ None of the six tools above touch any of these. That's by design — keep it tha
 
 ## Open Decisions
 
-- [ ] One combined app or six separate landing pages? (Recommend: one app, six routes, separate landing pages for SEO/positioning)
-- [ ] Free tier vs. free trial — free tier likely better for #3 and #5, trial for the rest
-- [ ] Claude vs. OpenAI — test both on the same 10 real inputs before committing
-- [ ] Whether run history is free or paid-tier only
-- [ ] Which single niche to anchor tool #1 on (the more specific, the better it converts)
+- [x] ~~One combined app or six separate landing pages?~~ → One app, six tool screens under a single Studio nav — resolved by this being a feature of CBRIN, not a standalone product.
+- [x] ~~Free tier vs. free trial~~ → N/A, no billing exists.
+- [x] ~~Claude vs. OpenAI~~ → Neither is hardcoded — provider-agnostic behind `VAULT_LLM_BASE_URL`/`VAULT_LLM_MODEL` (Groq by default).
+- [x] ~~Whether run history is free or paid-tier only~~ → N/A, always available (no tiers).
+- [ ] Which single niche to anchor tool #1 on — still genuinely open if this ever becomes more than a local tool.
+- [ ] **New:** whether STUDIO ever ships beyond local single-user use. Every design decision in §0.2 (usage meter not billing, no accounts, JSON files not a database) assumes it doesn't.
+
+---
+
+## Appendix: pricing & distribution (original no-code plan, not actionable against this repo)
+
+The pricing and distribution guidance embedded in each tool section above (subscription tiers, Reddit communities, lifetime-deal strategy) was written for shipping these as standalone paid products. Nothing in this repo's build depends on it, and it isn't referenced by any code or route — it's kept only in case this ever becomes a real product decision, not because it's part of the current integration.
