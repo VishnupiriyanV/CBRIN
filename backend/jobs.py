@@ -1,11 +1,11 @@
 """
-In-process background job queue for ENGINE's long-running work (Whisper word-timing
-re-transcription, ffmpeg renders). /api/upload_transcribe is a blocking POST today
-(IMPROVEMENT-PLAN.md 3.3); ENGINE's analyze/render calls are slower still, so they must not
-block the request thread. This module is generic enough that upload_transcribe could move
-onto it later, but that migration is explicitly out of scope for this change.
+In-process background job queue shared by ingestion (upload_transcribe / YouTube ingest —
+see main.py's _run_upload_job / _run_youtube_ingest_job, IMPROVEMENT-PLAN.md 3.3) and ENGINE's
+long-running work (Whisper word-timing re-transcription, ffmpeg renders). All of it used to
+either block the request thread for as long as the underlying work took, or still does for
+anything not yet migrated onto this queue.
 
-ThreadPoolExecutor(max_workers=1): serial by design. Whisper and ffmpeg both saturate a
+ThreadPoolExecutor(max_workers=1): serial by design. Whisper, CLIP, and ffmpeg all saturate a
 single CPU core; running them "in parallel" on a typical dev machine trades one slow success
 for two slow failures fighting over the same cores.
 """

@@ -65,18 +65,15 @@ def ensure_words(
         report("words", 0.05, "loading Whisper model")
 
     media_service.ffmpeg_exe()  # ensures ffmpeg is on PATH before Whisper shells out to it
-    transcript_service.preload_whisper_model()
-    model = transcript_service.LOCAL_WHISPER_MODEL
-    if model is None:
-        # preload may have failed (package missing, or OOM); try one more direct load so the
-        # error surfaces clearly rather than a silent None-attribute crash below.
-        if not transcript_service.HAS_LOCAL_WHISPER or transcript_service.local_whisper is None:
-            raise RuntimeError(
-                "Local Whisper ('openai-whisper') is not installed — word-level timing "
-                "requires it. Install backend/requirements.txt."
-            )
-        model = transcript_service.local_whisper.load_model(transcript_service.WHISPER_MODEL_SIZE)
-        transcript_service.LOCAL_WHISPER_MODEL = model
+    if not transcript_service.HAS_LOCAL_WHISPER or transcript_service.local_whisper is None:
+        raise RuntimeError(
+            "Local Whisper ('openai-whisper') is not installed — word-level timing "
+            "requires it. Install backend/requirements.txt."
+        )
+    # Reuses whichever tier the ingest path last loaded for this process (cached per-tier in
+    # transcript_service._LOCAL_WHISPER_MODELS) rather than a separate faster-whisper instance
+    # (ENGINE-PLAN.md explicitly defers that upgrade).
+    model = transcript_service._get_local_whisper_model(transcript_service._resolve_model_tier(None))
 
     if report:
         report("words", 0.15, "transcribing with word-level timestamps")

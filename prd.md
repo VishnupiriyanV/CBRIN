@@ -1,86 +1,206 @@
 ---
 title: Vault — Semantic Search for Your Own Content
-status: Draft
-version: 0.1 (MVP)
+status: Active — MVP built, hardening in progress
+version: 0.4 (post-build revision)
 owner: TBD
-last-updated: 2026-08-03
+last-updated: 2026-08-04
+supersedes: v0.1 (2026-08-03, pre-build draft)
 ---
 
 # Product Requirements Document: Vault
 
-> Vault is Layer 1 of the CreatorBrain concept — a standalone MVP that proves the core loop before any of the other layers (analytics, clipping, concept testing, localization) get built. This PRD scopes only that MVP: search your own content library in plain language.
+> Vault is Layer 1 of the CreatorBrain concept — a standalone MVP that proves the core loop before any of the other layers (analytics, clipping, concept testing, localization) get built.
+
+**This is a revision, not a fresh draft.** v0.1 described what was going to be built. This version describes what *was* built, where it diverged, and what has to be true before the demo can be shown as evidence for anything. Companion document: `IMPROVEMENT-PLAN.md`, which carries the file-level detail behind every defect referenced here.
+
+---
 
 ## 1. Problem
 
-Creators with a large back-catalog (podcast episodes, YouTube videos, newsletters) cannot search what they've already said. YouTube search only indexes titles/descriptions, not spoken content. The result: creators re-cover topics they've already addressed, can't find their own best material to repurpose, and lose the value of their own back-catalog.
+Creators with a large back-catalog (podcast episodes, YouTube videos, newsletters) cannot search what they've already said. YouTube search only indexes titles and descriptions, not spoken content. The result: creators re-cover topics they've already addressed, can't find their own best material to repurpose, and lose the value of their own back-catalog.
 
 There is currently no product that lets a creator type a plain-language question and get back the exact moment, across their whole library, where they said it.
 
+*(Unchanged from v0.1. The problem statement survived contact with the build.)*
+
 ## 2. Goal
 
-Ship a working demo, in two days, that proves one thing: **semantic search beats keyword search on a creator's own content.** A query like "when did I talk about imposter syndrome" should return the right clip even if that exact phrase was never spoken.
+Prove one thing: **semantic search beats keyword search on a creator's own content.** A query like "when did I talk about imposter syndrome" should return the right clip even if that exact phrase was never spoken.
 
-This is a proof-of-concept, not the production Vault. Scope is deliberately narrow — see Non-Goals.
+**Revision to v0.1:** the original goal was "ship a working demo in two days." That shipped, and then some. The goal is now **"make the demo's claims true and measurable."** The gap between what the code appears to do and what it actually does is the central risk — see §5.
 
 ## 3. Target user
 
 A single creator (or small team) with an existing library of long-form audio/video content — YouTube, podcast, or raw files — who wants to find and reuse things they've already said.
 
-**Primary use case (MVP):** "I remember saying something like X. Where?"
+**Primary use case:** "I remember saying something like X. Where?"
 
-## 4. Non-Goals (explicitly out of scope for this PRD)
+---
+
+## 4. What actually got built
+
+v0.1 scoped a search bar over a local vector index. The delivered system is substantially larger. Recording it here so scope decisions are made against reality.
+
+### 4.1 Delivered beyond the original scope
+
+| Capability | Status | Notes |
+|---|---|---|
+| YouTube ingest via transcript API + oEmbed metadata | Working | No OAuth, single URL at a time |
+| Local file upload + Whisper transcription | Working | Local `base` model, or OpenAI API if key present |
+| Cross-encoder reranking (`ms-marco-MiniLM-L-6-v2`) | Working | Not in v0.1 scope |
+| CLIP visual/keyframe indexing | Partial — see §5.6 | Not in v0.1 scope |
+| Disk persistence + restart survival | Working | Answers v0.1 open question #3 |
+| Highlights / bookmarks | Working backend, partial UI | Note field unreachable from UI |
+| Export (JSON / ZIP / CSV) + library import | Working | Not in v0.1 scope |
+| In-app playback with seek, for both local and YouTube | Working | Answers v0.1 open question #2 — both are supported |
+| Failed-ingest visibility with error messages | Working | Not in v0.1 scope |
+
+### 4.2 Technical stack as built
+
+Diverges from v0.1 §9 in two significant ways.
+
+| Layer | v0.1 planned | As built | Why it matters |
+|---|---|---|---|
+| Transcription | Whisper API | Local Whisper `base`, API optional | `base` is the accuracy floor for everything downstream |
+| Embeddings | `text-embedding-3-small` | `all-MiniLM-L6-v2` (384-dim, local) | Free and offline; weaker, and dilution effects are real at 384 dims |
+| Vector store | ChromaDB | JSON + NumPy `.npy`, brute-force cosine | Fine at this scale; full-file rewrite on every save won't hold past ~10k chunks |
+| Reranking | *not planned* | Cross-encoder, added | Good addition; its score is currently misrepresented in the UI |
+| Backend | FastAPI | FastAPI | As planned |
+| Frontend | SPA | React + Vite + Tailwind | As planned |
+
+**Model choice is now a product decision, not an implementation detail.** Local models mean zero cost and no API key, but `base` Whisper mangles proper nouns and technical vocabulary — exactly the high-value search terms. See §8, Phase 4.
+
+### 4.3 Current library
+
+**2 videos, 22 chunks, ~12 minutes of audio.** v0.1 called for 10–20 videos. Every quality claim in this document is currently unverified.
+
+---
+
+## 5. Known defects — blocking correctness
+
+These are the reason this revision exists. Full detail in `IMPROVEMENT-PLAN.md` §1–§2.
+
+### 5.1 The index on disk is incompatible with the search code
+Search builds and merges result windows using `sentence_idx`. No chunk in `data/chunks.json` has that field. Every chunk reads as `0`, which makes the merge condition always true — so every candidate from a video collapses into one blob with fabricated timestamps, and "jump to moment" lands in the wrong place. **This breaks user story #3 and #4 below.**
+
+### 5.2 Sentence chunking never runs
+Stored chunks are 45-second sliding windows from the fallback branch. The sentence-level small-to-big pipeline the code documents is dead in practice. The segmenter also crashes on multi-sentence Whisper segments and produces one giant chunk for unpunctuated auto-captions.
+
+### 5.3 Nothing measures accuracy
+v0.1 §10 set "5 test queries return the correct moment" as the bar. Nothing tests this. No eval harness exists, so no tuning decision can be justified and no quality claim can be defended.
+
+### 5.4 The empty state is unreachable
+The relevance threshold sits below the noise floor for the embedding model, so unrelated chunks clear it routinely. The product cannot currently say *"you haven't covered this"* — it returns a confident wrong answer instead. **This breaks user story #5, and it is the more damaging failure mode in a demo.**
+
+### 5.5 Two of four search modes are decorative
+`HYBRID`, `QUESTIONS`, `VISUAL`, `TOPICS` are offered in the UI. Only `VISUAL` branches in code; the other three are byte-identical. There is also no lexical retrieval anywhere, so "hybrid" is a misnomer — proper nouns, product names, and guest names are the known weak spot.
+
+### 5.6 Visual search is not moment-level for YouTube
+Every chunk of a YouTube video shares the same video thumbnail as its "keyframe," so all chunks have identical visual embeddings. Visual search over YouTube content can rank whole videos but never moments — while the UI badges each result as visually indexed.
+
+### 5.7 The displayed match percentage is not a similarity
+The "% match" figure is a sigmoid of a cross-encoder logit — a ranking signal on an arbitrary scale, not comparable across queries. A wrong-looking 84% costs more trust than showing no number.
+
+---
+
+## 6. User stories — revised with status
+
+| # | Story | Priority | Status |
+|---|---|---|---|
+| 1 | I upload or point to 10–20 videos/audio files so Vault can index them. | P0 | Works per-file; blocked at scale by no ingest progress (§7.3) |
+| 2 | I type a plain-language query and get the moments where I discussed that topic, even in different words. | P0 | Works, quality unverified (§5.3) |
+| 3 | Each result shows source file, text snippet, and timestamp. | P0 | **Broken** — timestamps unreliable (§5.1) |
+| 4 | I click a result and jump straight to that moment. | P1 | **Broken** — seeks to wrong position (§5.1) |
+| 5 | If nothing matches well, I see a clear empty state, not forced results. | P1 | **Broken** — threshold miscalibrated (§5.4) |
+| 6 | I bookmark a moment and come back to it later. | P1 | Works; note field unreachable from UI |
+| 7 | I export results and take them into my editing workflow. | P2 | Works (JSON / CSV / ZIP) |
+| 8 | I search what was *shown on screen*, not just what was said. | P2 | Works for local files only (§5.6) |
+
+Stories 6–8 are new — they describe capability that was built but never specified.
+
+---
+
+## 7. Requirements
+
+### 7.1 Ingestion
+- Accept local video/audio files (single, multi-select, or folder), or a YouTube URL. No OAuth.
+- **New:** video IDs must be content-addressed (SHA-1 of file bytes), not `hash()`-derived. Current IDs change across process restarts, silently duplicating the library.
+- **New:** duplicate uploads must be rejected before transcription runs, not after.
+
+### 7.2 Transcription
+- Preserve segment-level timestamps.
+- **New:** model tier must be user-selectable (`base` / `small` / `medium`), defaulting to `small`. `faster-whisper` makes `small` cheaper than today's `base`.
+
+### 7.3 Chunking + embedding
+- Group transcript into 1–3 sentence units with an enforced hard cap (~40s / 80 words) for unpunctuated transcripts.
+- Store chunk text, source, start/end timestamp, `sentence_idx`, and vector together.
+- **New:** the index must carry a version stamp. On load, a stale or missing version forces a full re-chunk rather than silently running against incompatible data.
+- **New:** embedding must be incremental. Full-corpus re-embed on every added video is O(n²) across a library build.
+- **New:** ingest must run as a background job with per-stage progress (download → transcribe → chunk → embed → keyframes), polled by the existing progress modal. A 60-minute podcast currently blocks a single HTTP request for roughly an hour.
+
+### 7.4 Search
+- Accept natural language, return ranked moments with source, timestamp, snippet, and confidence.
+- **New:** retrieval must be genuinely hybrid — BM25 fused with dense vectors via Reciprocal Rank Fusion. Dense-only search is structurally weak on proper nouns.
+- **New:** the relevance cutoff applies to the *reranker* score, not the retriever's, and is calibrated from an eval negative set rather than chosen by eye.
+- **New:** search modes reduce to two honest ones — **Spoken** and **On-screen** — unless `questions` and `topics` are given real implementations.
+
+### 7.5 Results UI
+- Search bar, result list, per-result jump-to-moment, empty state below threshold.
+- **New:** confidence is shown as a calibrated bucket (Strong / Possible / Weak) or omitted. No raw percentage.
+- **New:** when a query falls just below cutoff, show near-misses under "Nothing strong — closest matches" rather than a bare empty state.
+
+---
+
+## 8. Non-functional requirements
+
+| | v0.1 target | Revised | Note |
+|---|---|---|---|
+| Query latency | <2s for 20 videos | <2s for 20 videos | Currently met; reranking is the cost centre |
+| Pipeline cost | <$5 for 20 videos | **$0** | Local models; API path optional |
+| Ingest throughput | *unspecified* | ≤1× realtime, with visible progress | Currently ~1× realtime and *invisible* — the real blocker |
+| Scale | tens of videos | ≤50k chunks (~200 hrs) on brute force | Beyond that needs a real vector index *and* a new persistence layer |
+| Startup time | *unspecified* | <30s cold | Currently unbounded — retries permanently-failing CLIP embeds every boot |
+
+---
+
+## 9. Success criteria — revised
+
+v0.1's bar ("5 test queries work") is not measurable and can be satisfied by cherry-picking. Replaced with:
+
+**The MVP is "done" when:**
+
+1. A **15-video test library** is fully indexed, committed, and reproducible from a clean clone.
+2. An eval harness (`backend/eval/`) reports Recall@1, Recall@5, MRR, and mean seek error against a committed `queries.yaml`.
+3. **Recall@5 ≥ 0.80** on 30 positive queries whose target moment is phrased differently from the spoken words. *(This is the actual "wow" claim, stated as a number.)*
+4. **False-positive rate ≤ 0.10** on 10 negative queries about topics genuinely absent from the library. The empty state must fire.
+5. **Mean seek error ≤ 5 seconds** — "jump to moment" lands where the user expects.
+6. A user unfamiliar with the project can search, read a result, and jump to the right timestamp without instruction.
+
+Criteria 2–5 are new and non-negotiable. Without them there is no way to tell whether a change helped, and no way to defend a quality claim to anyone.
+
+**This remains a validation artifact, not a launch.** Success is "does the core idea hold up," not adoption or retention.
+
+---
+
+## 10. Non-goals (unchanged, and still worth defending)
 
 - Multi-platform account linking (YouTube OAuth, podcast RSS auto-sync, TikTok, newsletter ingestion)
 - Analytics/performance correlation (Lens), clip generation (Engine), concept testing (Lab), localization (Globe)
-- Content Gap Detector, "what have I covered 3+ times" type derived insights
+- Content Gap Detector and other derived insights — **though note §5.4: fixing the empty state is the prerequisite for this entire category**
 - Multi-user accounts, billing, auth
-- Support for more than ~20 pieces of content or non-English transcription
+- Non-English transcription
 
-These are real parts of the larger CreatorBrain vision but are not part of this MVP. Building them now is how a 2-day demo turns into a 2-month demo.
+**Newly added non-goal:** LLM-generated summaries or answers over retrieved chunks. Retrieval quality has to be trustworthy before anything is layered on top of it.
 
-## 5. User stories
+**Candidate for cut:** CLIP visual search. It's the most complex subsystem, it's fundamentally broken for YouTube content (§5.6), and v0.1 didn't scope it. Cutting it would meaningfully shrink the surface area that has to be correct. Flagged as an open question rather than a decision.
 
-| # | Story | Priority |
-|---|---|---|
-| 1 | As a creator, I upload or point to 10–20 videos/audio files so Vault can index them. | P0 |
-| 2 | As a creator, I type a plain-language query and get back the moments where I discussed that topic, even if I used different words. | P0 |
-| 3 | As a creator, each result shows me the source file, a text snippet, and a timestamp. | P0 |
-| 4 | As a creator, I can click a result and jump straight to that moment in the source video. | P1 |
-| 5 | As a creator, if nothing matches well, I see a clear empty state instead of forced/irrelevant results. | P1 |
+---
 
-## 6. Functional requirements
+## 11. Design system
 
-### 6.1 Ingestion
-- Accept a folder of local video/audio files, or a hardcoded list of YouTube URLs.
-- No OAuth, no platform account linking.
+Visual direction adapted from the xAI-inspired design kit (`DESIGN-x_ai.md`) — near-black canvas, white outline pills, restrained type, no shadows.
 
-### 6.2 Transcription
-- Transcribe each file with word/segment-level timestamps preserved (Whisper or equivalent).
-
-### 6.3 Chunking + embedding
-- Group transcript segments into ~45-second chunks with slight overlap so ideas aren't cut mid-thought.
-- Generate an embedding per chunk; store chunk text, source file, start/end timestamp, and vector together.
-
-### 6.4 Search
-- Accept a natural-language query, embed it with the same model, return the top 5 chunks by similarity.
-- Each result includes: source name, timestamp, text snippet, similarity score (internal, not necessarily shown to user).
-
-### 6.5 Results UI
-- Search bar + result list.
-- Each result is a card: snippet, source label, timestamp, "jump to moment" action.
-- Empty state when no result clears a relevance threshold.
-
-## 7. Non-functional requirements
-
-- **Latency:** query-to-results under ~2 seconds for a 20-video library.
-- **Cost:** entire pipeline (transcription + embeddings) for a 20-video demo library should run under $5.
-- **Scale:** MVP is explicitly sized for tens of videos, not hundreds of hours. No ANN infra required — brute-force cosine similarity over a local vector store is sufficient at this scale.
-
-## 8. Design system
-
-Visual direction is adapted from the uploaded xAI-inspired design kit (`DESIGN-x_ai.md`) — near-black canvas, white outline pills, restrained type, no shadows. Applied to Vault's two screens as follows.
-
-### Palette (as defined in the kit)
+### Palette
 
 | Token | Value | Use in Vault |
 |---|---|---|
@@ -90,62 +210,65 @@ Visual direction is adapted from the uploaded xAI-inspired design kit (`DESIGN-x
 | `ink` | `#ffffff` | Primary text, headline |
 | `body` | `#dadbdf` | Snippet text |
 | `body-mid` / `mute` | `#7d8187` | Timestamps, source labels |
-| `hairline` | `#212327` | All borders — no shadows anywhere |
-| `accent-sunset` | `#ff7a17` | Sparingly: highlight the matched phrase inside a snippet |
+| `hairline` | `#212327` | All borders |
+| `accent-sunset` | `#ff7a17` | Sparingly: matched phrase inside a snippet |
 
 ### Typography
 
-- Headline ("Search your library"): `display-lg` / `display-md`, Universal Sans (substitute: Inter, weight 400, `-1.8px` to `-1.2px` tracking).
+- Headline: `display-lg` / `display-md`, Universal Sans (substitute: Inter, weight 400, `-1.8px` to `-1.2px` tracking).
 - Section eyebrow ("YOUR LIBRARY", "RESULTS"): `caption-mono`, GeistMono, uppercase, positive tracking — signature move from the kit.
-- Snippet body: `body-md`.
-- Timestamp / source label: `body-sm` in `mute` color.
-- No bold anywhere. Weight 400 throughout, per the kit's "Don't bold display headlines" rule.
+- Snippet body: `body-md`. Timestamp / source label: `body-sm` in `mute`.
+- No bold anywhere. Weight 400 throughout.
 
-### Components (mapped from the kit)
+### Constraints from the kit
 
-- **Search bar** → `text-input`: `canvas-soft` fill, hairline border, `rounded.sm` (8px), no focus glow — a border color shift only.
-- **Result card** → `card-content`: `canvas-card` fill, hairline border, `rounded.sm`, no shadow.
-- **"Jump to moment"** → `button-outline-sm`: pill shape, translucent white border, transparent fill.
-- **Empty state** → `ex-empty-state-card`: `canvas-soft` fill, `rounded.sm`, generous padding (`spacing.3xl`).
-- **Section eyebrow** → `eyebrow-mono` above both the search bar and the results list.
+- Dark canvas only — no light mode.
+- Every interactive element is a pill (9999px) except cards, which stay at 8px.
+- Hairline borders carry all elevation. No drop shadows anywhere.
 
-### Explicit constraints from the kit
+### Resolved: kit is the source of truth
 
-- Dark canvas only — no light mode for this MVP.
-- Every interactive element is a pill (`rounded.pill`, 9999px) except cards, which stay at `rounded.sm` (8px).
-- Hairline borders carry all elevation. No drop shadows anywhere, including on the result cards or empty state.
+Previously flagged as drift: the build used `shadow-2xl`, `shadow-xl`, `backdrop-blur-2xl`, and `animate-pulse` throughout, and rounded cards at 12–16px rather than 8px, contradicting the "hairline borders carry all elevation, no shadows" constraint above.
 
-## 9. Technical approach (tied to the build plan)
+**Decision: the kit wins.** All box-shadow and backdrop-blur utility classes were stripped from `App.tsx`, `Header.tsx`, `HighlightsPanel.tsx`, `IndexingProgressModal.tsx`, `LibraryModal.tsx`, `SearchBar.tsx`, and `VideoPlayerModal.tsx`; `animate-pulse` status dots/badges were replaced with static ones; card radii were normalized to `rounded-lg` (8px), leaving `rounded-full` pills untouched. Hairline borders now carry elevation everywhere, as the kit specifies.
 
-- **Transcription:** Whisper API, segment-level timestamps retained.
-- **Embeddings:** `text-embedding-3-small` (or equivalent) for both chunks and queries.
-- **Storage:** ChromaDB, local — no managed vector infra needed at MVP scale.
-- **Backend:** FastAPI, single `/search` endpoint.
-- **Frontend:** single-page app implementing the components in Section 8.
+---
 
-## 10. Success criteria
+## 12. Roadmap
 
-The MVP is "done" when:
-1. A 10–20 video library is fully indexed.
-2. At least 5 test queries return the correct source moment despite not matching keywords verbatim (the core "wow" proof).
-3. A user unfamiliar with the project can search, read a result, and jump to the right timestamp without instruction.
+Sequencing rationale: correctness before measurement, measurement before tuning. Tuning an unmeasured system that returns merged blobs is wasted work. Full task detail in `IMPROVEMENT-PLAN.md` §5.
 
-This is a validation artifact, not a launch. Success is "does the core idea hold up," not adoption or retention metrics.
+| Phase | Focus | Est. | Exit criteria |
+|---|---|---|---|
+| **1** | **Correctness** — index/code mismatch, chunking rewrite, stable IDs, dedup, deps | ~1 day | Re-ingest produces chunks with `sentence_idx`, 1–3 sentences each; merging no longer collapses a video into one result |
+| **2** | **Measurement** — 15-video library, `queries.yaml`, eval harness, **baseline recorded** | ~0.5 day | `run_eval.py` prints Recall@1/@5, MRR, seek error, false-positive rate |
+| **3** | **Accuracy** — BM25 + RRF, threshold calibration, concept extraction, mode honesty | ~1–2 days | Every change ships with its eval delta; anything that doesn't beat baseline is reverted, not rationalised |
+| **4** | **Usability** — background jobs, `faster-whisper`, honest scores, filters, keyboard nav | ~1–2 days | 60-min podcast ingests with visible progress; §9 criterion 6 passes with a real stranger |
+| **5** | **Hardening** — incremental embedding, index locking, relative URLs, design reconciliation | ongoing | Clean clone reproduces the running environment |
 
-## 11. Timeline
+**If only three things get done:** fix the chunking/index mismatch (§5.1–5.2), build the eval harness (§5.3), add BM25 hybrid retrieval (§7.4). The first makes results correct, the second makes them measurable, the third is the largest single accuracy gain available.
 
-| Day | Deliverable |
-|---|---|
-| Day 1 | Ingestion → transcription → chunking → embedding → local vector index working end-to-end on the test library. |
-| Day 2 | Search endpoint + UI (styled per Section 8) + 5–10 validated demo queries. |
+---
 
-## 12. Open questions
+## 13. Open questions
 
-- Whose content library is the test set — the creator's own, or a sample library with clear usage rights?
-- Is "jump to moment" required for local files (needs an in-browser seekable player) or is YouTube-only (`&t=123s` deep link) acceptable for the demo?
-- Does the demo need to survive a restart (persisted index) or is an in-memory index for a single session acceptable?
+**Resolved from v0.1:**
+- ~~Whose content library is the test set?~~ → Currently ad-hoc (one English lesson, one databases explainer). Phase 2 requires a deliberate 15-video set with clear usage rights.
+- ~~Is "jump to moment" required for local files?~~ → Both are implemented: HTML5 seek for local, `&t=` deep link plus embed for YouTube.
+- ~~Does the demo need to survive restart?~~ → Yes, and it does. Persistence works.
 
-## 13. Risks
+**Still open:**
+- **Is CLIP visual search core, or scope creep?** (§10) Highest-leverage scope decision available.
+- **Local Whisper or OpenAI API as the canonical path?** Both are maintained, they produce different segment shapes and different accuracy. Picking one halves the ingest code.
+- **What's the real target library size?** Drives whether the JSON+NumPy persistence layer survives or gets replaced. 20 videos and 2,000 videos are different products.
+- **Does "hybrid" mean modes, or fusion?** Users read the mode pill as a filter; the code intends it as a retrieval strategy. The vocabulary needs settling before more modes get added.
 
-- **Chunking quality is the main technical risk.** Bad chunk boundaries (mid-sentence cuts) will produce mediocre results even with a fine embedding model — budget real time for tuning this, not just building the pipeline.
-- **Small library, small proof.** A 20-video demo proves the concept but says nothing about performance at hundreds of hours — flag this explicitly if the demo is shown as evidence for the larger CreatorBrain thesis.
+---
+
+## 14. Risks
+
+- **The demo currently overstates itself.** Merged-blob results with wrong timestamps, a match percentage that isn't a similarity, mode pills that do nothing, and visual-index badges on chunks with identical embeddings. Shown to a technical audience before Phase 1–2 land, this costs more credibility than showing nothing. *Highest risk in this document.*
+- **Chunking quality remains the main technical risk** — flagged in v0.1, and the diagnosis held. It went wrong in a way v0.1 didn't anticipate: not bad boundaries, but a pipeline that silently fell back to the branch it was designed to avoid. Budget real time for tuning, and verify what's *running* rather than what's written.
+- **Small library, small proof.** 2 videos proves nothing; even 15 says little about hundreds of hours. Flag this explicitly whenever the demo is used as evidence for the wider CreatorBrain thesis.
+- **Transcript accuracy is the invisible ceiling.** Whisper `base` errors propagate into chunks, embeddings, concepts, and suggested queries. No amount of retrieval tuning recovers a word the transcriber never got right.
+- **Scope has already grown ~3× past v0.1 while the core loop stayed broken.** Export, import, highlights, and visual search all shipped before basic retrieval correctness was verified. The Phase ordering above exists specifically to counter that pattern.

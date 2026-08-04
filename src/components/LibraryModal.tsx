@@ -1,8 +1,46 @@
 import React, { useState, useRef } from 'react';
 import { VideoItem } from '../types';
 import { X, Video, Plus, Check, ExternalLink, Upload, FolderUp, AlertCircle, Loader2, Trash2, RotateCcw, AlertTriangle, CheckCircle2, FileUp, Eye, FileText } from 'lucide-react';
-import { ingestVideoUrl, uploadLocalFile, deleteLibraryVideo, importLibrary } from '../services/api';
+import { ingestVideoUrl, uploadLocalFile, deleteLibraryVideo, importLibrary, isIngestJobStart, pollJob } from '../services/api';
 import { filterMediaFiles } from '../services/localMediaParser';
+
+const WHISPER_MODEL_TIERS = ['base', 'small', 'medium'] as const;
+type WhisperModelTier = typeof WHISPER_MODEL_TIERS[number];
+
+const MODEL_TIER_HINTS: Record<WhisperModelTier, string> = {
+  base: 'Fastest, weakest on proper nouns & technical terms',
+  small: 'Balanced — recommended default',
+  medium: 'Most accurate, slowest to transcribe',
+};
+
+/** Whisper accuracy/speed tier picker shared by the file and folder upload modes
+ * (PRD §7.2 — 'base' mangles proper nouns and technical vocabulary). */
+const ModelTierSelector: React.FC<{
+  value: WhisperModelTier;
+  onChange: (tier: WhisperModelTier) => void;
+  disabled?: boolean;
+}> = ({ value, onChange, disabled }) => (
+  <div className="flex items-center gap-3">
+    <span className="text-[10px] font-mono text-ink-mute shrink-0">TRANSCRIPTION QUALITY:</span>
+    <div className="flex items-center gap-1 bg-canvas border border-hairline p-0.5 rounded-full">
+      {WHISPER_MODEL_TIERS.map((tier) => (
+        <button
+          key={tier}
+          type="button"
+          onClick={() => onChange(tier)}
+          disabled={disabled}
+          title={MODEL_TIER_HINTS[tier]}
+          className={`px-3 py-1 rounded-full text-[10px] font-mono uppercase transition-all disabled:opacity-40 ${
+            value === tier ? 'bg-canvas-card text-ink border border-hairline-bright' : 'text-ink-mute hover:text-ink'
+          }`}
+        >
+          {tier}
+        </button>
+      ))}
+    </div>
+    <span className="text-[10px] font-mono text-ink-mute truncate hidden sm:inline">{MODEL_TIER_HINTS[value]}</span>
+  </div>
+);
 
 interface LibraryModalProps {
   isOpen: boolean;
@@ -45,6 +83,9 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
   const [uploadProgress, setUploadProgress] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [importMode, setImportMode] = useState<'merge' | 'replace'>('merge');
+  // Whisper accuracy/speed tier for local uploads (PRD §7.2) — 'base' mangles proper nouns
+  // and technical vocabulary, so 'small' is the default rather than the old hardcoded 'base'.
+  const [modelTier, setModelTier] = useState<WhisperModelTier>('small');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
@@ -63,16 +104,32 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
     setIngestError(null);
 
     try {
-      const response = await ingestVideoUrl(youtubeUrl);
-      if (response.success) {
+      const started = await ingestVideoUrl(youtubeUrl);
+
+      if (isIngestJobStart(started)) {
+        const job = await pollJob(started.job_id, (j) => {
+          setUploadProgress(j.message || `${j.stage || 'working'}...`);
+        });
+        setUploadProgress(null);
+        if (job.status === 'failed') {
+          setIngestError(job.error || 'YouTube ingestion failed.');
+        } else if (job.result?.success) {
+          setYoutubeUrl('');
+          setIngestStatusMsg(job.result.message);
+        } else {
+          setIngestError(job.result?.message || 'YouTube ingestion did not complete successfully.');
+        }
+      } else if (started.success) {
         setYoutubeUrl('');
-        setIngestStatusMsg(response.message);
-        onVideoIngested();
-        setTimeout(() => setIngestStatusMsg(null), 6000);
+        setIngestStatusMsg(started.message || 'Indexed.');
       } else {
-        setIngestError(response.message);
-        onVideoIngested();
+        setIngestError(started.message || 'Ingestion failed.');
       }
+      onVideoIngested();
+      setTimeout(() => {
+        setIngestStatusMsg(null);
+        setIngestError(null);
+      }, 6000);
     } catch (err: any) {
       setIngestError(err.message || 'Failed to ingest YouTube video.');
       onVideoIngested();
@@ -101,11 +158,25 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
 
     for (let i = 0; i < mediaFiles.length; i++) {
       const file = mediaFiles[i];
-      setUploadProgress(`Processing ${i + 1}/${mediaFiles.length}: ${file.name}...`);
+      const prefix = `${i + 1}/${mediaFiles.length}: ${file.name}`;
+      setUploadProgress(`${prefix} — uploading...`);
 
       try {
-        const result = await uploadLocalFile(file);
-        if (result.success) {
+        const started = await uploadLocalFile(file, modelTier);
+
+        if (isIngestJobStart(started)) {
+          const job = await pollJob(started.job_id, (j) => {
+            setUploadProgress(`${prefix} — ${j.message || j.stage || 'processing'}...`);
+          });
+          if (job.status === 'failed') {
+            console.error('Upload job failed:', file.name, job.error);
+            failedCount++;
+          } else if (job.result?.success) {
+            processedCount++;
+          } else {
+            failedCount++;
+          }
+        } else if (started.success) {
           processedCount++;
         } else {
           failedCount++;
@@ -191,9 +262,9 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-black/80 backdrop-blur-md animate-fade-in">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-black/80 animate-fade-in">
       <div
-        className="bg-canvas-card border border-hairline-bright rounded-xl w-full max-w-3xl overflow-hidden shadow-2xl flex flex-col max-h-[85vh]"
+        className="bg-canvas-card border border-hairline-bright rounded-lg w-full max-w-3xl overflow-hidden flex flex-col max-h-[85vh]"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -287,6 +358,7 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
           {/* Mode 2: Local Files Upload */}
           {ingestMode === 'file' && (
             <div className="space-y-2">
+              <ModelTierSelector value={modelTier} onChange={setModelTier} disabled={isIngesting || !backendOnline} />
               <input
                 type="file"
                 ref={fileInputRef}
@@ -312,6 +384,7 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
           {/* Mode 3: Local Folder Upload */}
           {ingestMode === 'folder' && (
             <div className="space-y-2">
+              <ModelTierSelector value={modelTier} onChange={setModelTier} disabled={isIngesting || !backendOnline} />
               <input
                 type="file"
                 ref={folderInputRef}

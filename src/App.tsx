@@ -249,7 +249,7 @@ export const App: React.FC = () => {
 
         {/* Empty Library Onboarding Banner */}
         {videos.length === 0 ? (
-          <div className="bg-canvas-soft/80 border border-hairline rounded-2xl p-10 text-center max-w-2xl mx-auto space-y-4 shadow-xl">
+          <div className="bg-canvas-soft/80 border border-hairline rounded-lg p-10 text-center max-w-2xl mx-auto space-y-4">
             <div className="w-12 h-12 rounded-full border border-hairline-bright bg-canvas-card mx-auto flex items-center justify-center text-accent-sunset">
               <Video className="w-5 h-5" />
             </div>
@@ -265,7 +265,7 @@ export const App: React.FC = () => {
             <button
               onClick={() => setIsLibraryOpen(true)}
               disabled={!backendOnline}
-              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full border border-hairline-bright bg-canvas-card hover:bg-accent-sunset hover:text-black hover:border-accent-sunset text-xs font-medium text-ink transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-sm"
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full border border-hairline-bright bg-canvas-card hover:bg-accent-sunset hover:text-black hover:border-accent-sunset text-xs font-medium text-ink transition-all disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <Plus className="w-4 h-4" />
               <span>Ingest Local Files, Folder, YouTube URL or Import Backup</span>
@@ -289,7 +289,7 @@ export const App: React.FC = () => {
 
         {/* Search Error */}
         {searchError && (
-          <div className="bg-red-950/40 border border-red-800/30 rounded-xl p-4 text-xs text-red-300 font-mono text-center animate-fade-in">
+          <div className="bg-red-950/40 border border-red-800/30 rounded-lg p-4 text-xs text-red-300 font-mono text-center animate-fade-in">
             {searchError}
           </div>
         )}
@@ -297,7 +297,7 @@ export const App: React.FC = () => {
         {/* Degraded-mode notice: the relevance reranker was unavailable server-side, so
             results below are unranked best-effort matches, not confidence-scored ones. */}
         {searchResponse?.degraded && (
-          <div className="bg-amber-950/30 border border-amber-800/30 rounded-xl p-3 text-xs text-amber-300 font-mono text-center animate-fade-in">
+          <div className="bg-amber-950/30 border border-amber-800/30 rounded-lg p-3 text-xs text-amber-300 font-mono text-center animate-fade-in">
             {searchResponse.message || 'Relevance reranker unavailable — showing unranked best-effort matches.'}
           </div>
         )}
@@ -347,7 +347,7 @@ export const App: React.FC = () => {
                       <ChevronDown className={`w-2.5 h-2.5 transition-transform ${exportResultsOpen ? 'rotate-180' : ''}`} />
                     </button>
                     {exportResultsOpen && (
-                      <div className="absolute right-0 mt-1.5 w-36 bg-canvas-card border border-hairline-bright rounded-xl shadow-2xl overflow-hidden z-50 animate-fade-in py-1">
+                      <div className="absolute right-0 mt-1.5 w-36 bg-canvas-card border border-hairline-bright rounded-lg overflow-hidden z-50 animate-fade-in py-1">
                         <button
                           onClick={() => { exportSearchJSON(query, searchMode); setExportResultsOpen(false); }}
                           className="w-full px-3 py-2 text-left text-[11px] text-ink hover:bg-canvas-soft transition-colors"
@@ -372,7 +372,7 @@ export const App: React.FC = () => {
                       <Info className="w-3 h-3 text-accent-sunset" />
                       <span>TELEMETRY</span>
                     </button>
-                    <div className="absolute right-0 top-full mt-1.5 hidden group-hover/telemetry:block bg-canvas-card border border-hairline-bright px-3 py-1.5 rounded-xl shadow-2xl text-[10px] font-mono text-ink-mute whitespace-nowrap z-50 animate-fade-in">
+                    <div className="absolute right-0 top-full mt-1.5 hidden group-hover/telemetry:block bg-canvas-card border border-hairline-bright px-3 py-1.5 rounded-lg text-[10px] font-mono text-ink-mute whitespace-nowrap z-50 animate-fade-in">
                       SCANNED {searchResponse.total_chunks_scanned} CHUNKS IN {searchResponse.execution_time_ms}ms // {searchResponse.search_mode?.toUpperCase()} MODE
                     </div>
                   </div>
@@ -437,7 +437,7 @@ export const App: React.FC = () => {
                 <div
                   key={vid.id}
                   onClick={() => setIsLibraryOpen(true)}
-                  className="bg-[#121215] border border-hairline hover:border-hairline-bright rounded-xl p-4 space-y-3 cursor-pointer group transition-all"
+                  className="bg-[#121215] border border-hairline hover:border-hairline-bright rounded-lg p-4 space-y-3 cursor-pointer group transition-all"
                 >
                   <div className="relative aspect-video rounded-lg overflow-hidden border border-hairline/60 bg-black/60">
                     <img

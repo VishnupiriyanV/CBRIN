@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 # VAULT_WHISPER_MODEL) — see .env.example for what's configurable.
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Query
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse, Response
 from pydantic import BaseModel
@@ -19,11 +19,14 @@ import io
 
 import paths
 from vector_store import VectorStore, get_cross_encoder
-from transcript_service import fetch_youtube_transcript, transcribe_file_with_whisper, fetch_youtube_metadata, preload_whisper_model, content_hash_id, get_youtube_video_id
+from transcript_service import fetch_youtube_transcript, transcribe_file_with_whisper, fetch_youtube_metadata, preload_whisper_model, content_hash_id, get_youtube_video_id, WHISPER_MODEL_TIERS, WHISPER_MODEL_SIZE
 from multimodal_engine import preload_models
 
-# ENGINE (Layer 3) — narrative-aware clip generation.
-import jobs as engine_jobs
+# Shared background job queue (backend/jobs.py) — used by both ingestion (upload/YouTube
+# fetch/transcribe/chunk/embed, IMPROVEMENT-PLAN.md 3.3) and ENGINE's narrative analysis /
+# clip rendering. One serial worker: Whisper, CLIP, and ffmpeg all saturate a single CPU core,
+# so nothing here is meant to run concurrently with itself.
+import jobs
 import media_service
 import word_timing
 import narrative_engine
@@ -327,133 +330,201 @@ def search_vault(payload: SearchQuery):
     )
 
 
-@app.post("/api/ingest")
-def ingest_youtube(payload: IngestRequest):
-    """Ingest YouTube video via transcript API + oEmbed metadata."""
-    if not payload.youtube_url or not payload.youtube_url.strip():
-        raise HTTPException(status_code=400, detail="YouTube URL required")
+def _run_youtube_ingest_job(youtube_url: str):
+    """Download-transcript -> chunk (incl. keyframes) -> embed, reported in stages (PRD §7.3:
+    ingest must run as a background job with per-stage progress, polled by the existing
+    progress modal — a blocking POST previously held the request open for however long
+    fetch+chunk+embed took)."""
+    def _job(report):
+        try:
+            report("download", 0.1, "Fetching YouTube transcript...")
+            data = fetch_youtube_transcript(youtube_url)
+            video_meta = data['video_meta']
+            segments = data['segments']
 
-    try:
-        data = fetch_youtube_transcript(payload.youtube_url)
-        video_meta = data['video_meta']
-        segments = data['segments']
+            existing_ids = {c['video_id'] for c in store.chunks}
+            if video_meta['id'] in existing_ids:
+                report("done", 1.0, "already indexed")
+                return {
+                    "success": False,
+                    "message": f"Video '{video_meta['title']}' is already indexed.",
+                    "video": video_meta,
+                    "new_chunks_count": 0
+                }
 
-        existing_ids = {c['video_id'] for c in store.chunks}
-        if video_meta['id'] in existing_ids:
-            return {
-                "success": False,
-                "message": f"Video '{video_meta['title']}' is already indexed.",
-                "video": video_meta,
-                "new_chunks_count": 0
-            }
+            report("chunk", 0.4, "Segmenting transcript and extracting keyframes...")
+            new_chunks = store.chunk_transcript(segments, video_meta)
 
-        new_chunks = store.chunk_transcript(segments, video_meta)
+            if not new_chunks:
+                raise ValueError("Transcript was fetched but contained no meaningful speech text.")
 
-        if new_chunks:
+            report("embed", 0.85, "Embedding chunks into the vector index...")
             store.add_video(video_meta)
             store.add_chunks(new_chunks)
+
+            report("done", 1.0, f"Indexed {len(new_chunks)} chunk(s).")
             return {
                 "success": True,
                 "message": f"Indexed '{video_meta['title']}' — {len(new_chunks)} transcript chunks embedded.",
                 "video": video_meta,
                 "new_chunks_count": len(new_chunks)
             }
-        else:
-            raise ValueError("Transcript was fetched but contained no meaningful speech text.")
 
-    except ValueError as e:
+        except ValueError as e:
+            try:
+                yt_video_id = get_youtube_video_id(youtube_url)
+            except ValueError:
+                yt_video_id = None
+
+            if yt_video_id:
+                meta = fetch_youtube_metadata(yt_video_id)
+                vid_id = f"yt-{yt_video_id}"
+            else:
+                meta = {"title": "Unrecognized YouTube URL", "channel": "YouTube Creator"}
+                vid_id = f"yt-unrecognized-{abs(hash(youtube_url)) % 100000}"
+
+            store.add_failed_video(
+                video_id=vid_id,
+                title=meta['title'],
+                channel=meta['channel'],
+                error_msg=str(e),
+                is_local=False,
+                youtube_id=yt_video_id,
+                source_url=youtube_url
+            )
+            raise
+
+    return _job
+
+
+@app.post("/api/ingest")
+def ingest_youtube(payload: IngestRequest):
+    """Kick off YouTube ingestion (transcript fetch -> chunk -> embed) as a background job.
+    Poll the returned job_id via GET /api/jobs/{job_id}; job.result carries the same
+    {success, message, video, new_chunks_count} shape this endpoint used to return directly."""
+    if not payload.youtube_url or not payload.youtube_url.strip():
+        raise HTTPException(status_code=400, detail="YouTube URL required")
+
+    try:
+        yt_video_id = get_youtube_video_id(payload.youtube_url)
+        vid_id = f"yt-{yt_video_id}"
+    except ValueError:
+        vid_id = None
+
+    if vid_id and vid_id in {c['video_id'] for c in store.chunks}:
+        existing = store.videos.get(vid_id, {})
+        return {
+            "success": False,
+            "message": f"Video '{existing.get('title', vid_id)}' is already indexed.",
+            "video": existing,
+            "new_chunks_count": 0
+        }
+
+    job_id = jobs.submit("ingest_youtube", _run_youtube_ingest_job(payload.youtube_url), video_id=vid_id)
+    return {"job_id": job_id, "video_id": vid_id}
+
+
+def _run_upload_job(temp_file_path: str, filename: str, file_ext: str, model_tier: str):
+    """Transcribe -> chunk (incl. keyframes) -> embed, reported in stages. Runs on the
+    background worker thread; `temp_file_path` was already written by the request handler
+    before the UploadFile stream closes, so nothing here touches request state."""
+    def _job(report):
         try:
-            yt_video_id = get_youtube_video_id(payload.youtube_url)
-        except ValueError:
-            yt_video_id = None
+            report("transcribe", 0.05, f"Transcribing with Whisper ({model_tier})...")
+            data = transcribe_file_with_whisper(temp_file_path, filename, model_tier=model_tier)
+            video_meta = data['video_meta']
+            segments = data['segments']
 
-        if yt_video_id:
-            meta = fetch_youtube_metadata(yt_video_id)
-            vid_id = f"yt-{yt_video_id}"
-        else:
-            meta = {"title": "Unrecognized YouTube URL", "channel": "YouTube Creator"}
-            vid_id = f"yt-unrecognized-{abs(hash(payload.youtube_url)) % 100000}"
+            persistent_media_path = os.path.join(paths.MEDIA_DIR, f"{video_meta['id']}{file_ext}")
+            shutil.copyfile(temp_file_path, persistent_media_path)
 
-        store.add_failed_video(
-            video_id=vid_id,
-            title=meta['title'],
-            channel=meta['channel'],
-            error_msg=str(e),
-            is_local=False,
-            youtube_id=yt_video_id,
-            source_url=payload.youtube_url
-        )
-        raise HTTPException(status_code=422, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Ingestion failed: {str(e)}")
+            report("chunk", 0.55, "Segmenting transcript and extracting keyframes...")
+            new_chunks = store.chunk_transcript(segments, video_meta, media_path=persistent_media_path)
+
+            report("embed", 0.85, "Embedding chunks into the vector index...")
+            if new_chunks:
+                store.add_video(video_meta)
+                store.add_chunks(new_chunks)
+
+            report("done", 1.0, f"Indexed {len(new_chunks)} chunk(s).")
+            return {
+                "success": True,
+                "message": f"Transcribed '{filename}' — {len(new_chunks)} chunks indexed.",
+                "video": video_meta,
+                "new_chunks_count": len(new_chunks)
+            }
+        except ValueError as e:
+            vid_id = content_hash_id(temp_file_path) if os.path.exists(temp_file_path) else f"local-failed-{abs(hash(filename)) % 100000}"
+            clean_title = os.path.splitext(filename)[0].replace("-", " ").replace("_", " ").title()
+            store.add_failed_video(
+                video_id=vid_id,
+                title=clean_title,
+                channel="Local Upload",
+                error_msg=str(e),
+                is_local=True
+            )
+            raise
+        finally:
+            if os.path.exists(temp_file_path):
+                os.remove(temp_file_path)
+
+    return _job
 
 
 @app.post("/api/upload_transcribe")
-async def upload_and_transcribe_file(file: UploadFile = File(...)):
-    """Upload local audio/video file, transcribe with Whisper, chunk, embed, and store media file."""
+async def upload_and_transcribe_file(file: UploadFile = File(...), model_tier: str = Form(WHISPER_MODEL_SIZE)):
+    """Upload a local audio/video file and kick off transcribe -> chunk -> embed as a
+    background job (PRD §7.3 — Whisper on CPU runs ~1x realtime, so a 60-minute podcast used
+    to block this request for about an hour). Poll the returned job_id via
+    GET /api/jobs/{job_id}; job.result carries the same {success, message, video,
+    new_chunks_count} shape this endpoint used to return directly.
+
+    `model_tier` selects Whisper accuracy/speed ('base' / 'small' / 'medium', default 'small'
+    — PRD §7.2, IMPROVEMENT-PLAN.md 3.4)."""
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file provided")
+    if model_tier not in WHISPER_MODEL_TIERS:
+        raise HTTPException(status_code=400, detail=f"model_tier must be one of {list(WHISPER_MODEL_TIERS)}")
 
     file_ext = os.path.splitext(file.filename)[1].lower()
     temp_dir = tempfile.gettempdir()
     safe_filename = file.filename.replace(" ", "_")
     temp_file_path = os.path.join(temp_dir, safe_filename)
 
-    try:
-        with open(temp_file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+    with open(temp_file_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
 
-        content_id = content_hash_id(temp_file_path)
-        if content_id in store.videos:
-            if os.path.exists(temp_file_path):
-                os.remove(temp_file_path)
-            existing = store.videos[content_id]
-            return {
-                "success": False,
-                "message": f"'{existing.get('title', file.filename)}' is already indexed (identical file content).",
-                "video": existing,
-                "new_chunks_count": 0
-            }
-
-        data = transcribe_file_with_whisper(temp_file_path, file.filename)
-        video_meta = data['video_meta']
-        segments = data['segments']
-
-        persistent_media_path = os.path.join(paths.MEDIA_DIR, f"{video_meta['id']}{file_ext}")
-        shutil.copyfile(temp_file_path, persistent_media_path)
-
-        new_chunks = store.chunk_transcript(segments, video_meta, media_path=persistent_media_path)
-
-        if new_chunks:
-            store.add_video(video_meta)
-            store.add_chunks(new_chunks)
-
-        if os.path.exists(temp_file_path):
-            os.remove(temp_file_path)
-
+    # Dedup before transcription runs (IMPROVEMENT-PLAN.md 1.4) — this check is cheap (file
+    # hash only), so it stays synchronous; only the expensive Whisper/chunk/embed work moves
+    # onto the background job below.
+    content_id = content_hash_id(temp_file_path)
+    if content_id in store.videos:
+        os.remove(temp_file_path)
+        existing = store.videos[content_id]
         return {
-            "success": True,
-            "message": f"Transcribed '{file.filename}' — {len(new_chunks)} chunks indexed.",
-            "video": video_meta,
-            "new_chunks_count": len(new_chunks)
+            "success": False,
+            "message": f"'{existing.get('title', file.filename)}' is already indexed (identical file content).",
+            "video": existing,
+            "new_chunks_count": 0
         }
-    except ValueError as e:
-        vid_id = content_hash_id(temp_file_path) if os.path.exists(temp_file_path) else f"local-failed-{abs(hash(file.filename)) % 100000}"
-        clean_title = os.path.splitext(file.filename)[0].replace("-", " ").replace("_", " ").title()
-        store.add_failed_video(
-            video_id=vid_id,
-            title=clean_title,
-            channel="Local Upload",
-            error_msg=str(e),
-            is_local=True
-        )
-        if os.path.exists(temp_file_path):
-            os.remove(temp_file_path)
-        raise HTTPException(status_code=422, detail=str(e))
-    except Exception as e:
-        if os.path.exists(temp_file_path):
-            os.remove(temp_file_path)
-        raise HTTPException(status_code=500, detail=f"Upload & transcription failed: {str(e)}")
+
+    job_id = jobs.submit(
+        "ingest_upload",
+        _run_upload_job(temp_file_path, file.filename, file_ext, model_tier),
+        video_id=content_id
+    )
+    return {"job_id": job_id, "video_id": content_id, "filename": file.filename}
+
+
+@app.get("/api/jobs/{job_id}")
+def get_ingest_job(job_id: str):
+    """Poll status/progress for any background job — ingest (upload/YouTube) or ENGINE
+    (analyze/render). Same job records as /api/engine/jobs/{job_id}; that route is kept as an
+    alias for existing ENGINE frontend calls."""
+    job = jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
+    return job.to_dict()
 
 
 # --- Highlights / Bookmark Endpoints ---
@@ -671,13 +742,13 @@ def engine_analyze(payload: EngineAnalyzeRequest):
     if payload.video_id not in store.videos:
         raise HTTPException(status_code=404, detail=f"Video '{payload.video_id}' not found.")
 
-    job_id = engine_jobs.submit("engine_analyze", _run_analyze_job(payload.video_id, payload.max_clips or 6), video_id=payload.video_id)
+    job_id = jobs.submit("engine_analyze", _run_analyze_job(payload.video_id, payload.max_clips or 6), video_id=payload.video_id)
     return {"job_id": job_id}
 
 
 @app.get("/api/engine/jobs/{job_id}")
 def engine_get_job(job_id: str):
-    job = engine_jobs.get(job_id)
+    job = jobs.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
     return job.to_dict()
@@ -745,7 +816,7 @@ def engine_render(payload: EngineRenderRequest):
         )
         return {"clip_id": payload.clip_id, "presets": results}
 
-    job_id = engine_jobs.submit("engine_render", _job, video_id=video_id)
+    job_id = jobs.submit("engine_render", _job, video_id=video_id)
     return {"job_id": job_id}
 
 

@@ -478,7 +478,7 @@ class VectorStore:
         self._save_to_disk()
 
     def delete_video(self, video_id: str) -> bool:
-        """Delete video, remove associated chunks, keyframes, and media file, then re-index."""
+        """Delete video, remove associated chunks, keyframes, and media file."""
         if video_id in self.videos:
             del self.videos[video_id]
 
@@ -486,8 +486,19 @@ class VectorStore:
         # cleaned up too — previously only the source media file was deleted here, leaving
         # every chunk's keyframe JPG orphaned on disk forever (confirmed: 67 orphaned files
         # accumulated from earlier deletes before this fix).
-        chunks_to_remove = [c for c in self.chunks if c.get('video_id') == video_id]
-        self.chunks = [c for c in self.chunks if c.get('video_id') != video_id]
+        keep_mask = [c.get('video_id') != video_id for c in self.chunks]
+        chunks_to_remove = [c for c, keep in zip(self.chunks, keep_mask) if not keep]
+
+        # Drop the removed rows from the embedding arrays in place rather than re-encoding
+        # the remaining corpus from scratch (same O(n) writes-are-quadratic problem as
+        # add_chunks — see _add_chunks_incremental). Falls back to a full reindex() only if
+        # an array is missing/misaligned, which reindex() already handles defensively.
+        if self.dense_embeddings is not None and len(self.dense_embeddings) == len(self.chunks):
+            self.dense_embeddings = self.dense_embeddings[keep_mask]
+        if self.visual_embeddings is not None and len(self.visual_embeddings) == len(self.chunks):
+            self.visual_embeddings = self.visual_embeddings[keep_mask]
+
+        self.chunks = [c for c, keep in zip(self.chunks, keep_mask) if keep]
 
         for c in chunks_to_remove:
             keyframe_path = os.path.join(paths.KEYFRAMES_DIR, f"{c['id']}.jpg")
@@ -511,22 +522,88 @@ class VectorStore:
                 except Exception as e:
                     print(f"[Vault] Error deleting media file {fpath}: {e}")
 
-        self.reindex()
+        # If the embedding arrays weren't aligned with self.chunks going in (e.g. TF-IDF
+        # fallback, or a prior mismatch), the mask-based slicing above was skipped for that
+        # array — fall back to a full reindex() so the store never ends up with an
+        # embeddings/chunks length mismatch.
+        if not self.chunks:
+            self.dense_embeddings = None
+            self.bm25_index = None
+            self.is_fitted = True
+            self._invalidate_suggested_queries_cache()
+        elif self.dense_embeddings is None or len(self.dense_embeddings) != len(self.chunks):
+            self.reindex()
+        else:
+            self._invalidate_suggested_queries_cache()
+            self._rebuild_bm25()
+
         self._save_to_disk()
         return True
 
     def add_chunks(self, new_chunks: List[Dict[str, Any]]):
-        """Add new chunks, re-index embeddings, and persist."""
-        self.chunks.extend(new_chunks)
-        self.reindex()
+        """Add new chunks, embedding only the new ones, and persist."""
+        self._add_chunks_incremental(new_chunks)
         self._save_to_disk()
 
     @staticmethod
     def _bm25_tokenize(text: str) -> List[str]:
         return re.findall(r"[a-z0-9']+", text.lower())
 
+    def _rebuild_bm25(self):
+        """(Re)build the BM25 lexical index over all current chunks. Pure Python tokenization
+        over raw text — not the expensive part of indexing, so this always runs full-corpus
+        even when dense embedding is incremental (see _add_chunks_incremental)."""
+        if HAS_BM25 and self.chunks:
+            tokenized_corpus = [self._bm25_tokenize(c.get('text', '')) for c in self.chunks]
+            self.bm25_index = BM25Okapi(tokenized_corpus) if any(tokenized_corpus) else None
+        else:
+            self.bm25_index = None
+
+    def _add_chunks_incremental(self, new_chunks: List[Dict[str, Any]]):
+        """
+        Embed only the newly added chunks and append them onto the existing dense index,
+        instead of re-encoding the entire corpus on every write (IMPROVEMENT-PLAN.md hygiene:
+        "Full reindex on every write" — add_chunks() used to call reindex(), making each
+        ingested video O(total corpus size) instead of O(new chunks), i.e. quadratic across a
+        library build). BM25 still rebuilds full-corpus since tokenizing raw text is cheap.
+        """
+        self._invalidate_suggested_queries_cache()
+
+        if not new_chunks:
+            return
+
+        self.chunks.extend(new_chunks)
+
+        if HAS_DENSE_MODEL:
+            corpus = [c.get('enriched_text', c['text']) for c in new_chunks]
+            new_embeddings = EMBEDDING_MODEL.encode(
+                corpus,
+                convert_to_numpy=True,
+                normalize_embeddings=True,
+                show_progress_bar=False
+            )
+            if self.dense_embeddings is not None and len(self.dense_embeddings) > 0:
+                self.dense_embeddings = np.vstack([self.dense_embeddings, new_embeddings])
+            else:
+                self.dense_embeddings = new_embeddings
+        else:
+            # TF-IDF's vocabulary depends on the whole corpus, so there's no incremental path
+            # here — this branch only runs when sentence-transformers itself failed to load.
+            full_corpus = [c.get('enriched_text', c['text']) for c in self.chunks]
+            self.tfidf_matrix = self.vectorizer.fit_transform(full_corpus)
+
+        self._rebuild_bm25()
+        self.is_fitted = True
+        print(f"[Vault] Incrementally embedded {len(new_chunks)} new chunk(s); index now {len(self.chunks)} chunks.")
+
     def reindex(self):
-        """Re-compute dense embeddings and the BM25 lexical index for all stored chunks."""
+        """
+        Re-compute dense embeddings and the BM25 lexical index for ALL stored chunks. This is
+        deliberately full-corpus, unlike _add_chunks_incremental — use it only when chunks
+        were removed or replaced wholesale (delete_video's fallback path, import 'replace'
+        mode) or the TF-IDF fallback is active (its vocabulary always depends on the whole
+        corpus). For appending new chunks, add_chunks() takes the incremental path instead.
+        """
         self._invalidate_suggested_queries_cache()
 
         if not self.chunks:
@@ -549,15 +626,7 @@ class VectorStore:
             if corpus:
                 self.tfidf_matrix = self.vectorizer.fit_transform(corpus)
 
-        # BM25 over the raw spoken text (not the topic-prefixed enriched_text) — lexical
-        # matching on proper nouns, product names, and acronyms is exactly the failure mode
-        # dense-only search is structurally bad at (IMPROVEMENT-PLAN.md 2.5).
-        if HAS_BM25:
-            tokenized_corpus = [self._bm25_tokenize(c.get('text', '')) for c in self.chunks]
-            self.bm25_index = BM25Okapi(tokenized_corpus) if any(tokenized_corpus) else None
-        else:
-            self.bm25_index = None
-
+        self._rebuild_bm25()
         self.is_fitted = True
         print(f"[Vault] Indexed {len(self.chunks)} chunks.")
 
@@ -1073,33 +1142,31 @@ class VectorStore:
             # Merge mode: skip existing video IDs
             existing_video_ids = set(self.videos.keys())
             new_videos = 0
-            new_chunks = 0
 
             for vid_id, vid_meta in imported_videos.items():
                 if vid_id not in existing_video_ids:
                     self.videos[vid_id] = vid_meta
                     new_videos += 1
 
+            # Collect (don't append yet) so _add_chunks_incremental only embeds the genuinely
+            # new ones instead of re-encoding the whole merged corpus.
             existing_chunk_ids = {c['id'] for c in self.chunks}
-            for chunk in imported_chunks:
-                if chunk['id'] not in existing_chunk_ids:
-                    self.chunks.append(chunk)
-                    new_chunks += 1
+            new_chunk_objs = [c for c in imported_chunks if c['id'] not in existing_chunk_ids]
 
             # Merge highlights (don't overwrite existing)
             for cid, highlight in imported_highlights.items():
                 if cid not in self.highlights:
                     self.highlights[cid] = highlight
 
-            if new_chunks > 0:
-                self.reindex()
+            if new_chunk_objs:
+                self._add_chunks_incremental(new_chunk_objs)
             self._save_to_disk()
 
             return {
                 "success": True,
-                "message": f"Merged {new_videos} new videos, {new_chunks} new chunks. Skipped {len(imported_videos) - new_videos} duplicates.",
+                "message": f"Merged {new_videos} new videos, {len(new_chunk_objs)} new chunks. Skipped {len(imported_videos) - new_videos} duplicates.",
                 "videos_imported": new_videos,
-                "chunks_imported": new_chunks,
+                "chunks_imported": len(new_chunk_objs),
             }
 
     def get_stats(self) -> Dict[str, Any]:

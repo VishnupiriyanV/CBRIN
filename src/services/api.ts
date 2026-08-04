@@ -92,15 +92,28 @@ export async function fetchLibraryStats(): Promise<LibraryStats> {
   return await response.json();
 }
 
-/**
- * Ingest a YouTube video by URL via backend.
- */
-export async function ingestVideoUrl(youtubeUrl: string): Promise<{
-  success: boolean;
-  message: string;
+/** Result of kicking off an ingest: either it started a background job (job_id present —
+ * poll it via pollJob), or it short-circuited synchronously because the content was already
+ * indexed (the dedup fast path in main.py, which never touches the job queue). */
+export interface IngestStartResult {
+  job_id?: string;
+  video_id?: string;
+  filename?: string;
+  success?: boolean;
+  message?: string;
   video?: VideoItem;
   new_chunks_count?: number;
-}> {
+}
+
+export function isIngestJobStart(result: IngestStartResult): result is IngestStartResult & { job_id: string } {
+  return typeof result.job_id === 'string';
+}
+
+/**
+ * Ingest a YouTube video by URL via backend. Runs as a background job — poll the returned
+ * job_id (see pollJob) rather than expecting the indexed result inline.
+ */
+export async function ingestVideoUrl(youtubeUrl: string): Promise<IngestStartResult> {
   const response = await fetch(`${API_BASE_URL}/ingest`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -117,15 +130,14 @@ export async function ingestVideoUrl(youtubeUrl: string): Promise<{
 
 /**
  * Upload a local video/audio file for Whisper transcription + CLIP visual indexing.
+ * Runs as a background job (PRD §7.3 — Whisper on CPU is ~1x realtime, so this used to hold
+ * the request open for the full duration of a long upload) — poll the returned job_id.
+ * `modelTier` selects Whisper accuracy/speed: 'base' | 'small' | 'medium' (default 'small').
  */
-export async function uploadLocalFile(file: File): Promise<{
-  success: boolean;
-  message: string;
-  video?: VideoItem;
-  new_chunks_count?: number;
-}> {
+export async function uploadLocalFile(file: File, modelTier: string = 'small'): Promise<IngestStartResult> {
   const formData = new FormData();
   formData.append('file', file);
+  formData.append('model_tier', modelTier);
 
   const response = await fetch(`${API_BASE_URL}/upload_transcribe`, {
     method: 'POST',
@@ -138,6 +150,39 @@ export async function uploadLocalFile(file: File): Promise<{
   }
 
   return await response.json();
+}
+
+/**
+ * Fetch status/progress for any background job — ingest (upload/YouTube) or ENGINE.
+ */
+export async function getJob(jobId: string): Promise<EngineJob> {
+  const response = await fetch(`${API_BASE_URL}/jobs/${jobId}`);
+  if (!response.ok) {
+    const detail = await response.json().catch(() => ({ detail: 'Job not found' }));
+    throw new Error(detail.detail || `Job lookup failed (${response.status})`);
+  }
+  return await response.json();
+}
+
+/**
+ * Poll a background job until it reaches a terminal state (done/failed), invoking
+ * onProgress after every poll so the UI can render live stage/percentage instead of a bare
+ * spinner.
+ */
+export async function pollJob(
+  jobId: string,
+  onProgress?: (job: EngineJob) => void,
+  intervalMs: number = 1200
+): Promise<EngineJob> {
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const job = await getJob(jobId);
+    onProgress?.(job);
+    if (job.status === 'done' || job.status === 'failed') {
+      return job;
+    }
+    await new Promise(resolve => setTimeout(resolve, intervalMs));
+  }
 }
 
 /**
