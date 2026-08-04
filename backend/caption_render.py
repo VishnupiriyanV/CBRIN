@@ -196,7 +196,7 @@ def render_cue_pngs(clip_id: str, cues: List[Cue], brand_kit: Dict[str, Any], si
                 word_idx = state_key[1]
                 img = _draw_frame(cue, word_idx, size, brand_kit)
             buf = io.BytesIO()
-            img.save(buf, format="PNG")
+            img.save(buf, format="PNG", compress_level=1)
             last_bytes = buf.getvalue()
             last_state_key = state_key
 

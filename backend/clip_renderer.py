@@ -38,6 +38,42 @@ def _clip_relative_words(words: List[Dict[str, Any]], start_sec: float, end_sec:
     return out
 
 
+_BEST_ENCODER_FLAGS: Optional[List[str]] = None
+
+
+def _get_video_encoder_flags() -> List[str]:
+    """
+    Detect best available H.264 video encoder for FFmpeg.
+    Prioritizes NVIDIA NVENC (h264_nvenc) on GPU, falling back to AMD AMF (h264_amf),
+    Intel QSV (h264_qsv), or fast CPU libx264 (ultrafast preset).
+    """
+    global _BEST_ENCODER_FLAGS
+    if _BEST_ENCODER_FLAGS is not None:
+        return _BEST_ENCODER_FLAGS
+
+    exe = media_service.ffmpeg_exe()
+    try:
+        res = subprocess.run([exe, "-encoders"], capture_output=True, text=True, timeout=5)
+        stdout = res.stdout or ""
+        if "h264_nvenc" in stdout:
+            print("[clip_renderer] Selected GPU hardware encoder: h264_nvenc (NVIDIA NVENC)")
+            _BEST_ENCODER_FLAGS = ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "20"]
+            return _BEST_ENCODER_FLAGS
+        elif "h264_amf" in stdout:
+            print("[clip_renderer] Selected GPU hardware encoder: h264_amf (AMD AMF)")
+            _BEST_ENCODER_FLAGS = ["-c:v", "h264_amf", "-quality", "speed", "-rc", "cqp", "-qp_p", "20", "-qp_i", "20"]
+            return _BEST_ENCODER_FLAGS
+        elif "h264_qsv" in stdout:
+            print("[clip_renderer] Selected GPU hardware encoder: h264_qsv (Intel QSV)")
+            _BEST_ENCODER_FLAGS = ["-c:v", "h264_qsv", "-global_quality", "20"]
+            return _BEST_ENCODER_FLAGS
+    except Exception as e:
+        print(f"[clip_renderer] Could not query ffmpeg hardware encoders ({e}), using libx264.")
+
+    _BEST_ENCODER_FLAGS = ["-c:v", "libx264", "-crf", "20", "-preset", "ultrafast"]
+    return _BEST_ENCODER_FLAGS
+
+
 def _run_ffmpeg(args: List[str]) -> None:
     exe = media_service.ffmpeg_exe()
     result = subprocess.run([exe] + args, capture_output=True, text=True)
@@ -108,13 +144,16 @@ def render_clip(
         width, height = preset["width"], preset["height"]
 
         filter_complex = (
-            f"[0:v]scale={width}:{height}:force_original_aspect_ratio=increase,"
+            f"[0:v]scale={width}:{height}:force_original_aspect_ratio=increase:flags=bilinear,"
             f"crop={width}:{height}[v];"
             f"[v][1:v]overlay=format=auto[out]"
         )
 
+        encoder_flags = _get_video_encoder_flags()
+
         args = [
             "-y",
+            "-threads", "0",
             "-ss", str(start_sec), "-to", str(end_sec), "-i", source_path,
             "-framerate", "12", "-i", os.path.join(tmp_png_dir, "cap_%05d.png"),
             "-filter_complex", filter_complex,
@@ -129,7 +168,7 @@ def render_clip(
             # corrupt file. Force back to yuv420p, the universally-compatible standard every
             # H.264 "High"-profile player supports.
             "-pix_fmt", "yuv420p",
-            "-c:v", "libx264", "-crf", "20", "-preset", "veryfast",
+        ] + encoder_flags + [
             "-c:a", "aac",
             out_path,
         ]
@@ -137,8 +176,24 @@ def render_clip(
         try:
             _run_ffmpeg(args)
         except Exception:
-            # Keep the caption PNGs around for diagnosis on failure — only clean up on success.
-            raise
+            if any(h in encoder_flags for h in ["h264_nvenc", "h264_amf", "h264_qsv"]):
+                print(f"[clip_renderer] Hardware GPU encoder failed during render for {preset_name}. Retrying with CPU libx264 fallback...")
+                fallback_args = [
+                    "-y",
+                    "-threads", "0",
+                    "-ss", str(start_sec), "-to", str(end_sec), "-i", source_path,
+                    "-framerate", "12", "-i", os.path.join(tmp_png_dir, "cap_%05d.png"),
+                    "-filter_complex", filter_complex,
+                    "-map", "[out]", "-map", "0:a?",
+                    "-pix_fmt", "yuv420p",
+                    "-c:v", "libx264", "-crf", "20", "-preset", "ultrafast",
+                    "-c:a", "aac",
+                    out_path,
+                ]
+                _run_ffmpeg(fallback_args)
+            else:
+                # Keep the caption PNGs around for diagnosis on failure — only clean up on success.
+                raise
 
         shutil.rmtree(tmp_png_dir, ignore_errors=True)
         results[preset_name] = out_path
