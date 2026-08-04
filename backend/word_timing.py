@@ -78,7 +78,16 @@ def ensure_words(
     if report:
         report("words", 0.15, "transcribing with word-level timestamps")
 
-    result = model.transcribe(media_path, word_timestamps=True)
+    is_cuda = hasattr(model, "device") and model.device.type == "cuda"
+    try:
+        result = model.transcribe(media_path, word_timestamps=True, fp16=is_cuda)
+    except Exception as cuda_err:
+        if is_cuda:
+            print(f"[Vault] CUDA error during word timing transcription: {cuda_err}. Retrying on CPU fallback...")
+            cpu_model = transcript_service._get_local_whisper_model(transcript_service._resolve_model_tier(None), force_cpu=True)
+            result = cpu_model.transcribe(media_path, word_timestamps=True, fp16=False)
+        else:
+            raise
 
     words: List[Word] = []
     for seg in result.get('segments', []):

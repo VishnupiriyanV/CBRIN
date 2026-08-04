@@ -13,6 +13,13 @@ try:
 except ImportError:
     HAS_OPENAI = False
 
+try:
+    import torch
+    HAS_TORCH = True
+except ImportError:
+    torch = None
+    HAS_TORCH = False
+
 local_whisper = None
 HAS_LOCAL_WHISPER = False
 
@@ -47,13 +54,27 @@ def _resolve_model_tier(model_tier: Any = None) -> str:
     return WHISPER_MODEL_SIZE if WHISPER_MODEL_SIZE in WHISPER_MODEL_TIERS else "small"
 
 
-def _get_local_whisper_model(model_tier: str):
-    """Load (or return the cached) local Whisper model for the given tier."""
-    if model_tier not in _LOCAL_WHISPER_MODELS:
-        print(f"[Vault] Loading local Whisper '{model_tier}' model...")
-        _LOCAL_WHISPER_MODELS[model_tier] = local_whisper.load_model(model_tier)
-        print(f"[Vault] Local Whisper '{model_tier}' model loaded and ready.")
-    return _LOCAL_WHISPER_MODELS[model_tier]
+def _get_local_whisper_model(model_tier: str, force_cpu: bool = False):
+    """Load (or return the cached) local Whisper model for the given tier.
+    Prioritizes CUDA GPU execution if available, falling back to CPU on failure."""
+    cache_key = f"{model_tier}_cpu" if force_cpu else model_tier
+    if cache_key not in _LOCAL_WHISPER_MODELS:
+        device = "cpu"
+        if not force_cpu and HAS_TORCH and torch is not None and torch.cuda.is_available():
+            device = "cuda"
+
+        print(f"[Vault] Loading local Whisper '{model_tier}' model on {device.upper()}...")
+        try:
+            _LOCAL_WHISPER_MODELS[cache_key] = local_whisper.load_model(model_tier, device=device)
+            print(f"[Vault] Local Whisper '{model_tier}' model loaded on {device.upper()} and ready.")
+        except Exception as e:
+            if device != "cpu":
+                print(f"[Vault] Could not load Whisper model on CUDA ({e}). Falling back to CPU...")
+                _LOCAL_WHISPER_MODELS[cache_key] = local_whisper.load_model(model_tier, device="cpu")
+                print(f"[Vault] Local Whisper '{model_tier}' model loaded on CPU fallback.")
+            else:
+                raise
+    return _LOCAL_WHISPER_MODELS[cache_key]
 
 
 def preload_whisper_model():
@@ -247,7 +268,16 @@ def transcribe_file_with_whisper(file_path: str, file_name: str, model_tier: Opt
     if HAS_LOCAL_WHISPER:
         try:
             model = _get_local_whisper_model(resolved_tier)
-            result = model.transcribe(file_path)
+            is_cuda = hasattr(model, "device") and model.device.type == "cuda"
+            try:
+                result = model.transcribe(file_path, fp16=is_cuda)
+            except Exception as cuda_err:
+                if is_cuda:
+                    print(f"[Vault] CUDA error during Whisper transcription: {cuda_err}. Retrying on CPU fallback...")
+                    cpu_model = _get_local_whisper_model(resolved_tier, force_cpu=True)
+                    result = cpu_model.transcribe(file_path, fp16=False)
+                else:
+                    raise
 
             segments = []
             for seg in result.get('segments', []):
