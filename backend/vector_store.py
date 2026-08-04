@@ -839,8 +839,8 @@ class VectorStore:
                 window_sentences = vid_sentences[start_pos:end_pos + 1]
 
             combined_text = " ".join([s['text'] for s in window_sentences]).strip()
-            min_start_sec = window_sentences[0]['start_sec']
-            max_end_sec = window_sentences[-1]['end_sec']
+            min_start_sec = window_sentences[0].get('start_sec', 0.0)
+            max_end_sec = window_sentences[-1].get('end_sec', 0.0)
 
             candidate_item = {
                 "id": target_chunk['id'],
