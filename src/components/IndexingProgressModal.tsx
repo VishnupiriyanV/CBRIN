@@ -35,13 +35,13 @@ export const IndexingProgressModal: React.FC<IndexingProgressModalProps> = ({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-black/85 animate-fade-in">
       <div
-        className="bg-canvas-card border border-hairline-bright rounded-lg w-full max-w-4xl overflow-hidden flex flex-col max-h-[88vh]"
+        className="bg-canvas-card border border-hairline-bright rounded-sm w-full max-w-4xl overflow-hidden flex flex-col max-h-[88vh]"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-hairline bg-canvas">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg border border-accent-sunset/40 bg-accent-sunset/10 flex items-center justify-center text-accent-sunset">
+            <div className="w-8 h-8 rounded-sm border border-accent-sunset/40 bg-accent-sunset/10 flex items-center justify-center text-ink-body">
               <Activity className="w-4 h-4" />
             </div>
             <div>
@@ -55,14 +55,14 @@ export const IndexingProgressModal: React.FC<IndexingProgressModalProps> = ({
           <div className="flex items-center gap-2">
             <button
               onClick={onRefresh}
-              className="p-2 text-ink-mute hover:text-ink hover:bg-canvas-soft rounded-full transition-colors"
+              className="p-2 text-ink-mute hover:text-ink hover:bg-canvas-soft rounded-sm transition-colors"
               title="Refresh telemetry"
             >
               <RotateCcw className="w-4 h-4" />
             </button>
             <button
               onClick={onClose}
-              className="p-2 text-ink-mute hover:text-ink hover:bg-canvas-soft rounded-full transition-colors"
+              className="p-2 text-ink-mute hover:text-ink hover:bg-canvas-soft rounded-sm transition-colors"
             >
               <X className="w-5 h-5" />
             </button>
@@ -73,12 +73,12 @@ export const IndexingProgressModal: React.FC<IndexingProgressModalProps> = ({
         <div className="p-6 overflow-y-auto space-y-6">
 
           {/* Overall Health Overview Banner */}
-          <div className="bg-[#121215] border border-hairline rounded-lg p-5 space-y-4">
+          <div className="bg-[#121215] border border-hairline rounded-sm p-5 space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="flex items-center gap-3">
-                <div className={`w-3 h-3 rounded-full ${backendOnline ? (indexingCount > 0 ? 'bg-amber-400' : 'bg-emerald-400') : 'bg-red-500'}`} />
+                <div className={`w-3 h-3 rounded-sm ${backendOnline ? (indexingCount > 0 ? 'bg-ink-body' : 'bg-ink') : 'bg-danger'}`} />
                 <div>
-                  <h3 className="text-sm font-semibold text-ink uppercase tracking-tight">
+                  <h3 className="text-sm font-semibold text-ink tracking-tight">
                     {backendOnline ? (indexingCount > 0 ? 'Indexing In Progress' : 'Library Fully Synced') : 'Backend Offline'}
                   </h3>
                   <span className="text-xs font-mono text-ink-mute">
@@ -88,14 +88,14 @@ export const IndexingProgressModal: React.FC<IndexingProgressModalProps> = ({
               </div>
 
               <div className="flex items-center gap-2 font-mono text-xs text-ink-mute">
-                <Server className="w-3.5 h-3.5 text-accent-sunset" />
+                <Server className="w-3.5 h-3.5 text-ink-body" />
                 <span>MODEL: {stats?.embedding_model || 'MiniLM-L6-v2 + CLIP'}</span>
               </div>
             </div>
 
             {/* Main Progress Bar */}
             <div className="space-y-1.5">
-              <div className="h-2.5 w-full bg-canvas-soft rounded-full overflow-hidden border border-hairline flex">
+              <div className="h-2.5 w-full bg-canvas-soft rounded-sm overflow-hidden border border-hairline flex">
                 <div
                   className="h-full bg-accent-sunset transition-all duration-500"
                   style={{ width: `${progressPercent}%` }}
@@ -113,23 +113,23 @@ export const IndexingProgressModal: React.FC<IndexingProgressModalProps> = ({
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             
             {/* Stage 1: Whisper Transcription */}
-            <div className="bg-canvas-soft/60 border border-hairline rounded-lg p-4 space-y-2">
+            <div className="bg-canvas-soft/60 border border-hairline rounded-sm p-4 space-y-2">
               <div className="flex items-center justify-between">
                 <span className="eyebrow-mono text-[9px]">1. TRANSCRIPTION</span>
-                <Cpu className="w-3.5 h-3.5 text-accent-sunset" />
+                <Cpu className="w-3.5 h-3.5 text-ink-body" />
               </div>
               <p className="text-xs font-semibold text-ink">Whisper Speech-to-Text</p>
               <div className="text-[11px] font-mono text-ink-mute flex items-center gap-1">
-                <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                <CheckCircle2 className="w-3 h-3 text-ink" />
                 <span>Word Timestamps Preserved</span>
               </div>
             </div>
 
             {/* Stage 2: Chunking & Enrichment */}
-            <div className="bg-canvas-soft/60 border border-hairline rounded-lg p-4 space-y-2">
+            <div className="bg-canvas-soft/60 border border-hairline rounded-sm p-4 space-y-2">
               <div className="flex items-center justify-between">
                 <span className="eyebrow-mono text-[9px]">2. CHUNKING & NLP</span>
-                <Sparkles className="w-3.5 h-3.5 text-accent-sunset" />
+                <Sparkles className="w-3.5 h-3.5 text-ink-body" />
               </div>
               <p className="text-xs font-semibold text-ink">{totalChunks} Chunks Generated</p>
               <div className="text-[11px] font-mono text-ink-mute">
@@ -138,26 +138,26 @@ export const IndexingProgressModal: React.FC<IndexingProgressModalProps> = ({
             </div>
 
             {/* Stage 3: CLIP Visual Scene Embedding */}
-            <div className="bg-canvas-soft/60 border border-hairline rounded-lg p-4 space-y-2">
+            <div className="bg-canvas-soft/60 border border-hairline rounded-sm p-4 space-y-2">
               <div className="flex items-center justify-between">
                 <span className="eyebrow-mono text-[9px]">3. VISUAL EMBEDDINGS</span>
-                <Eye className="w-3.5 h-3.5 text-emerald-400" />
+                <Eye className="w-3.5 h-3.5 text-ink" />
               </div>
               <p className="text-xs font-semibold text-ink">{visualIndexedCount}/{totalChunks} Keyframes ({visualPercent}%)</p>
-              <div className="h-1.5 w-full bg-canvas rounded-full overflow-hidden border border-hairline">
-                <div className="h-full bg-emerald-400 transition-all" style={{ width: `${visualPercent}%` }} />
+              <div className="h-1.5 w-full bg-canvas rounded-sm overflow-hidden border border-hairline">
+                <div className="h-full bg-ink transition-all" style={{ width: `${visualPercent}%` }} />
               </div>
             </div>
 
             {/* Stage 4: Dense Vector Index */}
-            <div className="bg-canvas-soft/60 border border-hairline rounded-lg p-4 space-y-2">
+            <div className="bg-canvas-soft/60 border border-hairline rounded-sm p-4 space-y-2">
               <div className="flex items-center justify-between">
                 <span className="eyebrow-mono text-[9px]">4. VECTOR INDEX</span>
-                <Database className="w-3.5 h-3.5 text-accent-sunset" />
+                <Database className="w-3.5 h-3.5 text-ink-body" />
               </div>
               <p className="text-xs font-semibold text-ink">{stats?.is_fitted ? 'Vector Store Fitted' : 'Ready'}</p>
               <div className="text-[11px] font-mono text-ink-mute flex items-center gap-1">
-                <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                <CheckCircle2 className="w-3 h-3 text-ink" />
                 <span>384-dim Dense Index</span>
               </div>
             </div>
@@ -172,7 +172,7 @@ export const IndexingProgressModal: React.FC<IndexingProgressModalProps> = ({
 
             <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
               {videos.length === 0 ? (
-                <div className="text-center py-6 text-xs text-ink-mute font-mono border border-dashed border-hairline rounded-lg">
+                <div className="text-center py-6 text-xs text-ink-mute font-mono border border-dashed border-hairline rounded-sm">
                   No items in queue. Use 'Index New' to add media files.
                 </div>
               ) : (
@@ -184,7 +184,7 @@ export const IndexingProgressModal: React.FC<IndexingProgressModalProps> = ({
                   return (
                     <div
                       key={vid.id}
-                      className="bg-canvas-soft border border-hairline rounded-lg p-3.5 flex items-center justify-between gap-4"
+                      className="bg-canvas-soft border border-hairline rounded-sm p-3.5 flex items-center justify-between gap-4"
                     >
                       <div className="flex items-center gap-3 min-w-0">
                         {vid.thumbnail_url ? (
@@ -208,7 +208,7 @@ export const IndexingProgressModal: React.FC<IndexingProgressModalProps> = ({
                             {hasVisual && (
                               <>
                                 <span>•</span>
-                                <span className="text-emerald-400 flex items-center gap-0.5">
+                                <span className="text-ink flex items-center gap-0.5">
                                   <Eye className="w-2.5 h-2.5" /> VISUAL INDEXED
                                 </span>
                               </>
@@ -220,18 +220,18 @@ export const IndexingProgressModal: React.FC<IndexingProgressModalProps> = ({
                       {/* Status Badge */}
                       <div className="shrink-0">
                         {isFailed ? (
-                          <span className="px-2.5 py-1 rounded-full border border-red-800/60 bg-red-950/60 text-[10px] font-mono text-red-300 flex items-center gap-1">
-                            <AlertTriangle className="w-3 h-3 text-red-400" />
+                          <span className="px-2.5 py-1 rounded-sm border border-danger/60 bg-canvas-card/60 text-[10px] font-mono text-danger flex items-center gap-1">
+                            <AlertTriangle className="w-3 h-3 text-danger" />
                             <span>FAILED</span>
                           </span>
                         ) : isIndexing ? (
-                          <span className="px-2.5 py-1 rounded-full border border-amber-800/60 bg-amber-950/60 text-[10px] font-mono text-amber-300 flex items-center gap-1">
-                            <Loader2 className="w-3 h-3 text-amber-400 animate-spin" />
+                          <span className="px-2.5 py-1 rounded-sm border border-hairline-bright/60 bg-canvas-card/60 text-[10px] font-mono text-ink-body flex items-center gap-1">
+                            <Loader2 className="w-3 h-3 text-ink-body animate-spin" />
                             <span>PROCESSING</span>
                           </span>
                         ) : (
-                          <span className="px-2.5 py-1 rounded-full border border-emerald-900/60 bg-emerald-950/60 text-[10px] font-mono text-emerald-400 flex items-center gap-1">
-                            <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                          <span className="px-2.5 py-1 rounded-sm border border-canvas-card/60 bg-canvas-card/60 text-[10px] font-mono text-ink flex items-center gap-1">
+                            <CheckCircle2 className="w-3 h-3 text-ink" />
                             <span>100% DONE</span>
                           </span>
                         )}

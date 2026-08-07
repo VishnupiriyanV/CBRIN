@@ -31,11 +31,11 @@ export const PlatformRulesPanel: React.FC = () => {
   return (
     <Panel className="space-y-4">
       <PanelHeading className="mb-0">Platform Rules</PanelHeading>
-      {error && <div className="bg-red-950/40 border border-red-800/30 rounded-lg p-2.5 text-xs text-red-300 font-mono">{error}</div>}
+      {error && <div className="bg-canvas-card/40 border border-danger/30 rounded-sm p-2.5 text-xs text-danger font-mono">{error}</div>}
       <div className="overflow-x-auto">
         <table className="w-full text-xs text-left">
           <thead>
-            <tr className="text-ink-mute font-mono text-[10px] uppercase tracking-wide border-b border-hairline">
+            <tr className="text-ink-mute font-mono text-[10px] border-b border-hairline">
               <th className="py-2 pr-3">Platform</th>
               <th className="py-2 pr-3">Style</th>
               <th className="py-2 pr-3">Char limit</th>

@@ -83,10 +83,10 @@ export const ClipCard: React.FC<ClipCardProps> = ({ clip, rank }) => {
   };
 
   return (
-    <div className="bg-canvas-card border border-hairline hover:border-hairline-bright rounded-xl p-5 space-y-4 transition-colors animate-fade-in">
+    <div className="bg-canvas-card border border-hairline hover:border-hairline-bright rounded-sm p-5 space-y-4 transition-colors animate-fade-in">
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-center gap-2.5 min-w-0">
-          <span className="w-6 h-6 rounded-full bg-canvas-soft border border-hairline flex items-center justify-center text-[10px] font-mono text-accent-sunset shrink-0">
+          <span className="w-6 h-6 rounded-sm bg-canvas-soft border border-hairline flex items-center justify-center text-[10px] font-mono text-ink-body shrink-0">
             {rank}
           </span>
           <div className="min-w-0">
@@ -98,7 +98,7 @@ export const ClipCard: React.FC<ClipCardProps> = ({ clip, rank }) => {
               {!clip.timing_precise && (
                 <>
                   <span className="text-hairline-bright">•</span>
-                  <span className="text-amber-400" title="Word-level timing unavailable — using sentence-level boundaries">
+                  <span className="text-ink-body" title="Word-level timing unavailable — using sentence-level boundaries">
                     approx. timing
                   </span>
                 </>
@@ -112,7 +112,7 @@ export const ClipCard: React.FC<ClipCardProps> = ({ clip, rank }) => {
             onClick={() => sendFeedback('winner')}
             disabled={feedbackSent !== null}
             title="Mark as a winner"
-            className={`p-1.5 rounded-full border transition-colors ${feedbackSent === 'winner' ? 'border-emerald-500/60 bg-emerald-500/10 text-emerald-400' : 'border-hairline text-ink-mute hover:text-ink hover:border-hairline-bright'}`}
+            className={`p-1.5 rounded-sm border transition-colors ${feedbackSent === 'winner' ? 'border-ink/60 bg-ink/10 text-ink' : 'border-hairline text-ink-mute hover:text-ink hover:border-hairline-bright'}`}
           >
             <ThumbsUp className="w-3.5 h-3.5" />
           </button>
@@ -120,7 +120,7 @@ export const ClipCard: React.FC<ClipCardProps> = ({ clip, rank }) => {
             onClick={() => sendFeedback('dud')}
             disabled={feedbackSent !== null}
             title="Mark as a dud"
-            className={`p-1.5 rounded-full border transition-colors ${feedbackSent === 'dud' ? 'border-red-500/60 bg-red-500/10 text-red-400' : 'border-hairline text-ink-mute hover:text-ink hover:border-hairline-bright'}`}
+            className={`p-1.5 rounded-sm border transition-colors ${feedbackSent === 'dud' ? 'border-danger/60 bg-danger/10 text-danger' : 'border-hairline text-ink-mute hover:text-ink hover:border-hairline-bright'}`}
           >
             <ThumbsDown className="w-3.5 h-3.5" />
           </button>
@@ -141,9 +141,9 @@ export const ClipCard: React.FC<ClipCardProps> = ({ clip, rank }) => {
             <button
               key={preset}
               onClick={() => togglePreset(preset)}
-              className={`px-2.5 py-1 rounded-full border text-[10px] font-mono transition-all ${
+              className={`px-2.5 py-1 rounded-sm border text-[10px] font-mono transition-all ${
                 selectedPresets.includes(preset)
-                  ? 'border-accent-sunset bg-accent-sunset/10 text-accent-sunset'
+                  ? 'border-accent-sunset bg-accent-sunset/10 text-ink-body'
                   : 'border-hairline text-ink-mute hover:border-hairline-bright hover:text-ink'
               }`}
             >
@@ -156,7 +156,7 @@ export const ClipCard: React.FC<ClipCardProps> = ({ clip, rank }) => {
           <button
             onClick={startRender}
             disabled={selectedPresets.length === 0 || renderStatus === 'queued' || renderStatus === 'running'}
-            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border border-accent-sunset/40 bg-accent-sunset/10 hover:bg-accent-sunset hover:text-black hover:border-accent-sunset text-xs font-medium text-accent-sunset transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-sm border border-accent-sunset/40 bg-accent-sunset/10 hover:bg-accent-sunset hover:text-black hover:border-accent-sunset text-xs font-medium text-ink-body transition-all disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {renderStatus === 'queued' || renderStatus === 'running' ? (
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -170,7 +170,7 @@ export const ClipCard: React.FC<ClipCardProps> = ({ clip, rank }) => {
             <span className="text-[10px] font-mono text-ink-mute">{renderMessage}</span>
           )}
           {renderStatus === 'failed' && (
-            <span className="text-[10px] font-mono text-red-400">{renderMessage}</span>
+            <span className="text-[10px] font-mono text-danger">{renderMessage}</span>
           )}
         </div>
 
@@ -181,7 +181,7 @@ export const ClipCard: React.FC<ClipCardProps> = ({ clip, rank }) => {
                 key={preset}
                 href={engineClipFileUrl(clip.id, preset)}
                 download={`${clip.id}-${preset}.mp4`}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-accent-sunset/40 bg-accent-sunset/10 hover:bg-accent-sunset hover:text-black hover:border-accent-sunset text-[10px] font-semibold text-accent-sunset transition-all"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-sm border border-accent-sunset/40 bg-accent-sunset/10 hover:bg-accent-sunset hover:text-black hover:border-accent-sunset text-[10px] font-semibold text-ink-body transition-all"
               >
                 <Download className="w-3.5 h-3.5" />
                 <span>Download {PRESET_LABELS[preset as RenderPreset] || preset}</span>

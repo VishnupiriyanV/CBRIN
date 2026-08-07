@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { ChunkResult } from '../types';
 import { resolveMediaUrl } from '../services/api';
-import { Play, Clock, ArrowUpRight, HelpCircle, Layers, Bookmark, Eye, FileText, User, Copy, Check } from 'lucide-react';
+import { Play, Bookmark, Eye, FileText, Copy, Check } from 'lucide-react';
 
 interface ResultCardProps {
   result: ChunkResult;
@@ -142,16 +142,19 @@ export const ResultCard: React.FC<ResultCardProps> = ({
                           confidence === 'possible' ? 'Possible match' :
                           confidence === 'unranked' ? 'Unranked (degraded)' :
                           'Closest match';
-  const scoreColor = confidence === 'strong' ? 'bg-emerald-500' :
-                     confidence === 'possible' ? 'bg-amber-500' :
-                     confidence === 'unranked' ? 'bg-slate-500' :
-                     'bg-orange-500';
+  // STRATEGY.md §8: confidence is encoded as the *length* of a monochrome rule, not as a
+  // hue. The previous emerald/amber/slate/orange dot vocabulary put four colours in one
+  // results list, which read as a status rainbow rather than as information.
+  const confidenceFill = confidence === 'strong' ? 1 :
+                         confidence === 'possible' ? 0.6 :
+                         confidence === 'unranked' ? 0.15 :
+                         0.3;
 
   // Use keyframe thumbnail if available, otherwise fall back to video thumbnail
   const displayThumbnail = resolveMediaUrl(result.keyframe_url) || resolveMediaUrl(result.thumbnail_url);
 
   return (
-    <div className={`bg-canvas-card border rounded-lg p-5 hover:border-hairline-bright transition-all group relative ${result.is_highlighted ? 'border-accent-sunset/50' : 'border-hairline'}`}>
+    <div className={`bg-canvas-card border rounded-sm p-5 hover:border-hairline-bright transition-all group relative ${result.is_highlighted ? 'border-accent-sunset/50' : 'border-hairline'}`}>
       <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
 
         {/* Thumbnail + Main Content */}
@@ -167,7 +170,7 @@ export const ResultCard: React.FC<ResultCardProps> = ({
                 alt={`${result.video_title} at ${result.start_timestamp}`}
                 className={
                   isVisualMode
-                    ? 'w-full sm:w-64 aspect-video object-cover rounded-lg border-2 border-accent-sunset/60 bg-canvas-soft'
+                    ? 'w-full sm:w-64 aspect-video object-cover rounded-sm border-2 border-accent-sunset/60 bg-canvas-soft'
                     : 'w-28 h-[72px] object-cover rounded border border-hairline bg-canvas-soft'
                 }
                 onError={(e) => {
@@ -183,7 +186,7 @@ export const ResultCard: React.FC<ResultCardProps> = ({
                   specific moment — shown distinctly from a real per-moment 'ok' frame
                   instead of claiming the same thing (IMPROVEMENT-PLAN.md 2.10). */}
               <div
-                className={`absolute top-1 left-1 p-0.5 rounded ${result.visual_status === 'ok' ? 'bg-emerald-500/80' : result.visual_status === 'video-level' ? 'bg-amber-500/80' : 'bg-canvas-soft/80'}`}
+                className={`absolute top-1 left-1 p-0.5 rounded ${result.visual_status === 'ok' ? 'bg-ink/80' : result.visual_status === 'video-level' ? 'bg-ink-body/80' : 'bg-canvas-soft/80'}`}
                 title={
                   result.visual_status === 'ok' ? 'CLIP visual match — a real frame from this moment' :
                   result.visual_status === 'video-level' ? "Video-level thumbnail only — can't localize this specific moment" :
@@ -202,145 +205,99 @@ export const ResultCard: React.FC<ResultCardProps> = ({
           {/* Text Content */}
           <div className="space-y-3 flex-1 min-w-0">
 
-            {/* Header Metadata */}
-            <div className="flex flex-wrap items-center gap-2">
-              {/* Content Source Channel Badge with Icon & Tooltip */}
+            {/* Meta line.
+                Previously five separate chrome elements (channel capsule, timestamp
+                capsule, confidence dot, match reason, mobile index badge) stacked above
+                the content, which made the transcript quote — the only thing the user
+                came for — the fifth-loudest element on the card. It is now one quiet
+                line of text, and the quote below is the largest thing in the card
+                (STRATEGY.md §8). */}
+            <div className="flex items-baseline gap-2 text-[11px] text-ink-mute">
+              <span className="truncate" title={`Channel: ${result.channel}`}>{result.channel}</span>
+              <span className="text-ink-faint">/</span>
+              <span className="font-mono shrink-0">{result.start_timestamp}–{result.end_timestamp}</span>
               <span
-                className="px-2.5 py-0.5 rounded-full border border-hairline bg-canvas-soft text-[10px] font-mono text-accent-sunset uppercase tracking-wider flex items-center gap-1"
-                title={`Content Creator / Channel: ${result.channel}`}
+                className="ml-auto flex items-center gap-2 shrink-0"
+                title={result.match_reason ? `${confidenceLabel} — ${result.match_reason}` : confidenceLabel}
               >
-                <User className="w-2.5 h-2.5 text-accent-sunset" />
-                <span>CHANNEL: {result.channel}</span>
+                <span className="hidden sm:inline">{confidenceLabel}</span>
+                <span className="confidence-rule" style={{ '--fill': confidenceFill } as React.CSSProperties} />
               </span>
-
-              {/* Timestamp */}
-              <div className="flex items-center gap-1 px-2.5 py-0.5 rounded-full border border-hairline bg-canvas-soft text-xs font-mono text-ink-mute">
-                <Clock className="w-3 h-3 text-ink-mute" />
-                <span>{result.start_timestamp} - {result.end_timestamp}</span>
-              </div>
-
-              {/* Similarity Score + One-line match reason */}
-              <div className="ml-auto sm:ml-0 flex items-center gap-1.5 text-[11px] font-mono text-ink-mute">
-                <span className={`w-1.5 h-1.5 rounded-full ${scoreColor}`}></span>
-                <span className="font-semibold text-ink">{confidenceLabel}</span>
-                {result.match_reason && (
-                  <span className="text-[10px] text-accent-sunset/90 font-mono hidden md:inline truncate max-w-xs" title={result.match_reason}>
-                    • {result.match_reason}
-                  </span>
-                )}
-              </div>
-
-              {/* Index type badge — visible on mobile where thumbnail is hidden */}
-              <div className="sm:hidden flex items-center gap-1 text-[9px] font-mono">
-                {result.visual_status === 'ok' ? (
-                  <span className="px-1.5 py-0.5 rounded-full bg-emerald-950/60 border border-emerald-800/40 text-emerald-400 flex items-center gap-0.5">
-                    <Eye className="w-2.5 h-2.5" /> VISUAL
-                  </span>
-                ) : result.visual_status === 'video-level' ? (
-                  <span className="px-1.5 py-0.5 rounded-full bg-amber-950/60 border border-amber-800/40 text-amber-400 flex items-center gap-0.5" title="Video-level thumbnail only — can't localize this specific moment">
-                    <Eye className="w-2.5 h-2.5" /> THUMBNAIL
-                  </span>
-                ) : (
-                  <span className="px-1.5 py-0.5 rounded-full bg-canvas-soft border border-hairline text-ink-mute flex items-center gap-0.5">
-                    <FileText className="w-2.5 h-2.5" /> TEXT
-                  </span>
-                )}
-              </div>
             </div>
 
             {/* Video Title */}
-            <h3 className="font-medium text-base text-ink tracking-tight group-hover:text-accent-sunset transition-colors">
+            <h3 className="font-medium text-[15px] text-ink-body tracking-tight group-hover:text-ink transition-colors duration-100">
               {result.video_title}
+              {result.section_topic && (
+                <span className="text-ink-mute font-normal"> · {result.section_topic}</span>
+              )}
             </h3>
-
-            {/* Section Topic (if available) */}
-            {result.section_topic && (
-              <div className="flex items-center gap-1.5 text-xs font-mono text-ink-mute">
-                <Layers className="w-3.5 h-3.5 text-accent-sunset" />
-                <span>SECTION: {result.section_topic}</span>
-              </div>
-            )}
 
             {/* Spoken Text Snippet — full-weight quote block in spoken mode (the text IS the
                 match); a small, muted, clamped caption in visual mode, since the frame above
                 is the match and this is just supporting context for it. */}
             {isVisualMode ? (
-              <div className="space-y-1">
-                <span className="text-[9px] font-mono text-ink-mute uppercase tracking-wider">Spoken at this frame</span>
-                <p className="text-xs text-ink-mute leading-relaxed font-sans line-clamp-2">
-                  {renderHighlightedSnippet(result.text, searchQuery, result.implicit_concepts)}
-                </p>
-              </div>
-            ) : (
-              <div className="bg-canvas-soft/60 border border-hairline/60 rounded-md p-3.5 text-sm text-ink-body leading-relaxed font-sans">
-                <span className="text-ink-mute text-xs font-mono select-none mr-1.5">"</span>
+              <p className="text-xs text-ink-mute leading-relaxed line-clamp-2">
                 {renderHighlightedSnippet(result.text, searchQuery, result.implicit_concepts)}
-                <span className="text-ink-mute text-xs font-mono select-none ml-1.5">"</span>
-              </div>
+              </p>
+            ) : (
+              // No box. A left rule is enough to mark a quotation, and it lets the text
+              // itself be the largest, brightest thing in the card.
+              <blockquote className="border-l border-hairline-bright pl-3.5 text-[15px] text-ink leading-relaxed max-w-[68ch]">
+                {renderHighlightedSnippet(result.text, searchQuery, result.implicit_concepts)}
+              </blockquote>
             )}
 
             {/* Questions Answered (if available) */}
             {result.questions_answered && result.questions_answered.length > 0 && (
-              <div className="space-y-1">
-                <div className="flex items-center gap-1 text-[10px] font-mono text-ink-mute uppercase tracking-wider">
-                  <HelpCircle className="w-3 h-3 text-accent-sunset" />
-                  <span>ANSWERS QUESTION:</span>
-                </div>
-                <p className="text-xs text-ink italic font-sans pl-4 border-l border-hairline-bright">
-                  "{result.questions_answered[0]}"
-                </p>
-              </div>
+              <p className="text-xs text-ink-mute leading-relaxed">
+                Answers: <span className="text-ink-body">{result.questions_answered[0]}</span>
+              </p>
             )}
 
-            {/* Key Concepts Pills */}
+            {/* Matched concepts — plain text, middot-separated. Five bordered capsules for
+                five one-word tags was more chrome than the tags were worth. */}
             {result.matched_concepts && result.matched_concepts.length > 0 && (
-              <div className="flex flex-wrap gap-1.5 pt-1">
-                {result.matched_concepts.slice(0, 5).map((concept, idx) => (
-                  <span key={idx} className="px-2 py-0.5 rounded-full border border-hairline bg-canvas text-[10px] font-mono text-ink-mute">
-                    {concept}
-                  </span>
-                ))}
-              </div>
+              <p className="text-[11px] text-ink-faint truncate">
+                {result.matched_concepts.slice(0, 5).join(' · ')}
+              </p>
             )}
           </div>
         </div>
 
-        {/* Action Buttons */}
-        <div className="sm:self-center flex sm:flex-col items-center justify-end gap-2 shrink-0 pt-2 sm:pt-0">
-          {/* Bookmark / Highlight Button */}
+        {/* Actions. Icons kept only where they are the affordance (play, copy, bookmark);
+            the decorative ones that duplicated adjacent text are gone. */}
+        <div className="sm:self-center flex sm:flex-col items-center justify-end gap-1.5 shrink-0 pt-2 sm:pt-0">
           <button
             onClick={() => onToggleHighlight(result)}
-            className={`p-2.5 rounded-full border transition-all ${
+            className={`p-2 rounded-sm border transition-colors duration-100 ${
               result.is_highlighted
-                ? 'bg-accent-sunset/10 border-accent-sunset/50 text-accent-sunset'
-                : 'bg-canvas-soft border-hairline text-ink-mute hover:text-accent-sunset hover:border-accent-sunset/40'
+                ? 'border-hairline-bright text-ink'
+                : 'border-transparent text-ink-faint hover:text-ink hover:border-hairline'
             }`}
             title={result.is_highlighted ? 'Remove highlight' : 'Highlight this moment'}
           >
             <Bookmark className={`w-4 h-4 ${result.is_highlighted ? 'fill-current' : ''}`} />
           </button>
 
-          {/* Copy Quote with Citation */}
           <button
             onClick={handleCopyCitation}
-            className={`p-2.5 rounded-full border transition-all ${
+            className={`p-2 rounded-sm border transition-colors duration-100 ${
               copied
-                ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-400'
-                : 'bg-canvas-soft border-hairline text-ink-mute hover:text-accent-sunset hover:border-accent-sunset/40'
+                ? 'border-hairline-bright text-ink'
+                : 'border-transparent text-ink-faint hover:text-ink hover:border-hairline'
             }`}
-            title={copied ? 'Copied!' : 'Copy quote with citation'}
+            title={copied ? 'Copied' : 'Copy quote with citation'}
           >
             {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
           </button>
 
-          {/* Jump to Moment */}
           <button
             onClick={() => onJumpToMoment(result)}
-            className="w-full sm:w-auto px-4 py-2.5 rounded-full border border-hairline-bright bg-canvas-soft hover:bg-accent-sunset hover:text-black hover:border-accent-sunset text-xs font-medium text-ink transition-all flex items-center justify-center gap-2 group/btn"
+            className="w-full sm:w-auto px-3 py-2 rounded-sm border border-hairline text-ink-body text-xs font-medium transition-colors duration-100 flex items-center justify-center gap-1.5 hover:bg-ink hover:text-canvas hover:border-ink active:translate-y-[0.5px]"
           >
-            <Play className="w-3.5 h-3.5 fill-current" />
-            <span>Jump to moment</span>
-            <ArrowUpRight className="w-3.5 h-3.5 text-ink-mute group-hover/btn:text-black transition-colors" />
+            <Play className="w-3 h-3 fill-current" />
+            <span>Jump</span>
           </button>
         </div>
       </div>

@@ -42,16 +42,16 @@ export const ContentPackArtifact: React.FC<ContentPackArtifactProps> = ({ pack }
   const errorCount = Object.keys(pack.errors || {}).length;
 
   return (
-    <div className="bg-canvas-soft border border-hairline-bright rounded-lg overflow-hidden">
+    <div className="bg-canvas-soft border border-hairline-bright rounded-sm overflow-hidden">
       <div className="flex items-center justify-between px-4 py-2.5 border-b border-hairline bg-canvas-card gap-2">
         <div className="min-w-0">
-          <span className="eyebrow-mono text-[9px] block text-accent-sunset">CONTENT PACK</span>
+          <span className="eyebrow-mono text-[9px] block text-ink-body">CONTENT PACK</span>
           <h4 className="text-sm font-medium text-ink truncate">{pack.video_title}</h4>
         </div>
         <button
           type="button"
           onClick={() => downloadContentPack(pack)}
-          className="shrink-0 px-2.5 py-1.5 rounded-full border border-hairline text-[11px] font-mono text-ink-mute hover:border-hairline-bright hover:text-ink transition-all inline-flex items-center gap-1.5"
+          className="shrink-0 px-2.5 py-1.5 rounded-sm border border-hairline text-[11px] font-mono text-ink-mute hover:border-hairline-bright hover:text-ink transition-all inline-flex items-center gap-1.5"
         >
           <Download className="w-3 h-3" />
           Download pack
@@ -60,7 +60,7 @@ export const ContentPackArtifact: React.FC<ContentPackArtifactProps> = ({ pack }
 
       {errorCount > 0 && (
         <div className="px-4 pt-3">
-          <div className="bg-amber-950/30 border border-amber-800/30 rounded-lg p-2.5 text-xs text-amber-300 font-mono flex items-start gap-2">
+          <div className="bg-canvas-card/30 border border-hairline-bright/30 rounded-sm p-2.5 text-xs text-ink-body font-mono flex items-start gap-2">
             <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
             <span>{errorCount} section(s) failed to generate: {Object.keys(pack.errors).join(', ')}. The rest of the pack is still usable.</span>
           </div>
@@ -153,7 +153,7 @@ export const ContentPackArtifact: React.FC<ContentPackArtifactProps> = ({ pack }
                 >
                   <div className="space-y-1">
                     {(pack.show_notes.chapters || []).map((c: any, i: number) => (
-                      <p key={i}><span className="font-mono text-accent-sunset">{c.time || '--:--'}</span>{'  '}{c.title}{c.estimated && <Tag tone="warning" className="ml-1.5">estimated</Tag>}</p>
+                      <p key={i}><span className="font-mono text-ink-body">{c.time || '--:--'}</span>{'  '}{c.title}{c.estimated && <Tag tone="warning" className="ml-1.5">estimated</Tag>}</p>
                     ))}
                   </div>
                 </OutputBlock>
@@ -180,7 +180,7 @@ export const ContentPackArtifact: React.FC<ContentPackArtifactProps> = ({ pack }
                     badge={r.over_limit ? <Tag tone="warning">over limit</Tag> : undefined}
                   >
                     <p>{r.caption}</p>
-                    {r.hashtags?.length > 0 && <p className="text-accent-sunset mt-1">{r.hashtags.join(' ')}</p>}
+                    {r.hashtags?.length > 0 && <p className="text-ink-body mt-1">{r.hashtags.join(' ')}</p>}
                   </OutputBlock>
                 );
               })}

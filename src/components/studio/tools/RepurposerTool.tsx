@@ -33,7 +33,7 @@ export const RepurposerTool: React.FC = () => {
           placeholder="Emphasize a specific angle (optional)"
           value={emphasize}
           onChange={(e) => setEmphasize(e.target.value)}
-          className="w-full bg-canvas-soft border border-hairline rounded-lg p-2.5 text-sm text-ink placeholder:text-ink-mute focus:outline-none focus:border-hairline-bright"
+          className="w-full bg-canvas-soft border border-hairline rounded-sm p-2.5 text-sm text-ink placeholder:text-ink-mute focus:outline-none focus:border-hairline-bright"
         />
         <Button variant="primary" disabled={!canSubmit} loading={running} onClick={handleSubmit}>
           Repurpose
@@ -41,13 +41,13 @@ export const RepurposerTool: React.FC = () => {
       </div>
 
       {error && (
-        <div className="bg-red-950/40 border border-red-800/30 rounded-lg p-3 text-xs text-red-300 font-mono">{error}</div>
+        <div className="bg-canvas-card/40 border border-danger/30 rounded-sm p-3 text-xs text-danger font-mono">{error}</div>
       )}
 
       {output && (
         <div className="space-y-4 pt-4 border-t border-hairline">
           {(output.guardrail_notes?.frameworks_missing?.length ?? 0) > 0 && (
-            <div className="bg-amber-950/30 border border-amber-800/30 rounded-lg p-3 text-xs text-amber-300 font-mono flex items-start gap-2">
+            <div className="bg-canvas-card/30 border border-hairline-bright/30 rounded-sm p-3 text-xs text-ink-body font-mono flex items-start gap-2">
               <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
               <span>
                 These named framework(s) from the source didn't survive verbatim into the output:{' '}
@@ -56,7 +56,7 @@ export const RepurposerTool: React.FC = () => {
             </div>
           )}
           {output.guardrail_notes?.banned_words_removed?.length ? (
-            <div className="bg-amber-950/30 border border-amber-800/30 rounded-lg p-3 text-xs text-amber-300 font-mono">
+            <div className="bg-canvas-card/30 border border-hairline-bright/30 rounded-sm p-3 text-xs text-ink-body font-mono">
               Removed banned word(s) from the output: {output.guardrail_notes.banned_words_removed.join(', ')}.
             </div>
           ) : null}

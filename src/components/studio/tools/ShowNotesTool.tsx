@@ -69,19 +69,19 @@ export const ShowNotesTool: React.FC<ShowNotesToolProps> = ({ videos }) => {
             placeholder="Episode duration in seconds (optional — enables estimated chapter times)"
             value={durationHint}
             onChange={(e) => setDurationHint(e.target.value)}
-            className="w-full bg-canvas-soft border border-hairline rounded-lg p-2.5 text-sm text-ink placeholder:text-ink-mute focus:outline-none focus:border-hairline-bright"
+            className="w-full bg-canvas-soft border border-hairline rounded-sm p-2.5 text-sm text-ink placeholder:text-ink-mute focus:outline-none focus:border-hairline-bright"
           />
         )}
         <div className="grid grid-cols-2 gap-2">
           <input
             type="text" placeholder="Episode title (optional)" value={episodeTitle}
             onChange={(e) => setEpisodeTitle(e.target.value)}
-            className="bg-canvas-soft border border-hairline rounded-lg p-2.5 text-sm text-ink placeholder:text-ink-mute focus:outline-none focus:border-hairline-bright"
+            className="bg-canvas-soft border border-hairline rounded-sm p-2.5 text-sm text-ink placeholder:text-ink-mute focus:outline-none focus:border-hairline-bright"
           />
           <input
             type="text" placeholder="Guest name (optional)" value={guestName}
             onChange={(e) => setGuestName(e.target.value)}
-            className="bg-canvas-soft border border-hairline rounded-lg p-2.5 text-sm text-ink placeholder:text-ink-mute focus:outline-none focus:border-hairline-bright"
+            className="bg-canvas-soft border border-hairline rounded-sm p-2.5 text-sm text-ink placeholder:text-ink-mute focus:outline-none focus:border-hairline-bright"
           />
         </div>
         <Button variant="primary" disabled={!canSubmit} loading={running} onClick={handleSubmit}>
@@ -90,7 +90,7 @@ export const ShowNotesTool: React.FC<ShowNotesToolProps> = ({ videos }) => {
       </div>
 
       {error && (
-        <div className="bg-red-950/40 border border-red-800/30 rounded-lg p-3 text-xs text-red-300 font-mono">{error}</div>
+        <div className="bg-canvas-card/40 border border-danger/30 rounded-sm p-3 text-xs text-danger font-mono">{error}</div>
       )}
 
       {output && (
@@ -116,7 +116,7 @@ export const ShowNotesTool: React.FC<ShowNotesToolProps> = ({ videos }) => {
             <div className="space-y-1 font-mono text-xs">
               {output.chapters.map((c, i) => (
                 <div key={i} className="flex items-center gap-2">
-                  <span className="text-accent-sunset">{c.time ?? '--:--'}</span>
+                  <span className="text-ink-body">{c.time ?? '--:--'}</span>
                   <span className="text-ink-body">{c.title}</span>
                   {c.estimated && <Tag tone="warning">est.</Tag>}
                 </div>

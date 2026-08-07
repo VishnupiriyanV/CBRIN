@@ -48,7 +48,7 @@ export const CaptionsTool: React.FC = () => {
         <input
           type="text" placeholder="CTA to preserve/adapt (optional)" value={cta}
           onChange={(e) => setCta(e.target.value)}
-          className="w-full bg-canvas-soft border border-hairline rounded-lg p-2.5 text-sm text-ink placeholder:text-ink-mute focus:outline-none focus:border-hairline-bright"
+          className="w-full bg-canvas-soft border border-hairline rounded-sm p-2.5 text-sm text-ink placeholder:text-ink-mute focus:outline-none focus:border-hairline-bright"
         />
         <div className="flex flex-wrap gap-1.5">
           {PLATFORMS.map((p) => (
@@ -63,7 +63,7 @@ export const CaptionsTool: React.FC = () => {
       </div>
 
       {error && (
-        <div className="bg-red-950/40 border border-red-800/30 rounded-lg p-3 text-xs text-red-300 font-mono">{error}</div>
+        <div className="bg-canvas-card/40 border border-danger/30 rounded-sm p-3 text-xs text-danger font-mono">{error}</div>
       )}
 
       {output && (
@@ -81,7 +81,7 @@ export const CaptionsTool: React.FC = () => {
               >
                 <p>{result.caption}</p>
                 {result.hashtags.length > 0 && (
-                  <p className="text-accent-sunset mt-1">{result.hashtags.join(' ')}</p>
+                  <p className="text-ink-body mt-1">{result.hashtags.join(' ')}</p>
                 )}
               </OutputBlock>
             );

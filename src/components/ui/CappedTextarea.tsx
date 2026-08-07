@@ -28,14 +28,14 @@ export const CappedTextarea: React.FC<CappedTextareaProps> = ({
       <textarea
         value={value}
         className={cn(
-          'w-full bg-canvas-soft border rounded-lg p-3 text-sm text-ink placeholder:text-ink-mute resize-y',
+          'w-full bg-canvas-soft border rounded-sm p-3 text-sm text-ink placeholder:text-ink-mute resize-y',
           'focus:outline-none focus:border-hairline-bright',
-          overCap ? 'border-red-500/50' : 'border-hairline',
+          overCap ? 'border-danger/50' : 'border-hairline',
           className
         )}
         {...rest}
       />
-      <div className={cn('text-[11px] font-mono text-right', overCap ? 'text-red-400' : nearCap ? 'text-amber-400' : 'text-ink-mute')}>
+      <div className={cn('text-[11px] font-mono text-right', overCap ? 'text-danger' : nearCap ? 'text-ink-body' : 'text-ink-mute')}>
         {words.toLocaleString()} / {maxWords.toLocaleString()} words
         {overCap && ' — trim before submitting'}
       </div>

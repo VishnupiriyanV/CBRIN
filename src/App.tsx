@@ -234,9 +234,9 @@ export const App: React.FC = () => {
 
         {/* Backend Offline Notification Banner */}
         {backendOnline === false && (
-          <div className="bg-red-950/60 border-b border-red-800/40 px-4 py-2.5 flex items-center justify-center gap-2 text-xs font-mono text-red-300 animate-fade-in shrink-0">
+          <div className="bg-canvas-card/60 border-b border-danger/40 px-4 py-2.5 flex items-center justify-center gap-2 text-xs font-mono text-danger animate-fade-in shrink-0">
             <WifiOff className="w-3.5 h-3.5" />
-            <span>BACKEND OFFLINE — Start Python server: <code className="bg-red-900/40 px-1.5 py-0.5 rounded text-red-200">python backend/main.py</code></span>
+            <span>BACKEND OFFLINE — Start Python server: <code className="bg-canvas-card/40 px-1.5 py-0.5 rounded text-danger">python backend/main.py</code></span>
           </div>
         )}
 
@@ -274,8 +274,8 @@ export const App: React.FC = () => {
 
         {/* Empty Library Onboarding Banner */}
         {videos.length === 0 ? (
-          <div className="bg-canvas-soft/80 border border-hairline rounded-lg p-10 text-center max-w-2xl mx-auto space-y-4">
-            <div className="w-12 h-12 rounded-full border border-hairline-bright bg-canvas-card mx-auto flex items-center justify-center text-accent-sunset">
+          <div className="bg-canvas-soft/80 border border-hairline rounded-sm p-10 text-center max-w-2xl mx-auto space-y-4">
+            <div className="w-12 h-12 rounded-sm border border-hairline-bright bg-canvas-card mx-auto flex items-center justify-center text-ink-body">
               <Video className="w-5 h-5" />
             </div>
             <div className="space-y-1">
@@ -290,7 +290,7 @@ export const App: React.FC = () => {
             <button
               onClick={() => setIsLibraryOpen(true)}
               disabled={!backendOnline}
-              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full border border-hairline-bright bg-canvas-card hover:bg-accent-sunset hover:text-black hover:border-accent-sunset text-xs font-medium text-ink transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-sm border border-hairline-bright bg-canvas-card hover:bg-accent-sunset hover:text-black hover:border-accent-sunset text-xs font-medium text-ink transition-all disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <Plus className="w-4 h-4" />
               <span>Ingest Local Files, Folder, YouTube URL or Import Backup</span>
@@ -314,7 +314,7 @@ export const App: React.FC = () => {
 
         {/* Search Error */}
         {searchError && (
-          <div className="bg-red-950/40 border border-red-800/30 rounded-lg p-4 text-xs text-red-300 font-mono text-center animate-fade-in">
+          <div className="bg-canvas-card/40 border border-danger/30 rounded-sm p-4 text-xs text-danger font-mono text-center animate-fade-in">
             {searchError}
           </div>
         )}
@@ -322,7 +322,7 @@ export const App: React.FC = () => {
         {/* Degraded-mode notice: the relevance reranker was unavailable server-side, so
             results below are unranked best-effort matches, not confidence-scored ones. */}
         {searchResponse?.degraded && (
-          <div className="bg-amber-950/30 border border-amber-800/30 rounded-lg p-3 text-xs text-amber-300 font-mono text-center animate-fade-in">
+          <div className="bg-canvas-card/30 border border-hairline-bright/30 rounded-sm p-3 text-xs text-ink-body font-mono text-center animate-fade-in">
             {searchResponse.message || 'Relevance reranker unavailable — showing unranked best-effort matches.'}
           </div>
         )}
@@ -336,7 +336,7 @@ export const App: React.FC = () => {
               <div className="flex items-center gap-2">
                 <span className="eyebrow-mono">SEARCH RESULTS</span>
                 {searchResponse && (
-                  <span className="text-[10px] font-mono px-2.5 py-0.5 rounded-full border border-hairline bg-canvas-soft text-accent-sunset">
+                  <span className="text-[10px] font-mono px-2.5 py-0.5 rounded-sm border border-hairline bg-canvas-soft text-ink-body">
                     {filteredResults.length}{videoFilter !== 'all' ? ` / ${searchResponse.results.length}` : ''} MOMENTS FOUND
                   </span>
                 )}
@@ -345,8 +345,8 @@ export const App: React.FC = () => {
               <div className="flex items-center gap-2">
                 {/* Filter by video (IMPROVEMENT-PLAN.md 3.6) */}
                 {resultVideoOptions.length > 1 && (
-                  <div className="relative flex items-center gap-1 px-2 py-1 rounded-full border border-hairline bg-canvas-soft text-[10px] font-mono text-ink-mute">
-                    <Filter className="w-3 h-3 text-accent-sunset shrink-0" />
+                  <div className="relative flex items-center gap-1 px-2 py-1 rounded-sm border border-hairline bg-canvas-soft text-[10px] font-mono text-ink-mute">
+                    <Filter className="w-3 h-3 text-ink-body shrink-0" />
                     <select
                       value={videoFilter}
                       onChange={(e) => setVideoFilter(e.target.value)}
@@ -365,14 +365,14 @@ export const App: React.FC = () => {
                   <div className="relative">
                     <button
                       onClick={() => setExportResultsOpen(!exportResultsOpen)}
-                      className="px-3 py-1 rounded-full border border-hairline bg-canvas-soft hover:border-hairline-bright text-[10px] font-mono text-ink-mute hover:text-ink transition-all flex items-center gap-1"
+                      className="px-3 py-1 rounded-sm border border-hairline bg-canvas-soft hover:border-hairline-bright text-[10px] font-mono text-ink-mute hover:text-ink transition-all flex items-center gap-1"
                     >
                       <FileDown className="w-3 h-3" />
                       <span>EXPORT</span>
                       <ChevronDown className={`w-2.5 h-2.5 transition-transform ${exportResultsOpen ? 'rotate-180' : ''}`} />
                     </button>
                     {exportResultsOpen && (
-                      <div className="absolute right-0 mt-1.5 w-36 bg-canvas-card border border-hairline-bright rounded-lg overflow-hidden z-50 animate-fade-in py-1">
+                      <div className="absolute right-0 mt-1.5 w-36 bg-canvas-card border border-hairline-bright rounded-sm overflow-hidden z-50 animate-fade-in py-1">
                         <button
                           onClick={() => { exportSearchJSON(query, searchMode); setExportResultsOpen(false); }}
                           className="w-full px-3 py-2 text-left text-[11px] text-ink hover:bg-canvas-soft transition-colors"
@@ -393,11 +393,11 @@ export const App: React.FC = () => {
                 {/* Telemetry info toggle (Replaces full-weight header text) */}
                 {searchResponse && (
                   <div className="relative group/telemetry">
-                    <button className="px-2.5 py-1 rounded-full border border-hairline bg-canvas-soft hover:border-hairline-bright text-[10px] font-mono text-ink-mute hover:text-ink transition-all flex items-center gap-1">
-                      <Info className="w-3 h-3 text-accent-sunset" />
+                    <button className="px-2.5 py-1 rounded-sm border border-hairline bg-canvas-soft hover:border-hairline-bright text-[10px] font-mono text-ink-mute hover:text-ink transition-all flex items-center gap-1">
+                      <Info className="w-3 h-3 text-ink-body" />
                       <span>TELEMETRY</span>
                     </button>
-                    <div className="absolute right-0 top-full mt-1.5 hidden group-hover/telemetry:block bg-canvas-card border border-hairline-bright px-3 py-1.5 rounded-lg text-[10px] font-mono text-ink-mute whitespace-nowrap z-50 animate-fade-in">
+                    <div className="absolute right-0 top-full mt-1.5 hidden group-hover/telemetry:block bg-canvas-card border border-hairline-bright px-3 py-1.5 rounded-sm text-[10px] font-mono text-ink-mute whitespace-nowrap z-50 animate-fade-in">
                       SCANNED {searchResponse.total_chunks_scanned} CHUNKS IN {searchResponse.execution_time_ms}ms // {searchResponse.search_mode?.toUpperCase()} MODE
                     </div>
                   </div>
@@ -412,7 +412,7 @@ export const App: React.FC = () => {
                   <div
                     key={result.id}
                     ref={(el) => { resultCardRefs.current[result.id] = el; }}
-                    className={idx === selectedIndex ? 'rounded-lg ring-2 ring-accent-sunset/60' : ''}
+                    className={idx === selectedIndex ? 'rounded-sm ring-2 ring-accent-sunset/60' : ''}
                   >
                     <ResultCard
                       result={result}
@@ -452,7 +452,7 @@ export const App: React.FC = () => {
                 </button>
                 <button
                   onClick={() => setIsLibraryOpen(true)}
-                  className="text-[11px] font-mono text-accent-sunset hover:underline"
+                  className="text-[11px] font-mono text-ink-body hover:underline"
                 >
                   VIEW ALL ({videos.length}) →
                 </button>
@@ -464,9 +464,9 @@ export const App: React.FC = () => {
                 <div
                   key={vid.id}
                   onClick={() => setIsLibraryOpen(true)}
-                  className="bg-[#121215] border border-hairline hover:border-hairline-bright rounded-lg p-4 space-y-3 cursor-pointer group transition-all"
+                  className="bg-[#121215] border border-hairline hover:border-hairline-bright rounded-sm p-4 space-y-3 cursor-pointer group transition-all"
                 >
-                  <div className="relative aspect-video rounded-lg overflow-hidden border border-hairline/60 bg-black/60">
+                  <div className="relative aspect-video rounded-sm overflow-hidden border border-hairline/60 bg-black/60">
                     <img
                       src={vid.thumbnail_url || 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 90"><rect fill="%23191919" width="160" height="90"/><text x="80" y="50" fill="%237d8187" font-size="12" text-anchor="middle">No Thumbnail</text></svg>'}
                       alt={vid.title}
@@ -478,11 +478,11 @@ export const App: React.FC = () => {
                   </div>
 
                   <div className="space-y-1">
-                    <div className="flex items-center justify-between text-[10px] font-mono text-accent-sunset">
+                    <div className="flex items-center justify-between text-[10px] font-mono text-ink-body">
                       <span className="uppercase">{vid.channel}</span>
                       <span className="text-ink-mute">{vid.chunk_count} CHUNKS</span>
                     </div>
-                    <h4 className="text-xs font-semibold text-ink line-clamp-1 group-hover:text-accent-sunset transition-colors">
+                    <h4 className="text-xs font-semibold text-ink line-clamp-1 group-hover:text-ink-body transition-colors">
                       {vid.title}
                     </h4>
                   </div>

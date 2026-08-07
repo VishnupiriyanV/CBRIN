@@ -66,7 +66,7 @@ export const StudioView: React.FC<StudioViewProps> = ({ videos, backendOnline })
   if (llmConfigured === false) {
     return (
       <div className="max-w-lg mx-auto text-center py-16 space-y-4">
-        <div className="w-12 h-12 rounded-full border border-hairline-bright bg-canvas-card mx-auto flex items-center justify-center text-accent-sunset">
+        <div className="w-12 h-12 rounded-sm border border-hairline-bright bg-canvas-card mx-auto flex items-center justify-center text-ink-body">
           <KeyRound className="w-5 h-5" />
         </div>
         <h3 className="text-base font-medium text-ink">No LLM API key configured</h3>

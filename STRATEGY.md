@@ -168,6 +168,108 @@ The math a buyer does: Opus Clip Pro is $348/yr. You're $79 once. You don't need
 
 ---
 
-## 8. The one-paragraph version
+## 8. Design direction — minimal black
+
+**Design read:** dense single-operator tool for a technical-ish creator, near-black, restrained. Leaning Linear / Vercel / Raycast, not Awwwards. Dials: `VARIANCE 4 / MOTION 2 / DENSITY 6`. This is a workbench, not a marketing page.
+
+### What's actually wrong now
+
+The current theme is "xAI-inspired near-black + sunset orange." The palette isn't the problem — the *discipline* is. Counted in `src/`:
+
+| Tell | Count | Why it reads as AI slop |
+|---|---|---|
+| `accent-sunset` (#ff7a17) usages | **110** | An accent used 110 times isn't an accent, it's a second background colour. It's on channel badges, garnish icons, section labels, hover states, headings and borders simultaneously. |
+| `rounded-full` | **94** | Pill soup. Every badge, tag and button is a capsule. |
+| Distinct corner radii | **5** (`full`, `2xl`, `xl`, `lg`, `md`) | Shape-consistency lock broken. `Panel.tsx` even documents the drift in a comment instead of fixing it. |
+| `eyebrow-mono` uppercase wide-tracking labels | **30+ across 18 files** | `CHANNEL:`, `SECTION:`, `ANSWERS QUESTION:`, `VISUAL`, `THUMBNAIL`. The single most recognisable LLM-design tell. |
+| Semantic hues in one view | **5** (emerald / amber / red / slate / orange) | Status rainbow. |
+| Decorative icons | many | A `User` icon inside a badge that already reads `CHANNEL:`. A `Clock` next to a timestamp. Icons carrying zero information. |
+
+The worst instance is `ResultCard`: five chrome elements (channel pill, timestamp pill, confidence dot, match reason, index badge) stack above the content, so the transcript quote — the only thing the user came for — is the fifth-loudest element on the card.
+
+### The new system
+
+**Rule: the transcript text is the loudest thing on screen. Everything else is chrome and behaves like it.**
+
+```
+canvas          #000000   true black, not #0a0a0a
+canvas-raised   #0b0b0b   cards
+canvas-sunken   #060606   wells, inputs, code
+line            #1a1a1a   default hairline
+line-strong     #2b2b2b   hover / focus / active
+ink             #ededed   primary text (never pure #fff on true black — it vibrates)
+ink-body        #9e9e9e
+ink-mute        #6b6b6b
+ink-faint       #444444
+signal          #ffffff   the ONLY accent: pure white, inversion for primary action
+danger          #ff5c4d   destructive and error only — nothing else is coloured
+```
+
+Hard rules, each one a direct answer to a row in the table above:
+
+1. **No chromatic accent.** Emphasis is white-on-black inversion, weight, and space. Orange is deleted, not re-tinted.
+2. **One radius: `2px`.** Sharp reads precise; pills read templated. Status dots become 5px squares — deliberately, not as a compromise.
+3. **Mono is functional, never decorative.** `Geist Mono` is reserved for timestamps, durations, scores and IDs. Nothing else. No uppercase wide-tracking eyebrows anywhere — the `eyebrow-mono` class gets redefined rather than removed, so all 30 instances fix at once.
+4. **Two status colours, not five.** Confidence is a monochrome rule whose *length* encodes strength. Colour is reserved for danger.
+5. **An icon must carry information the text doesn't.** Delete `User` next to "CHANNEL", `Clock` next to a timestamp, `Layers` next to "SECTION". Keep `Play`, `Copy`, `Bookmark` — those are affordances.
+6. **Borders carry all elevation.** No shadows, no glows, no blur, no gradient. Already mostly true; keep it.
+7. **Motion at 2/10.** 120ms opacity and border-colour transitions. No pulse, no shimmer, no spin except a real loading state.
+8. **Type:** `Geist` replaces `Inter` (`Inter + slate + near-black` is the canonical LLM default, and Geist Mono is already loaded so the pairing is free). Display `tracking-tight`, body `leading-relaxed`, `max-w-[68ch]` on any prose.
+
+### Implementation order
+
+`tailwind.config.js` → `index.css` (redefining `.eyebrow-mono` and `.highlight-match` fixes most instances centrally) → `index.html` (font + favicon + selection colour) → `ui/` primitives (`Button`, `Pill`, `Panel`, `OutputBlock`) → then hand-fix `ResultCard`, `Header`, `ClipCard`, `ScoreBreakdown`, which own the structural badge-soup problem that a token change can't reach.
+
+**Scope note:** do this only for the surfaces that survive §4. Restyling the agent workspace and the four cut STUDIO tools is work you're about to delete.
+
+---
+
+## 9. The one-paragraph version
 
 You've built a genuinely well-engineered system around one real differentiator — clip boundaries that can't decapitate a punchline — and then buried it under two other half-products, six commodity prompt wrappers, and an unverified agent layer, none of which anyone has ever paid for or even used. Keep the boundary solver and the local archive search, delete the rest, stop treating local-first as a limitation and sell it as the reason to buy, and go get 10 people to pay $49 before you write another line. If 10 people won't, that's the most valuable thing you'll learn all year — and this stays what it already is, which is a strong piece of engineering work.
+
+---
+
+# Appendix — salvaged from the deleted docs
+
+`PITCH.md`, `AGENTIC-PIVOT-PLAN.md`, `IMPROVEMENT-PLAN.md`, `AGENTIC-SYSTEM-AUDIT.md` and `creator-tools-integration-spec.md` were deleted on 2026-08-07. The four committed ones are recoverable from git history (`git show HEAD:PITCH.md`); `AGENTIC-SYSTEM-AUDIT.md` was untracked and is gone for good, so its findings are condensed into §C below. 83 code comments across 48 files still cite these filenames as rationale — left alone deliberately, since mass-editing comments is exactly the churn this document argues against. Everything below is the part that was still load-bearing.
+
+## A. Measurement bars — the numbers that gate the marketing claim
+
+Nothing may be claimed publicly until it is measured here. Harnesses already exist at `backend/eval/`.
+
+| Metric | Bar | Status |
+|---|---|---|
+| Recall@5, differently-phrased queries | ≥ 0.80 | Never run against a real library |
+| False-positive rate, 10 negative queries | ≤ 0.10 | Never run — the empty state must actually fire |
+| Mean seek error | ≤ 5s | Never run |
+| Hook-signal AUC (`hook_eval.py`) | ≥ 0.70 | **0.668** — missed, on 50 labels over a 4-video corpus |
+| Boundary violations (setup severed from payoff) | 0% | Regression-guarded in the suite; the core claim |
+| Test library size | 15 videos, rights-clear | **4**, one of which is a rickroll |
+
+Calibration note worth keeping: the hook signal blends semantic similarity to 6 hook archetypes with 6 lexical cues at `sem=0.20 / lex=0.80`, chosen by sweeping AUC *and* median class separation together, not by eye. Expanding `hook_labels.yaml` from 50 → 200 labels is the cheapest path to clearing 0.70.
+
+## B. Guardrail register — mechanisms, not prompt instructions
+
+These survive the cut because they apply to the clip and show-notes paths that remain. Each is enforced in code and asserted in tests.
+
+| Promise | Enforcement |
+|---|---|
+| Never fabricates a timestamp | The model returns sentence *indices*; the backend derives every displayed time from parsed cue data. A model-emitted time is not a code path that exists. |
+| Never cuts between a setup and its payoff | Candidates are built by a dependency-chain solver over sentence boundaries, not a heuristic. |
+| Never invents a confidence number | No "82% viral score." Five named, inspectable signals; ranking scores are shown as buckets, never as percentages. |
+| Never truncates over a platform limit | Over-limit triggers one targeted regenerate. Slicing text is not a code path that exists. |
+| Never connects to a social account | No platform SDK is a dependency anywhere in the tree. Copy-to-clipboard is the only path out. |
+| Hard-gates instead of degrading | With no LLM key, generation refuses rather than emitting a rule-based imitation. |
+
+## C. Known defects still open
+
+- **Two search modes are decorative.** `HYBRID`/`QUESTIONS`/`TOPICS` are byte-identical in code. Shipping fake UI controls in a product whose pitch is honesty is the worst available inconsistency — fixed by §4's cut to a single mode.
+- **CLIP visual search is structurally broken for YouTube** — every chunk of a video shares one thumbnail, so all chunks have identical visual embeddings, while the UI badges each result as visually indexed. Cut.
+- **`generate_content_pack` has never completed a live run.** Cut.
+- **`tool_runs.py` / `usage.py` do whole-file JSON read-modify-write with no locking.** Fine single-user; a data-loss bug the moment anything runs concurrently.
+- **The Groq key in `.env` is plaintext in the working tree.** Flagged in two prior audits, still present. Rotate it.
+
+## D. Architectural invariants — carried forward unchanged
+
+No posting or account connection to any platform. No quota-heavy platform-API analytics. No scraping of contact info, follower data, or competitor content. Check whether a platform already ships a feature natively before building a competing one. Users supply their own inputs.

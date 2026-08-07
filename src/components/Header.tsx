@@ -57,10 +57,10 @@ export const Header: React.FC<HeaderProps> = ({
         {/* Left: Active View Title & Telemetry */}
         <div className="flex items-center gap-3 shrink-0">
           <span className="text-sm font-medium text-ink capitalize flex items-center gap-1.5 font-mono">
-            {activeView === 'search' && <Search className="w-3.5 h-3.5 text-accent-sunset" />}
-            {activeView === 'agent' && <Bot className="w-3.5 h-3.5 text-accent-sunset" />}
-            {activeView === 'engine' && <Sparkles className="w-3.5 h-3.5 text-accent-sunset" />}
-            {activeView === 'studio' && <Wand2 className="w-3.5 h-3.5 text-accent-sunset" />}
+            {activeView === 'search' && <Search className="w-3.5 h-3.5 text-ink-body" />}
+            {activeView === 'agent' && <Bot className="w-3.5 h-3.5 text-ink-body" />}
+            {activeView === 'engine' && <Sparkles className="w-3.5 h-3.5 text-ink-body" />}
+            {activeView === 'studio' && <Wand2 className="w-3.5 h-3.5 text-ink-body" />}
             <span>{activeView}</span>
           </span>
 
@@ -68,22 +68,22 @@ export const Header: React.FC<HeaderProps> = ({
           {totalVideos > 0 && (
             <button
               onClick={onOpenProgress}
-              className="hidden lg:flex items-center gap-2 px-2.5 py-1 rounded-full border border-hairline/80 bg-canvas-card/80 hover:bg-canvas-soft hover:border-hairline-bright transition-all text-[11px] font-mono group cursor-pointer overflow-hidden shrink"
+              className="hidden lg:flex items-center gap-2 px-2.5 py-1 rounded-sm border border-hairline/80 bg-canvas-card/80 hover:bg-canvas-soft hover:border-hairline-bright transition-all text-[11px] font-mono group cursor-pointer overflow-hidden shrink"
               title="Click to view full indexing pipeline telemetry & progress"
             >
               {failedCount > 0 ? (
-                <div className="flex items-center gap-1.5 text-red-400 shrink-0">
+                <div className="flex items-center gap-1.5 text-danger shrink-0">
                   <AlertTriangle className="w-3 h-3 shrink-0" />
                   <span>{failedCount} FAILED</span>
                 </div>
               ) : isFullyIndexed ? (
-                <div className="flex items-center gap-1.5 text-emerald-400 shrink-0">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0"></span>
+                <div className="flex items-center gap-1.5 text-ink shrink-0">
+                  <span className="w-1.5 h-1.5 rounded-sm bg-ink shrink-0"></span>
                   <span className="shrink-0">100% INDEXED</span>
                 </div>
               ) : (
-                <div className="flex items-center gap-1.5 text-amber-400 shrink-0">
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0"></span>
+                <div className="flex items-center gap-1.5 text-ink-body shrink-0">
+                  <span className="w-1.5 h-1.5 rounded-sm bg-ink-body shrink-0"></span>
                   <span className="shrink-0">INDEXING</span>
                 </div>
               )}
@@ -91,7 +91,7 @@ export const Header: React.FC<HeaderProps> = ({
               <span className="text-hairline-bright shrink-0">•</span>
 
               <div className="flex items-center gap-1 text-ink-mute group-hover:text-ink shrink-0">
-                <Sparkles className="w-3 h-3 text-accent-sunset shrink-0" />
+                <Sparkles className="w-3 h-3 text-ink-body shrink-0" />
                 <span>{totalChunks} CHUNKS</span>
               </div>
             </button>
@@ -104,13 +104,13 @@ export const Header: React.FC<HeaderProps> = ({
           {/* Highlights / Bookmarks Button */}
           <button
             onClick={onOpenHighlights}
-            className="relative p-2 sm:px-3 sm:py-1.5 rounded-full border border-hairline bg-canvas-card hover:bg-canvas-soft hover:border-hairline-bright text-xs font-medium text-ink transition-all flex items-center gap-1.5"
+            className="relative p-2 sm:px-3 sm:py-1.5 rounded-sm border border-hairline bg-canvas-card hover:bg-canvas-soft hover:border-hairline-bright text-xs font-medium text-ink transition-all flex items-center gap-1.5"
             title="View bookmarked moments"
           >
-            <Bookmark className={`w-3.5 h-3.5 ${highlightCount > 0 ? 'text-accent-sunset fill-current' : 'text-ink-mute'}`} />
+            <Bookmark className={`w-3.5 h-3.5 ${highlightCount > 0 ? 'text-ink-body fill-current' : 'text-ink-mute'}`} />
             <span className="hidden sm:inline">Saved</span>
             {highlightCount > 0 && (
-              <span className="w-4 h-4 rounded-full bg-accent-sunset text-black text-[9px] font-mono font-bold flex items-center justify-center">
+              <span className="w-4 h-4 rounded-sm bg-accent-sunset text-black text-[9px] font-mono font-bold flex items-center justify-center">
                 {highlightCount}
               </span>
             )}
@@ -121,7 +121,7 @@ export const Header: React.FC<HeaderProps> = ({
             <div className="relative" ref={exportRef}>
               <button
                 onClick={() => setExportOpen(!exportOpen)}
-                className="px-3 py-1.5 rounded-full border border-hairline bg-canvas-card hover:bg-canvas-soft hover:border-hairline-bright text-xs font-medium text-ink transition-all flex items-center gap-1"
+                className="px-3 py-1.5 rounded-sm border border-hairline bg-canvas-card hover:bg-canvas-soft hover:border-hairline-bright text-xs font-medium text-ink transition-all flex items-center gap-1"
               >
                 <FileDown className="w-3.5 h-3.5 text-ink-mute" />
                 <span className="hidden sm:inline">Export</span>
@@ -129,7 +129,7 @@ export const Header: React.FC<HeaderProps> = ({
               </button>
 
               {exportOpen && (
-                <div className="absolute right-0 mt-2 w-48 bg-canvas-card border border-hairline-bright rounded-lg overflow-hidden z-50 animate-fade-in py-1">
+                <div className="absolute right-0 mt-2 w-48 bg-canvas-card border border-hairline-bright rounded-sm overflow-hidden z-50 animate-fade-in py-1">
                   <button
                     onClick={() => { exportLibraryJSON(); setExportOpen(false); }}
                     className="w-full px-4 py-2 text-left text-xs text-ink hover:bg-canvas-soft transition-colors flex items-center gap-2"
@@ -149,7 +149,7 @@ export const Header: React.FC<HeaderProps> = ({
                       onClick={() => { exportHighlightsJSON(); setExportOpen(false); }}
                       className="w-full px-4 py-2 text-left text-xs text-ink hover:bg-canvas-soft transition-colors flex items-center gap-2 border-t border-hairline/40"
                     >
-                      <Bookmark className="w-3.5 h-3.5 text-accent-sunset" />
+                      <Bookmark className="w-3.5 h-3.5 text-ink-body" />
                       Highlights (JSON)
                     </button>
                   )}
@@ -161,7 +161,7 @@ export const Header: React.FC<HeaderProps> = ({
           {/* Library Drawer Action */}
           <button
             onClick={onOpenLibrary}
-            className="px-3 py-1.5 rounded-full border border-hairline bg-canvas-card hover:bg-canvas-soft hover:border-hairline-bright text-xs font-medium text-ink transition-all flex items-center gap-1.5"
+            className="px-3 py-1.5 rounded-sm border border-hairline bg-canvas-card hover:bg-canvas-soft hover:border-hairline-bright text-xs font-medium text-ink transition-all flex items-center gap-1.5"
           >
             <Search className="w-3.5 h-3.5 text-ink-mute" />
             <span className="hidden sm:inline">Library</span>
@@ -170,7 +170,7 @@ export const Header: React.FC<HeaderProps> = ({
           {/* Index New Action */}
           <button
             onClick={onOpenIngest}
-            className="px-3.5 py-1.5 rounded-full border border-accent-sunset/40 bg-accent-sunset/10 hover:bg-accent-sunset hover:text-black hover:border-accent-sunset text-xs font-medium text-accent-sunset hover:text-black transition-all flex items-center gap-1.5"
+            className="px-3.5 py-1.5 rounded-sm border border-accent-sunset/40 bg-accent-sunset/10 hover:bg-accent-sunset hover:text-black hover:border-accent-sunset text-xs font-medium text-ink-body hover:text-black transition-all flex items-center gap-1.5"
           >
             <Plus className="w-3.5 h-3.5" />
             <span>Index New</span>

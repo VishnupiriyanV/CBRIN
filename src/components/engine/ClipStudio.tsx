@@ -77,10 +77,10 @@ export const ClipStudio: React.FC<ClipStudioProps> = ({ videos, backendOnline })
   return (
     <div className="space-y-6">
       {/* Header row: video picker + analyze */}
-      <div className="bg-canvas-card border border-hairline rounded-2xl p-5 space-y-4">
+      <div className="bg-canvas-card border border-hairline rounded-sm p-5 space-y-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-lg bg-canvas-soft border border-hairline flex items-center justify-center text-accent-sunset">
+            <div className="w-7 h-7 rounded-sm bg-canvas-soft border border-hairline flex items-center justify-center text-ink-body">
               <Sparkles className="w-4 h-4" />
             </div>
             <div>
@@ -90,7 +90,7 @@ export const ClipStudio: React.FC<ClipStudioProps> = ({ videos, backendOnline })
           </div>
           <button
             onClick={() => setShowBrandKit(!showBrandKit)}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-hairline hover:border-hairline-bright text-xs font-medium text-ink-mute hover:text-ink transition-all"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-sm border border-hairline hover:border-hairline-bright text-xs font-medium text-ink-mute hover:text-ink transition-all"
           >
             <Settings2 className="w-3.5 h-3.5" />
             <span>Brand Kit</span>
@@ -108,7 +108,7 @@ export const ClipStudio: React.FC<ClipStudioProps> = ({ videos, backendOnline })
             value={selectedVideoId}
             onChange={(e) => setSelectedVideoId(e.target.value)}
             disabled={!backendOnline || indexedVideos.length === 0}
-            className="flex-1 bg-canvas-soft border border-hairline rounded-lg px-3 py-2 text-xs text-ink outline-none disabled:opacity-40"
+            className="flex-1 bg-canvas-soft border border-hairline rounded-sm px-3 py-2 text-xs text-ink outline-none disabled:opacity-40"
           >
             {indexedVideos.length === 0 ? (
               <option value="">No indexed videos yet</option>
@@ -121,7 +121,7 @@ export const ClipStudio: React.FC<ClipStudioProps> = ({ videos, backendOnline })
           <button
             onClick={runAnalyze}
             disabled={!backendOnline || !selectedVideoId || !!isRunning}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-accent-sunset/40 bg-accent-sunset/10 hover:bg-accent-sunset hover:text-black hover:border-accent-sunset text-xs font-medium text-accent-sunset transition-all disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-sm border border-accent-sunset/40 bg-accent-sunset/10 hover:bg-accent-sunset hover:text-black hover:border-accent-sunset text-xs font-medium text-ink-body transition-all disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
           >
             {isRunning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
             <span>Analyze</span>
@@ -134,19 +134,19 @@ export const ClipStudio: React.FC<ClipStudioProps> = ({ videos, backendOnline })
               <span>{job.stage} — {job.message}</span>
               <span>{Math.round((job.progress || 0) * 100)}</span>
             </div>
-            <div className="h-1.5 rounded-full bg-canvas-soft border border-hairline/60 overflow-hidden">
+            <div className="h-1.5 rounded-sm bg-canvas-soft border border-hairline/60 overflow-hidden">
               <div
-                className={`h-full rounded-full transition-all ${job.status === 'failed' ? 'bg-red-500' : 'bg-accent-sunset'}`}
+                className={`h-full rounded-sm transition-all ${job.status === 'failed' ? 'bg-danger' : 'bg-accent-sunset'}`}
                 style={{ width: `${Math.max(2, (job.progress || 0) * 100)}%` }}
               />
             </div>
             {job.status === 'failed' && (
-              <p className="text-[10px] font-mono text-red-400">{job.error}</p>
+              <p className="text-[10px] font-mono text-danger">{job.error}</p>
             )}
           </div>
         )}
 
-        {error && <p className="text-[10px] font-mono text-red-400">{error}</p>}
+        {error && <p className="text-[10px] font-mono text-danger">{error}</p>}
       </div>
 
       {/* Degraded-mode notice — mirrors the search layer's amber banner treatment. Softer
@@ -156,8 +156,8 @@ export const ClipStudio: React.FC<ClipStudioProps> = ({ videos, backendOnline })
         <div
           className={
             isPartial
-              ? 'bg-yellow-950/20 border border-yellow-800/20 rounded-xl p-3 text-xs text-yellow-300/90 font-mono text-center flex items-center justify-center gap-2 animate-fade-in'
-              : 'bg-amber-950/30 border border-amber-800/30 rounded-xl p-3 text-xs text-amber-300 font-mono text-center flex items-center justify-center gap-2 animate-fade-in'
+              ? 'bg-canvas-card/20 border border-hairline-bright/20 rounded-sm p-3 text-xs text-ink-body/90 font-mono text-center flex items-center justify-center gap-2 animate-fade-in'
+              : 'bg-canvas-card/30 border border-hairline-bright/30 rounded-sm p-3 text-xs text-ink-body font-mono text-center flex items-center justify-center gap-2 animate-fade-in'
           }
         >
           <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
@@ -176,7 +176,7 @@ export const ClipStudio: React.FC<ClipStudioProps> = ({ videos, backendOnline })
           </div>
         </div>
       ) : !isRunning ? (
-        <div className="bg-canvas-soft/60 border border-hairline rounded-2xl p-10 text-center space-y-2">
+        <div className="bg-canvas-soft/60 border border-hairline rounded-sm p-10 text-center space-y-2">
           <p className="text-sm text-ink-body">No clips yet for this video.</p>
           <p className="text-xs text-ink-mute">Run Analyze to generate ranked, sentence-clean clip candidates.</p>
         </div>

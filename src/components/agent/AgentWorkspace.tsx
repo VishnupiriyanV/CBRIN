@@ -33,7 +33,7 @@ function getToolIcon(toolName: string) {
     case 'run_studio_tool':
       return <FileText className="w-3.5 h-3.5 text-ink-mute" />;
     case 'generate_content_pack':
-      return <Package className="w-3.5 h-3.5 text-accent-sunset" />;
+      return <Package className="w-3.5 h-3.5 text-ink-body" />;
     default:
       return <Cpu className="w-3.5 h-3.5 text-ink-mute" />;
   }
@@ -110,7 +110,7 @@ export const AgentWorkspace: React.FC<AgentWorkspaceProps> = ({ videos, backendO
           onClick={() => handleOpenCitation(seg.citation.title, seg.citation.seconds)}
           className={`inline-flex items-center gap-1 mx-0.5 px-1.5 py-0.5 rounded text-[11px] font-mono border align-baseline ${
             known
-              ? 'border-accent-sunset/40 text-accent-sunset bg-accent-sunset/10 hover:bg-accent-sunset hover:text-black transition-colors cursor-pointer'
+              ? 'border-accent-sunset/40 text-ink-body bg-accent-sunset/10 hover:bg-accent-sunset hover:text-black transition-colors cursor-pointer'
               : 'border-hairline text-ink-mute cursor-default'
           }`}
           title={known ? `Jump to ${seg.citation.timestamp} in "${seg.citation.title}"` : 'Video not found in library'}
@@ -211,7 +211,7 @@ export const AgentWorkspace: React.FC<AgentWorkspaceProps> = ({ videos, backendO
         const key = `${msgId}-step-${idx}`;
         const isExpanded = expandedSteps[key];
         return (
-          <div key={key} className="bg-canvas-soft rounded-lg border border-hairline overflow-hidden">
+          <div key={key} className="bg-canvas-soft rounded-sm border border-hairline overflow-hidden">
             <button
               onClick={() => toggleStepExpansion(key)}
               className="w-full px-3 py-1.5 flex items-center justify-between text-left hover:bg-canvas-card transition-colors text-xs"
@@ -242,11 +242,11 @@ export const AgentWorkspace: React.FC<AgentWorkspaceProps> = ({ videos, backendO
   return (
     <div className="flex flex-col lg:flex-row gap-6 min-h-[72vh]">
       {/* Main conversation column */}
-      <div className="flex-1 min-w-0 flex flex-col bg-canvas-card border border-hairline-bright rounded-xl overflow-hidden">
+      <div className="flex-1 min-w-0 flex flex-col bg-canvas-card border border-hairline-bright rounded-sm overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-hairline bg-canvas-soft gap-3">
           <div className="flex items-center space-x-3 min-w-0">
-            <div className="w-8 h-8 rounded-lg bg-canvas-card border border-hairline-bright flex items-center justify-center text-accent-sunset shrink-0">
+            <div className="w-8 h-8 rounded-sm bg-canvas-card border border-hairline-bright flex items-center justify-center text-ink-body shrink-0">
               <Bot className="w-4 h-4" />
             </div>
             <div className="min-w-0">
@@ -255,12 +255,12 @@ export const AgentWorkspace: React.FC<AgentWorkspaceProps> = ({ videos, backendO
                 <span className="px-2 py-0.5 text-[10px] font-mono text-ink-mute bg-canvas-card border border-hairline rounded inline-flex items-center gap-1">
                   {isStreaming ? (
                     <>
-                      <Loader2 className="w-2.5 h-2.5 animate-spin text-accent-sunset" />
+                      <Loader2 className="w-2.5 h-2.5 animate-spin text-ink-body" />
                       {runningTool ? `Running ${runningTool}…` : 'Thinking…'}
                     </>
                   ) : (
                     <>
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                      <span className="w-1.5 h-1.5 rounded-sm bg-ink" />
                       Idle
                     </>
                   )}
@@ -274,7 +274,7 @@ export const AgentWorkspace: React.FC<AgentWorkspaceProps> = ({ videos, backendO
             <select
               value={selectedVideoId}
               onChange={(e) => setSelectedVideoId(e.target.value)}
-              className="bg-canvas-card text-ink text-xs border border-hairline rounded-lg px-2 py-1 max-w-[200px] truncate focus:outline-none focus:border-hairline-bright shrink-0"
+              className="bg-canvas-card text-ink text-xs border border-hairline rounded-sm px-2 py-1 max-w-[200px] truncate focus:outline-none focus:border-hairline-bright shrink-0"
             >
               <option value="">All Library Videos</option>
               {videos.map((v) => <option key={v.id} value={v.id}>{v.title}</option>)}
@@ -286,7 +286,7 @@ export const AgentWorkspace: React.FC<AgentWorkspaceProps> = ({ videos, backendO
         <div className="flex-1 overflow-y-auto p-5 space-y-4 text-xs font-sans">
           {messages.length === 0 && !isStreaming && (
             <div className="h-full flex flex-col items-center justify-center text-center py-10 space-y-2">
-              <div className="w-10 h-10 rounded-full border border-hairline-bright bg-canvas-soft flex items-center justify-center text-accent-sunset">
+              <div className="w-10 h-10 rounded-sm border border-hairline-bright bg-canvas-soft flex items-center justify-center text-ink-body">
                 <Sparkles className="w-4 h-4" />
               </div>
               <p className="text-sm text-ink font-medium">Ask the agent to research, plan, or ship content.</p>
@@ -304,7 +304,7 @@ export const AgentWorkspace: React.FC<AgentWorkspaceProps> = ({ videos, backendO
                   <span className="text-[11px] font-medium text-ink-mute">{msg.role === 'user' ? 'You' : 'Agent'}</span>
                   <span className="text-[10px] text-ink-mute font-mono">{msg.timestamp}</span>
                 </div>
-                <div className={`max-w-[92%] rounded-xl p-4 border ${msg.role === 'user' ? 'bg-canvas-soft border-hairline-bright text-ink' : 'bg-canvas-card border-hairline text-ink-body'}`}>
+                <div className={`max-w-[92%] rounded-sm p-4 border ${msg.role === 'user' ? 'bg-canvas-soft border-hairline-bright text-ink' : 'bg-canvas-card border-hairline text-ink-body'}`}>
                   {msg.steps && msg.steps.length > 0 && renderSteps(msg.id, msg.steps)}
                   <div className="whitespace-pre-wrap leading-relaxed">{renderContent(msg.content)}</div>
                   {pack && (
@@ -325,11 +325,11 @@ export const AgentWorkspace: React.FC<AgentWorkspaceProps> = ({ videos, backendO
           {isStreaming && (
             <div className="flex flex-col items-start space-y-1">
               <span className="text-[11px] font-medium text-ink-mute px-1">Agent</span>
-              <div className="max-w-[92%] bg-canvas-card border border-hairline rounded-xl p-4 text-xs text-ink-body space-y-2">
+              <div className="max-w-[92%] bg-canvas-card border border-hairline rounded-sm p-4 text-xs text-ink-body space-y-2">
                 {liveSteps.length > 0 && renderSteps('live', liveSteps)}
                 {runningTool && !streamingContent && (
                   <div className="flex items-center gap-2 text-ink-mute">
-                    <Loader2 className="w-3.5 h-3.5 text-accent-sunset animate-spin" />
+                    <Loader2 className="w-3.5 h-3.5 text-ink-body animate-spin" />
                     <span>Running {runningTool}…</span>
                   </div>
                 )}
@@ -352,7 +352,7 @@ export const AgentWorkspace: React.FC<AgentWorkspaceProps> = ({ videos, backendO
                 <button
                   key={i}
                   onClick={() => handleSend(s)}
-                  className="text-left text-xs bg-canvas-card hover:bg-canvas-soft text-ink-body hover:text-ink border border-hairline hover:border-hairline-bright rounded-lg px-2.5 py-1.5 transition-colors line-clamp-1"
+                  className="text-left text-xs bg-canvas-card hover:bg-canvas-soft text-ink-body hover:text-ink border border-hairline hover:border-hairline-bright rounded-sm px-2.5 py-1.5 transition-colors line-clamp-1"
                 >
                   {s}
                 </button>
@@ -370,13 +370,13 @@ export const AgentWorkspace: React.FC<AgentWorkspaceProps> = ({ videos, backendO
               onChange={(e) => setInput(e.target.value)}
               placeholder="Ask the agent to research, extract clips, or build a content pack…"
               disabled={isStreaming || !backendOnline}
-              className="flex-1 bg-canvas-soft border border-hairline-bright rounded-lg px-3.5 py-2 text-xs text-ink placeholder:text-ink-mute focus:outline-none focus:border-hairline-bright disabled:opacity-50"
+              className="flex-1 bg-canvas-soft border border-hairline-bright rounded-sm px-3.5 py-2 text-xs text-ink placeholder:text-ink-mute focus:outline-none focus:border-hairline-bright disabled:opacity-50"
             />
             {isStreaming ? (
               <button
                 type="button"
                 onClick={handleStop}
-                className="px-3.5 py-2 bg-canvas-soft hover:bg-canvas-card text-red-300 border border-red-800/40 rounded-lg text-xs font-medium transition-colors flex items-center space-x-1.5"
+                className="px-3.5 py-2 bg-canvas-soft hover:bg-canvas-card text-danger border border-danger/40 rounded-sm text-xs font-medium transition-colors flex items-center space-x-1.5"
               >
                 <Square className="w-3.5 h-3.5" />
                 <span>Stop</span>
@@ -385,9 +385,9 @@ export const AgentWorkspace: React.FC<AgentWorkspaceProps> = ({ videos, backendO
               <button
                 type="submit"
                 disabled={!input.trim() || !backendOnline}
-                className="px-3.5 py-2 bg-canvas-soft hover:bg-canvas-card text-ink border border-hairline-bright rounded-lg text-xs font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center space-x-1.5"
+                className="px-3.5 py-2 bg-canvas-soft hover:bg-canvas-card text-ink border border-hairline-bright rounded-sm text-xs font-medium disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center space-x-1.5"
               >
-                <Send className="w-3.5 h-3.5 text-accent-sunset" />
+                <Send className="w-3.5 h-3.5 text-ink-body" />
                 <span>Send</span>
               </button>
             )}
@@ -397,9 +397,9 @@ export const AgentWorkspace: React.FC<AgentWorkspaceProps> = ({ videos, backendO
 
       {/* Live tool timeline / usage side panel */}
       <div className="w-full lg:w-72 shrink-0 space-y-3">
-        <div className="bg-canvas-card border border-hairline rounded-xl p-4 space-y-3">
+        <div className="bg-canvas-card border border-hairline rounded-sm p-4 space-y-3">
           <div className="eyebrow-mono text-[10px] text-ink-mute flex items-center gap-1.5">
-            <Activity className="w-3 h-3 text-accent-sunset" />
+            <Activity className="w-3 h-3 text-ink-body" />
             Live Activity
           </div>
           {isStreaming ? (
@@ -413,7 +413,7 @@ export const AgentWorkspace: React.FC<AgentWorkspaceProps> = ({ videos, backendO
                 ))}
                 {runningTool && (
                   <div className="flex items-center gap-2 text-[11px] text-ink-mute">
-                    <Loader2 className="w-3 h-3 text-accent-sunset animate-spin" />
+                    <Loader2 className="w-3 h-3 text-ink-body animate-spin" />
                     <span>{runningTool}…</span>
                   </div>
                 )}
@@ -427,7 +427,7 @@ export const AgentWorkspace: React.FC<AgentWorkspaceProps> = ({ videos, backendO
         </div>
 
         {usage && (
-          <div className="bg-canvas-card border border-hairline rounded-xl p-4 space-y-1.5">
+          <div className="bg-canvas-card border border-hairline rounded-sm p-4 space-y-1.5">
             <div className="eyebrow-mono text-[10px] text-ink-mute">Last Turn Usage</div>
             <p className="text-[11px] text-ink-body font-mono">{usage.prompt_tokens} in / {usage.completion_tokens} out tokens</p>
             <p className="text-[10px] text-ink-mute font-mono">{usage.model}</p>

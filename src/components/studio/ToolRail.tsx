@@ -17,7 +17,7 @@ export const ToolRail: React.FC<ToolRailProps> = ({ tools, active, onSelect }) =
       key={id}
       onClick={() => onSelect(id)}
       className={cn(
-        'w-full text-left px-3 py-2 rounded-lg text-xs font-medium transition-all flex items-center gap-2',
+        'w-full text-left px-3 py-2 rounded-sm text-xs font-medium transition-all flex items-center gap-2',
         active === id ? 'bg-canvas-card text-ink border border-hairline-bright' : 'text-ink-mute hover:text-ink hover:bg-canvas-soft border border-transparent'
       )}
     >
