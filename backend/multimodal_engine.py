@@ -105,6 +105,23 @@ _CONTRACTION_EXPANSIONS = [
 _CONTRACTION_PATTERNS = [(re.compile(pat, re.IGNORECASE), repl) for pat, repl in _CONTRACTION_EXPANSIONS]
 
 
+# Stored keyframes are display/thumbnail assets, not analysis inputs: CLIP resizes its
+# input to 224x224 internally, and the widest the UI ever renders one is 256px
+# (ResultCard's visual-mode frame). Writing full 1280x720 stills cost ~125KB each — 53MB
+# for a 436-chunk library, and ~5GB extrapolated to the 50-hour archive STRATEGY.md §3
+# targets. Capping the long edge keeps every consumer pixel-for-pixel satisfied at a
+# fraction of the disk.
+KEYFRAME_MAX_WIDTH = 480
+
+
+def _downscale_for_storage(pil_img):
+    """Shrink to KEYFRAME_MAX_WIDTH on the long edge, preserving aspect. Never upscales."""
+    w, h = pil_img.size
+    if w <= KEYFRAME_MAX_WIDTH:
+        return pil_img
+    return pil_img.resize((KEYFRAME_MAX_WIDTH, max(1, round(h * KEYFRAME_MAX_WIDTH / w))), Image.LANCZOS)
+
+
 def _ensure_keyframes_dir():
     os.makedirs(paths.KEYFRAMES_DIR, exist_ok=True)
 
@@ -433,10 +450,11 @@ class MultimodalEngine:
                 cap.release()
 
                 if ret and frame is not None:
-                    cv2.imwrite(keyframe_path, frame, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
                     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     pil_img = Image.fromarray(rgb_frame)
+                    # Embed from the full-resolution frame; store only the downscaled copy.
                     visual_vec = CLIP_MODEL.encode(pil_img, convert_to_numpy=True, normalize_embeddings=True)
+                    _downscale_for_storage(pil_img).save(keyframe_path, "JPEG", quality=85)
                     return visual_vec, keyframe_url, 'frame'
             except Exception as e:
                 print(f"[MultimodalEngine] OpenCV frame sampling error at {timestamp_sec}s: {e}")
@@ -450,8 +468,8 @@ class MultimodalEngine:
                 with urllib.request.urlopen(req, timeout=8) as response:
                     img_bytes = response.read()
                     pil_img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
-                    pil_img.save(keyframe_path, "JPEG", quality=85)
                     visual_vec = CLIP_MODEL.encode(pil_img, convert_to_numpy=True, normalize_embeddings=True)
+                    _downscale_for_storage(pil_img).save(keyframe_path, "JPEG", quality=85)
                     return visual_vec, keyframe_url, 'thumbnail'
             except Exception as e:
                 print(f"[MultimodalEngine] Image URL visual embedding failed for {target_url}: {e}")

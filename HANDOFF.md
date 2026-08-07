@@ -209,10 +209,40 @@ Backup of the pre-fix index is in the session scratchpad (`chunks.json.bak`, `vi
 - **`platform_rules`** (module, 2 routes, `PlatformRulesPanel.tsx`) is now orphaned — captions was its only consumer. Not in the §4 CUT list, so not removed. Decide separately; note that Appendix B's "never truncates over a platform limit" guardrail no longer has a subject.
 - **`test_jobs.py::test_running_job_marked_failed_on_reimport` is flaky** — passes ~2 of 3 runs. A pre-existing race in the test (job persisted asynchronously vs. module re-import), unrelated to these cuts. Don't read a red suite as a regression without re-running.
 
-## 12. Still open
+## 12. Storage — assessed, and the two cheap fixes done
+
+Full assessment in `STRATEGY.md` §10. Summary: **there is no database.** Flat files under `backend/data/`, paths centralized in `paths.py`. JSON for records, `.npy` for embeddings, blobs on the filesystem. Everything loads into RAM at boot; search is a brute-force `np.dot` over the whole matrix.
+
+The invariant to protect: **`embeddings.npy` row *i* corresponds to `chunks[i]`.** Nothing keys them together — it is position only. Reorder or filter `self.chunks` without rebuilding the arrays and search silently returns wrong results.
+
+### Fixed
+
+**Atomic writes** — new `backend/atomic_io.py`. Every store wrote `open(real_path, 'w')` + `json.dump`, which truncates the real file before the new bytes exist; a crash in that window left a zero-length `chunks.json`, i.e. the whole library. Now temp-file → `fsync` → `os.replace`, generalizing the pattern `media_service._download_youtube` already used. Wired into `vector_store` (chunks, videos, both `.npy`), `tool_runs`, `usage`, `jobs` — which also closes the unlocked read-modify-write hazard Appendix C flagged for the latter two.
+
+Two details worth keeping: `fsync` runs *before* the rename (otherwise the rename can land before the data, giving an intact filename over garbage), and `save_npy` writes through the open handle because `np.save` appends `.npy` to a filename and would defeat the rename.
+
+**Keyframe downscaling** — `multimodal_engine.KEYFRAME_MAX_WIDTH = 480`. Stills were written at full 1280×720 despite CLIP resizing to 224×224 internally and the UI never rendering wider than 256px.
+
+| | Before | After |
+|---|---|---|
+| Mean keyframe | 125 KB | **23 KB** (18%) |
+| Current library | 53 MB | **~10 MB** |
+| 50-hour archive (~40k chunks) | ~4.8 GB | **~0.86 GB** |
+
+**Embedding quality is unchanged** — the CLIP vector is computed from the full-resolution frame and only the *stored* copy is downscaled. Existing keyframes are untouched; they shrink when re-extracted.
+
+### Deliberately not done
+
+Migrating records to SQLite. It is the right eventual target — stdlib, so zero installer weight; ACID; `UPDATE` one row instead of rewriting a 50 MB `chunks.json` per mutation — but only pays off if batch mode is built in Phase 2, and a storage rewrite before a paying user is the build-instead-of-ship pattern §7 names as the project's biggest risk. Trigger condition recorded in `STRATEGY.md` §10.
+
+**Do not add a vector database** (FAISS/Chroma/LanceDB/sqlite-vec). Brute force over 40k × 384 is single-digit milliseconds; ANN buys nothing until ~100× the target scale and costs installer weight plus approximate results in a product selling precision. The current brute-force search is the correct call, not a shortcut.
+
+## 13. Still open
 
 1. **Rotate the Groq key.** Untouched, and still the one item that shouldn't wait.
 2. **`components/agent/` was deliberately left unstyled** — it's on the §4 CUT list. It still contains caps labels and will look inconsistent if you open the Agent view. That's expected, not a regression.
 3. **Nothing in Phase 0 has started.** The design work above is polish on a product with zero validation — it does not substitute for the pre-sale, and the kill criterion still stands.
 4. ~~The rest of the §4 CUT list is not executed.~~ **Done — see §11.** Remaining storage work is tracked as tasks: downscale keyframes, atomic index writes, and the SQLite decision record.
 5. ~~Two CLIP bugs are documented but unfixed.~~ **Both fixed and verified — see §10.**
+6. ~~`platform_rules` is orphaned.~~ **Cut 2026-08-07** — `platform_rules.py`, its 2 routes, `PlatformRulesPanel.tsx`, 2 API fns, the `PlatformRule`/`PlatformRules` types, the ToolRail entry, `PLATFORM_RULES_FILE`, and its test file. No `platform_rules.json` was ever written, so there was no data to migrate. **Appendix B's "never truncates over a platform limit" guardrail is retired with it** — a guardrail whose only subject is gone is a claim with nothing behind it. Reinstate both together if a future feature emits length-capped text.
+7. **SQLite migration deferred** with an explicit trigger (`STRATEGY.md` §10): only when batch mode is built in Phase 2.

@@ -5,7 +5,6 @@ import { studioListTools } from '../../services/api';
 import { ToolRail, StudioSection } from './ToolRail';
 import { UsageBadge } from './UsageBadge';
 import { VoiceProfilePanel } from './VoiceProfilePanel';
-import { PlatformRulesPanel } from './PlatformRulesPanel';
 import { RunHistoryPanel } from './RunHistoryPanel';
 import { ShowNotesTool } from './tools/ShowNotesTool';
 import { MomentsTool } from './tools/MomentsTool';
@@ -43,14 +42,12 @@ export const StudioView: React.FC<StudioViewProps> = ({ videos, backendOnline })
 
   const getSectionTitle = () => {
     if (section === 'voice_profile') return 'Voice Profile';
-    if (section === 'platform_rules') return 'Platform Rules';
     if (section === 'history') return 'Run History';
     return activeToolInfo?.label || 'Studio Tool';
   };
 
   const getSectionDescription = () => {
     if (section === 'voice_profile') return 'Creator brand tone, bio, and banned words configuration';
-    if (section === 'platform_rules') return 'Social network formatting and platform constraints';
     if (section === 'history') return 'Past tool execution outputs and token usage history';
     return activeToolInfo?.description || '';
   };
@@ -84,7 +81,6 @@ export const StudioView: React.FC<StudioViewProps> = ({ videos, backendOnline })
 
         {ActiveTool && <ActiveTool videos={videos} />}
         {section === 'voice_profile' && <VoiceProfilePanel />}
-        {section === 'platform_rules' && <PlatformRulesPanel />}
         {section === 'history' && <RunHistoryPanel toolLabels={toolLabels} />}
       </div>
     </div>

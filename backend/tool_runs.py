@@ -15,6 +15,7 @@ from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Optional
 
 import paths
+import atomic_io
 
 MAX_RETAINED_RUNS = 200
 
@@ -48,8 +49,7 @@ def _save_all(runs: Dict[str, ToolRun]) -> Dict[str, ToolRun]:
     ordered = sorted(runs.values(), key=lambda r: r.created_at, reverse=True)
     trimmed = {r.id: r for r in ordered[:MAX_RETAINED_RUNS]}
     payload = {rid: r.to_dict() for rid, r in trimmed.items()}
-    with open(paths.TOOL_RUNS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(payload, f, indent=2, ensure_ascii=False)
+    atomic_io.write_json(paths.TOOL_RUNS_FILE, payload)
     return trimmed
 
 

@@ -8,6 +8,7 @@ from typing import List, Dict, Any, Optional
 import numpy as np
 
 import paths
+import atomic_io
 from multimodal_engine import MultimodalEngine
 
 try:
@@ -113,17 +114,15 @@ class VectorStore:
         """Persist chunks, video metadata, and dual embeddings to disk."""
         self._ensure_dirs()
 
-        with open(paths.CHUNKS_FILE, 'w', encoding='utf-8') as f:
-            json.dump(self.chunks, f, indent=2, ensure_ascii=False)
-
-        with open(paths.VIDEOS_FILE, 'w', encoding='utf-8') as f:
-            json.dump(self.videos, f, indent=2, ensure_ascii=False)
+        # Atomic (atomic_io): chunks.json IS the library — a truncated write loses it.
+        atomic_io.write_json(paths.CHUNKS_FILE, self.chunks)
+        atomic_io.write_json(paths.VIDEOS_FILE, self.videos)
 
         if self.dense_embeddings is not None:
-            np.save(paths.EMBEDDINGS_FILE, self.dense_embeddings)
+            atomic_io.save_npy(paths.EMBEDDINGS_FILE, self.dense_embeddings)
 
         if self.visual_embeddings is not None:
-            np.save(paths.VISUAL_EMBEDDINGS_FILE, self.visual_embeddings)
+            atomic_io.save_npy(paths.VISUAL_EMBEDDINGS_FILE, self.visual_embeddings)
 
         print(f"[Cbrin] Persisted {len(self.chunks)} chunks and {len(self.videos)} videos to disk.")
 

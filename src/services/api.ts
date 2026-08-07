@@ -1,6 +1,6 @@
 import {
   SearchResponse, VideoItem, LibraryStats, EngineJob, ClipCandidate, BrandKit,
-  StudioToolInfo, VoiceProfile, PlatformRules, PlatformRule, StudioUsageSummary, ToolRun,
+  StudioToolInfo, VoiceProfile, StudioUsageSummary, ToolRun,
   ParsedTranscriptInfo, TranscriptSourceSentence, AgentChatResponse, AgentStreamEvent,
 } from '../types';
 
@@ -396,14 +396,6 @@ export function studioUpdateVoiceProfile(patch: Partial<VoiceProfile>): Promise<
 
 export function studioAutoseedVoiceProfile(force: boolean = false): Promise<VoiceProfile> {
   return postJson(`/studio/voice_profile/autoseed?force=${force}`);
-}
-
-export function studioGetPlatformRules(): Promise<PlatformRules> {
-  return getJson('/studio/platform_rules');
-}
-
-export function studioUpdatePlatformRules(patch: Record<string, Partial<PlatformRule>>): Promise<PlatformRules> {
-  return putJson('/studio/platform_rules', patch);
 }
 
 export function studioGetUsage(): Promise<StudioUsageSummary> {
