@@ -140,7 +140,7 @@ export const IndexingProgressModal: React.FC<IndexingProgressModalProps> = ({
             {/* Stage 3: CLIP Visual Scene Embedding */}
             <div className="bg-canvas-soft/60 border border-hairline rounded-sm p-4 space-y-2">
               <div className="flex items-center justify-between">
-                <span className="eyebrow-mono text-[9px]">3. VISUAL EMBEDDINGS</span>
+                <span className="eyebrow-mono text-[9px]">3. Visual embeddings</span>
                 <Eye className="w-3.5 h-3.5 text-ink" />
               </div>
               <p className="text-xs font-semibold text-ink">{visualIndexedCount}/{totalChunks} Keyframes ({visualPercent}%)</p>
@@ -209,7 +209,7 @@ export const IndexingProgressModal: React.FC<IndexingProgressModalProps> = ({
                               <>
                                 <span>•</span>
                                 <span className="text-ink flex items-center gap-0.5">
-                                  <Eye className="w-2.5 h-2.5" /> VISUAL INDEXED
+                                  <Eye className="w-2.5 h-2.5" /> Visual indexed
                                 </span>
                               </>
                             )}

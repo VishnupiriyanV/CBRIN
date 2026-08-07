@@ -143,8 +143,51 @@ Lesson worth keeping: a CSS-level fix can only reach presentation. Caps baked in
 
 `accent-sunset` still appears 58× and still resolves to white — left named for call-site continuity, as before. Do not reintroduce a hue behind it.
 
-## 8. Still open
+## 8. A CUT-list claim was falsified — CLIP moved to KEEP
+
+Before executing the §4 cuts, the CLIP rationale was tested rather than taken on trust. **It was wrong.** `STRATEGY.md` §4 and Appendix C are corrected; the short version:
+
+- The claim was "structurally broken for YouTube — every chunk shares one thumbnail."
+- Measured: **320 of 436 chunks carry real per-moment keyframes.** The two YouTube videos do fall back to thumbnails, but the ingest downloads video up to 1080p and `yt-pWH1TF1ZfKA.mp4` sits in `data/media/` at exactly the path `vector_store.py:291` looks for.
+- Actual cause: a **race** (embedding runs before yt-dlp finishes merging to the final filename) plus a **one-way state gate** (`reindex_visual_embeddings` never revisits a chunk that already has an embedding, so a bad first answer is permanent). Both fixable in a few lines.
+- **Decision: CLIP stays.** If it's ever cut, the reason is installer weight, not brokenness.
+
+The entry's second claim — that the UI badges every result as visually indexed — is **also false**. `ResultCard.tsx:188–201` already separates `ok` from `video-level` by badge tint and tooltip. Only a weak version survives: disclosure is hover-only, and `LibraryModal.tsx:588` labels a video "VISUAL" even when all its chunks are video-level.
+
+**The process lesson is worth more than the finding.** This entry sat in two planning docs and nearly deleted a working subsystem; both of its claims were false and each cost one command to check. Worth recording that the first correction written *this session* was also wrong — the "UI ignores `visual_status`" claim came from a grep that searched for `visual_source`, a typo, returned nothing, and was reported as fact without opening the component. An empty search result is evidence about the query before it is evidence about the code. Nothing else in Appendix A has been verified — do that before acting on any of it.
+
+## 9. Unwritten risk: how YouTube ingest gets packaged
+
+Not currently in any doc. YouTube ingest itself is sound and should be kept — it's the zero-friction onboarding path and the only way to build a Phase 0 before/after artifact from content you can legally show in public.
+
+The risk is **bundling yt-dlp inside a paid, signed desktop binary**: downloading YouTube content violates their ToS, and that exposure changes character once money changes hands. It's also a maintenance treadmill on a platform with no telemetry and no hotfix path (§7). Usual resolution is to not bundle it — local files are the first-class input, YouTube is an optional path through a tool the user installs themselves.
+
+This is a **Phase 2 packaging decision, not a Phase 0 one.** It does not threaten the positioning: yt-dlp and Whisper both run locally, so "your footage never leaves your machine" still holds.
+
+## 11. CLIP bugs fixed — every chunk now has a real per-moment keyframe
+
+`backend/vector_store.py`:
+
+- **`find_local_media()` (new).** Prefers the canonical `{video_id}{ext}` but falls back to `{video_id}.<anything>{ext}`, so legacy files like `yt-dQw4w9WgXcQ.mp4.part.mp4` resolve instead of being silently treated as "no local media". Cached per video, so a 400-chunk library does one lookup per video, not per chunk.
+- **Upgrade path in `reindex_visual_embeddings()`.** Now re-attempts `video-level` chunks when local media exists. A `visual_upgrade_failed` pin stops it retrying forever when the file is present but a frame still can't be pulled — the same reasoning as the existing `failed` guard. A failed upgrade keeps the old vector rather than downgrading a working chunk to `failed`.
+- **Ingest fallback.** `chunk_transcript` now falls back to `find_local_media()` when the caller passes no media path, so a fresh ingest is less likely to embed thumbnails in the first place.
+
+**Result, measured on the live library:**
+
+| | Before | After |
+|---|---|---|
+| `visual_status: ok` | 320 / 436 | **436 / 436** |
+| `video-level` | 116 | **0** |
+| Distinct MKBHD keyframes | 1 (all identical) | **108 of 109** |
+
+Confirmed through the search API: MKBHD hits return `status=ok` with different keyframes per timestamp. `npx tsc --noEmit` clean, 277 backend tests pass.
+
+Backup of the pre-fix index is in the session scratchpad (`chunks.json.bak`, `visual_embeddings.npy.bak`) if you want to compare.
+
+## 12. Still open
 
 1. **Rotate the Groq key.** Untouched, and still the one item that shouldn't wait.
 2. **`components/agent/` was deliberately left unstyled** — it's on the §4 CUT list. It still contains caps labels and will look inconsistent if you open the Agent view. That's expected, not a regression.
 3. **Nothing in Phase 0 has started.** The design work above is polish on a product with zero validation — it does not substitute for the pre-sale, and the kill criterion still stands.
+4. **The rest of the §4 CUT list is not executed.** CLIP was removed from it (§8). The remainder — agent layer, 4 of 6 STUDIO tools, import/export/highlights, dual-provider LLM — is still pending a decision. Note that the "3 of 4 search modes" cut is already effectively done: the code is down to `spoken` + `visual_scenes`, and `visual_scenes` now stays with CLIP.
+5. ~~Two CLIP bugs are documented but unfixed.~~ **Both fixed and verified — see §11.**

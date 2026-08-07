@@ -585,7 +585,7 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
                           title={hasVisual ? `${vid.visual_chunk_count} chunks with CLIP visual embeddings` : 'Text-only (no visual embeddings)'}
                         >
                           {hasVisual ? <Eye className="w-2.5 h-2.5" /> : <FileText className="w-2.5 h-2.5" />}
-                          <span>{hasVisual ? 'VISUAL' : 'TEXT'}</span>
+                          <span>{hasVisual ? 'Visual' : 'Text'}</span>
                         </span>
                       )}
                     </div>
