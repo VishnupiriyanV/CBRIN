@@ -63,7 +63,7 @@ export const VoiceProfilePanel: React.FC = () => {
         </Button>
       </div>
 
-      {error && <div className="bg-red-950/40 border border-red-800/30 rounded-lg p-2.5 text-xs text-red-300 font-mono">{error}</div>}
+      {error && <div className="bg-canvas-card/40 border border-danger/30 rounded-sm p-2.5 text-xs text-danger font-mono">{error}</div>}
 
       <div className="grid grid-cols-2 gap-3">
         <Field label="Niche" value={profile.niche} onBlurSave={(v) => save({ niche: v })} />
@@ -80,7 +80,7 @@ export const VoiceProfilePanel: React.FC = () => {
           rows={4}
           defaultValue={profile.sample_content.join('\n')}
           onBlur={(e) => save({ sample_content: e.target.value.split('\n').map((v) => v.trim()).filter(Boolean) })}
-          className="w-full bg-canvas-soft border border-hairline rounded-lg p-2.5 text-sm text-ink resize-y focus:outline-none focus:border-hairline-bright"
+          className="w-full bg-canvas-soft border border-hairline rounded-sm p-2.5 text-sm text-ink resize-y focus:outline-none focus:border-hairline-bright"
         />
       </div>
 
@@ -97,7 +97,7 @@ const Field: React.FC<{ label: string; value: string; onBlurSave: (v: string) =>
       defaultValue={value}
       key={value}
       onBlur={(e) => { if (e.target.value !== value) onBlurSave(e.target.value); }}
-      className="w-full bg-canvas-soft border border-hairline rounded-lg p-2.5 text-sm text-ink focus:outline-none focus:border-hairline-bright"
+      className="w-full bg-canvas-soft border border-hairline rounded-sm p-2.5 text-sm text-ink focus:outline-none focus:border-hairline-bright"
     />
   </div>
 );

@@ -26,22 +26,22 @@ export const TitlesTool: React.FC = () => {
       <div className="space-y-3">
         <input
           type="text" placeholder="Video topic" value={topic} onChange={(e) => setTopic(e.target.value)}
-          className="w-full bg-canvas-soft border border-hairline rounded-lg p-2.5 text-sm text-ink placeholder:text-ink-mute focus:outline-none focus:border-hairline-bright"
+          className="w-full bg-canvas-soft border border-hairline rounded-sm p-2.5 text-sm text-ink placeholder:text-ink-mute focus:outline-none focus:border-hairline-bright"
         />
         <div className="grid grid-cols-2 gap-2">
           <input
             type="text" placeholder="Niche (optional)" value={niche} onChange={(e) => setNiche(e.target.value)}
-            className="bg-canvas-soft border border-hairline rounded-lg p-2.5 text-sm text-ink placeholder:text-ink-mute focus:outline-none focus:border-hairline-bright"
+            className="bg-canvas-soft border border-hairline rounded-sm p-2.5 text-sm text-ink placeholder:text-ink-mute focus:outline-none focus:border-hairline-bright"
           />
           <input
             type="text" placeholder="Audience level (optional)" value={audienceLevel} onChange={(e) => setAudienceLevel(e.target.value)}
-            className="bg-canvas-soft border border-hairline rounded-lg p-2.5 text-sm text-ink placeholder:text-ink-mute focus:outline-none focus:border-hairline-bright"
+            className="bg-canvas-soft border border-hairline rounded-sm p-2.5 text-sm text-ink placeholder:text-ink-mute focus:outline-none focus:border-hairline-bright"
           />
         </div>
         <textarea
           rows={3} placeholder="Past titles that performed well, one per line (optional)"
           value={pastTitles} onChange={(e) => setPastTitles(e.target.value)}
-          className="w-full bg-canvas-soft border border-hairline rounded-lg p-2.5 text-sm text-ink placeholder:text-ink-mute resize-y focus:outline-none focus:border-hairline-bright"
+          className="w-full bg-canvas-soft border border-hairline rounded-sm p-2.5 text-sm text-ink placeholder:text-ink-mute resize-y focus:outline-none focus:border-hairline-bright"
         />
         <Button variant="primary" disabled={!canSubmit} loading={running} onClick={handleSubmit}>
           Generate titles &amp; hooks
@@ -49,7 +49,7 @@ export const TitlesTool: React.FC = () => {
       </div>
 
       {error && (
-        <div className="bg-red-950/40 border border-red-800/30 rounded-lg p-3 text-xs text-red-300 font-mono">{error}</div>
+        <div className="bg-canvas-card/40 border border-danger/30 rounded-sm p-3 text-xs text-danger font-mono">{error}</div>
       )}
 
       {output && (() => {
@@ -81,7 +81,7 @@ export const TitlesTool: React.FC = () => {
             <div className="space-y-2">
               {hooks.map((h, i) => (
                 <div key={i} className="flex items-start gap-2 text-sm">
-                  <span className="font-mono text-accent-sunset font-bold text-xs shrink-0 pt-0.5">{i + 1}.</span>
+                  <span className="font-mono text-ink-body font-bold text-xs shrink-0 pt-0.5">{i + 1}.</span>
                   <div>
                     <Tag>{h.style}</Tag> <span className="text-ink font-medium leading-relaxed">{h.text}</span>
                   </div>

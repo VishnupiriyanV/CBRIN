@@ -16,9 +16,9 @@ export const CopyButton: React.FC<CopyButtonProps> = ({ text, label = 'Copy', cl
       type="button"
       onClick={() => copy(text)}
       className={cn(
-        'px-2.5 py-1 rounded-full border text-[11px] font-mono inline-flex items-center gap-1.5 transition-all',
+        'px-2.5 py-1 rounded-sm border text-[11px] font-mono inline-flex items-center gap-1.5 transition-all',
         copied
-          ? 'border-emerald-500/40 text-emerald-400 bg-emerald-500/10'
+          ? 'border-ink/40 text-ink bg-ink/10'
           : 'border-hairline text-ink-mute hover:border-hairline-bright hover:text-ink',
         className
       )}

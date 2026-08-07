@@ -22,7 +22,7 @@ interface OutputBlockProps {
 export const OutputBlock: React.FC<OutputBlockProps> = ({
   title, copyText, onRegenerate, regenerating = false, badge, className, children,
 }) => (
-  <div className={cn('bg-canvas-soft border border-hairline rounded-lg p-4 space-y-2', className)}>
+  <div className={cn('bg-canvas-soft border border-hairline rounded-sm p-4 space-y-2', className)}>
     <div className="flex items-center justify-between gap-2">
       <div className="flex items-center gap-2 min-w-0">
         <span className="eyebrow-mono">{title}</span>
@@ -34,7 +34,7 @@ export const OutputBlock: React.FC<OutputBlockProps> = ({
             type="button"
             onClick={onRegenerate}
             disabled={regenerating}
-            className="px-2.5 py-1 rounded-full border border-hairline text-[11px] font-mono text-ink-mute hover:border-hairline-bright hover:text-ink transition-all disabled:opacity-40 inline-flex items-center gap-1.5"
+            className="px-2.5 py-1 rounded-sm border border-hairline text-[11px] font-mono text-ink-mute hover:border-hairline-bright hover:text-ink transition-all disabled:opacity-40 inline-flex items-center gap-1.5"
           >
             <RefreshCw className={cn('w-3 h-3', regenerating && 'animate-spin')} />
             Regenerate

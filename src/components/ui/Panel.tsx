@@ -1,11 +1,12 @@
 import React from 'react';
 import { cn } from './cn';
 
-// prd.md §11: cards stay at 8px radius, hairline borders carry all elevation — no shadows.
-// The engine components drifted to rounded-2xl; new STUDIO surfaces use this instead of
-// repeating the Tailwind string.
+// STRATEGY.md §8: hairline borders carry all elevation — no shadows, no glows, one 2px
+// radius. The previous note here observed that engine components had drifted to
+// rounded-sm; the radius scale in tailwind.config.js now collapses every radius token to
+// 2px, so that drift can't recur.
 export const Panel: React.FC<React.HTMLAttributes<HTMLDivElement>> = ({ className, children, ...rest }) => (
-  <div className={cn('bg-canvas-card border border-hairline rounded-lg p-5', className)} {...rest}>
+  <div className={cn('bg-canvas-card border border-hairline rounded-sm p-5', className)} {...rest}>
     {children}
   </div>
 );

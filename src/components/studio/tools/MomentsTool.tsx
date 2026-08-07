@@ -53,7 +53,7 @@ export const MomentsTool: React.FC<MomentsToolProps> = ({ videos }) => {
 
   return (
     <div className="space-y-6">
-      <div className="bg-canvas-soft border border-hairline rounded-lg p-3 text-xs text-ink-mute">
+      <div className="bg-canvas-soft border border-hairline rounded-sm p-3 text-xs text-ink-mute">
         We find the moments. You cut them in 5 minutes instead of scrubbing for 3 hours. <strong className="text-ink">No video is produced here.</strong>
       </div>
 
@@ -75,11 +75,11 @@ export const MomentsTool: React.FC<MomentsToolProps> = ({ videos }) => {
           <input
             type="text" placeholder="Stream topic (optional)" value={streamTopic}
             onChange={(e) => setStreamTopic(e.target.value)}
-            className="bg-canvas-soft border border-hairline rounded-lg p-2.5 text-sm text-ink placeholder:text-ink-mute focus:outline-none focus:border-hairline-bright"
+            className="bg-canvas-soft border border-hairline rounded-sm p-2.5 text-sm text-ink placeholder:text-ink-mute focus:outline-none focus:border-hairline-bright"
           />
           <div className="flex items-center gap-1.5">
             <span className="text-[11px] font-mono text-ink-mute shrink-0">Target length</span>
-            <select value={clipLength} onChange={(e) => setClipLength(e.target.value)} className="bg-canvas-soft border border-hairline rounded-full px-2.5 py-1 text-[11px] font-mono text-ink flex-1">
+            <select value={clipLength} onChange={(e) => setClipLength(e.target.value)} className="bg-canvas-soft border border-hairline rounded-sm px-2.5 py-1 text-[11px] font-mono text-ink flex-1">
               {CLIP_LENGTHS.map((s) => <option key={s} value={s}>{s}s</option>)}
             </select>
           </div>
@@ -90,7 +90,7 @@ export const MomentsTool: React.FC<MomentsToolProps> = ({ videos }) => {
       </div>
 
       {error && (
-        <div className="bg-red-950/40 border border-red-800/30 rounded-lg p-3 text-xs text-red-300 font-mono">{error}</div>
+        <div className="bg-canvas-card/40 border border-danger/30 rounded-sm p-3 text-xs text-danger font-mono">{error}</div>
       )}
 
       {output && (

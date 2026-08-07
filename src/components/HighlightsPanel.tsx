@@ -47,13 +47,13 @@ export const HighlightsPanel: React.FC<HighlightsPanelProps> = ({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-black/80 animate-fade-in">
       <div
-        className="bg-canvas-card border border-hairline-bright rounded-lg w-full max-w-3xl overflow-hidden flex flex-col max-h-[85vh]"
+        className="bg-canvas-card border border-hairline-bright rounded-sm w-full max-w-3xl overflow-hidden flex flex-col max-h-[85vh]"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-hairline bg-canvas">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-full border border-accent-sunset/40 bg-accent-sunset/10 flex items-center justify-center text-accent-sunset">
+            <div className="w-8 h-8 rounded-sm border border-accent-sunset/40 bg-accent-sunset/10 flex items-center justify-center text-ink-body">
               <Bookmark className="w-4 h-4 fill-current" />
             </div>
             <div>
@@ -68,7 +68,7 @@ export const HighlightsPanel: React.FC<HighlightsPanelProps> = ({
             {highlights.length > 0 && (
               <button
                 onClick={() => exportHighlightsJSON()}
-                className="px-3 py-1.5 rounded-full border border-hairline bg-canvas-soft hover:border-hairline-bright text-xs font-medium text-ink transition-all flex items-center gap-1.5"
+                className="px-3 py-1.5 rounded-sm border border-hairline bg-canvas-soft hover:border-hairline-bright text-xs font-medium text-ink transition-all flex items-center gap-1.5"
                 title="Export highlights"
               >
                 <FileDown className="w-3.5 h-3.5 text-ink-mute" />
@@ -77,7 +77,7 @@ export const HighlightsPanel: React.FC<HighlightsPanelProps> = ({
             )}
             <button
               onClick={onClose}
-              className="p-2 text-ink-mute hover:text-ink hover:bg-canvas-soft rounded-full transition-colors"
+              className="p-2 text-ink-mute hover:text-ink hover:bg-canvas-soft rounded-sm transition-colors"
             >
               <X className="w-5 h-5" />
             </button>
@@ -88,7 +88,7 @@ export const HighlightsPanel: React.FC<HighlightsPanelProps> = ({
         <div className="p-6 overflow-y-auto space-y-3">
           {highlights.length === 0 ? (
             <div className="text-center py-12 space-y-3">
-              <div className="w-12 h-12 rounded-full border border-hairline-bright bg-canvas-soft mx-auto flex items-center justify-center text-ink-mute">
+              <div className="w-12 h-12 rounded-sm border border-hairline-bright bg-canvas-soft mx-auto flex items-center justify-center text-ink-mute">
                 <Bookmark className="w-5 h-5" />
               </div>
               <div>
@@ -102,7 +102,7 @@ export const HighlightsPanel: React.FC<HighlightsPanelProps> = ({
             highlights.map((h) => (
               <div
                 key={h.chunk_id}
-                className="bg-canvas-soft border border-hairline rounded-lg p-4 hover:border-hairline-bright transition-all group"
+                className="bg-canvas-soft border border-hairline rounded-sm p-4 hover:border-hairline-bright transition-all group"
               >
                 <div className="flex items-start gap-3">
                   {/* Thumbnail */}
@@ -120,7 +120,7 @@ export const HighlightsPanel: React.FC<HighlightsPanelProps> = ({
                   {/* Content */}
                   <div className="flex-1 min-w-0 space-y-2">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-[10px] font-mono text-accent-sunset uppercase tracking-wider">
+                      <span className="text-[10px] font-mono text-ink-body">
                         {h.channel}
                       </span>
                       <div className="flex items-center gap-1 text-[11px] font-mono text-ink-mute">
@@ -132,13 +132,13 @@ export const HighlightsPanel: React.FC<HighlightsPanelProps> = ({
                       </span>
                     </div>
 
-                    <h4 className="text-sm font-medium text-ink truncate group-hover:text-accent-sunset transition-colors">
+                    <h4 className="text-sm font-medium text-ink truncate group-hover:text-ink-body transition-colors">
                       {h.video_title}
                     </h4>
 
                     {h.section_topic && (
                       <div className="flex items-center gap-1 text-[10px] font-mono text-ink-mute">
-                        <Layers className="w-3 h-3 text-accent-sunset" />
+                        <Layers className="w-3 h-3 text-ink-body" />
                         <span>{h.section_topic}</span>
                       </div>
                     )}
@@ -149,7 +149,7 @@ export const HighlightsPanel: React.FC<HighlightsPanelProps> = ({
 
                     {h.note && (
                       <div className="flex items-start gap-1.5 text-[11px] text-ink-mute">
-                        <MessageSquare className="w-3 h-3 mt-0.5 text-accent-sunset shrink-0" />
+                        <MessageSquare className="w-3 h-3 mt-0.5 text-ink-body shrink-0" />
                         <span className="font-sans">{h.note}</span>
                       </div>
                     )}
@@ -159,14 +159,14 @@ export const HighlightsPanel: React.FC<HighlightsPanelProps> = ({
                   <div className="flex items-center gap-1 shrink-0">
                     <button
                       onClick={() => handleJump(h)}
-                      className="p-2 text-ink-mute hover:text-accent-sunset hover:bg-canvas rounded-full transition-colors"
+                      className="p-2 text-ink-mute hover:text-ink-body hover:bg-canvas rounded-sm transition-colors"
                       title="Jump to moment"
                     >
                       <Play className="w-4 h-4" />
                     </button>
                     <button
                       onClick={() => onRemoveHighlight(h.chunk_id)}
-                      className="p-2 text-ink-mute hover:text-red-400 hover:bg-canvas rounded-full transition-colors"
+                      className="p-2 text-ink-mute hover:text-danger hover:bg-canvas rounded-sm transition-colors"
                       title="Remove highlight"
                     >
                       <Trash2 className="w-4 h-4" />

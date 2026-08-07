@@ -18,9 +18,9 @@ interface EmptyStateProps {
 export const EmptyState: React.FC<EmptyStateProps> = ({ query, nearMisses = [], message, onJumpToMoment, onToggleHighlight, searchMode }) => {
   return (
     <div className="space-y-6 my-8">
-      <div className="bg-canvas-soft border border-hairline rounded-lg p-10 text-center max-w-2xl mx-auto space-y-4">
-        <div className="w-12 h-12 rounded-full border border-hairline-bright bg-canvas-card mx-auto flex items-center justify-center text-ink-mute">
-          <SearchX className="w-5 h-5 text-accent-sunset" />
+      <div className="bg-canvas-soft border border-hairline rounded-sm p-10 text-center max-w-2xl mx-auto space-y-4">
+        <div className="w-12 h-12 rounded-sm border border-hairline-bright bg-canvas-card mx-auto flex items-center justify-center text-ink-mute">
+          <SearchX className="w-5 h-5 text-ink-body" />
         </div>
 
         <div className="space-y-1">

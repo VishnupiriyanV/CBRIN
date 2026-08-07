@@ -67,7 +67,7 @@ export const TranscriptSourcePicker: React.FC<TranscriptSourcePickerProps> = ({
             onChange={(e) => onTranscriptTextChange(e.target.value)}
           />
           {parsed && (
-            <div className={`text-[11px] font-mono flex items-center gap-1.5 ${parsed.has_timestamps ? 'text-emerald-400' : requireTimestamps ? 'text-red-400' : 'text-amber-400'}`}>
+            <div className={`text-[11px] font-mono flex items-center gap-1.5 ${parsed.has_timestamps ? 'text-ink' : requireTimestamps ? 'text-danger' : 'text-ink-body'}`}>
               {parsed.has_timestamps ? <CheckCircle2 className="w-3 h-3" /> : <AlertTriangle className="w-3 h-3" />}
               {parsed.has_timestamps
                 ? `${parsed.format.toUpperCase()} detected — ${parsed.sentence_count} cue(s), real timestamps.`
@@ -81,7 +81,7 @@ export const TranscriptSourcePicker: React.FC<TranscriptSourcePickerProps> = ({
         <select
           value={videoId}
           onChange={(e) => onVideoIdChange(e.target.value)}
-          className="w-full bg-canvas-soft border border-hairline rounded-lg p-2.5 text-sm text-ink focus:outline-none focus:border-hairline-bright"
+          className="w-full bg-canvas-soft border border-hairline rounded-sm p-2.5 text-sm text-ink focus:outline-none focus:border-hairline-bright"
         >
           <option value="">Select an indexed video…</option>
           {indexedVideos.map((v) => (

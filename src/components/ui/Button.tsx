@@ -2,18 +2,23 @@ import React from 'react';
 import { Loader2 } from 'lucide-react';
 import { cn } from './cn';
 
-// The two recurring button recipes, previously copy-pasted inline throughout App.tsx /
-// Header.tsx / ClipStudio.tsx: primary sunset-accent and secondary hairline-bordered.
-const VARIANT_CLASSES: Record<'primary' | 'secondary' | 'ghost', string> = {
+// STRATEGY.md §8: no chromatic accent. Primary emphasis is a white-on-black inversion —
+// the loudest thing available in a monochrome system, and it costs no colour.
+// Previously these were sunset-orange capsules; the pill shape and the hue were both
+// doing the same job (shouting), so both are gone.
+const VARIANT_CLASSES: Record<'primary' | 'secondary' | 'ghost' | 'danger', string> = {
   primary:
-    'border border-accent-sunset/40 bg-accent-sunset/10 text-accent-sunset hover:bg-accent-sunset hover:text-black hover:border-accent-sunset',
+    'border border-ink bg-ink text-canvas hover:bg-white hover:border-white',
   secondary:
-    'border border-hairline bg-canvas-card text-ink hover:bg-canvas-soft hover:border-hairline-bright',
-  ghost: 'border border-transparent text-ink-mute hover:text-ink hover:bg-canvas-soft',
+    'border border-hairline bg-transparent text-ink-body hover:text-ink hover:border-hairline-bright',
+  ghost:
+    'border border-transparent text-ink-mute hover:text-ink hover:bg-canvas-hover',
+  danger:
+    'border border-danger/40 bg-transparent text-danger hover:bg-danger/10 hover:border-danger',
 };
 
 interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: 'primary' | 'secondary' | 'ghost';
+  variant?: 'primary' | 'secondary' | 'ghost' | 'danger';
   loading?: boolean;
 }
 
@@ -28,8 +33,9 @@ export const Button: React.FC<ButtonProps> = ({
   <button
     disabled={disabled || loading}
     className={cn(
-      'px-3.5 py-1.5 rounded-full text-xs font-medium transition-all inline-flex items-center gap-1.5',
-      'disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent',
+      'px-3 py-1.5 rounded-sm text-xs font-medium transition-colors duration-100 inline-flex items-center gap-1.5',
+      'active:translate-y-[0.5px]',
+      'disabled:opacity-35 disabled:cursor-not-allowed disabled:active:translate-y-0',
       VARIANT_CLASSES[variant],
       className
     )}

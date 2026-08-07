@@ -91,7 +91,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
         <button
           onClick={() => setCollapsed(!collapsed)}
-          className="p-1 rounded-md text-ink-mute hover:text-ink hover:bg-canvas-soft transition-colors cursor-pointer shrink-0"
+          className="p-1 rounded-sm text-ink-mute hover:text-ink hover:bg-canvas-soft transition-colors cursor-pointer shrink-0"
           title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
         >
           {collapsed ? <ChevronRight className="w-3.5 h-3.5" /> : <ChevronLeft className="w-3.5 h-3.5" />}
@@ -103,7 +103,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {/* Workspace Views */}
         <div className="space-y-0.5">
           {!collapsed && (
-            <div className="px-2.5 py-1 text-[10px] font-mono tracking-wider text-ink-mute/60 uppercase">
+            <div className="px-2.5 py-1 text-[10px] font-mono tracking-wider text-ink-mute/60">
               Views
             </div>
           )}
@@ -114,14 +114,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <button
                 key={item.id}
                 onClick={() => onChangeView(item.id)}
-                className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all group cursor-pointer ${
+                className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-sm text-xs font-medium transition-all group cursor-pointer ${
                   isActive
                     ? 'bg-canvas-card text-ink border border-hairline-bright shadow-sm'
                     : 'text-ink-mute hover:text-ink hover:bg-canvas-soft border border-transparent'
                 }`}
                 title={collapsed ? item.label : undefined}
               >
-                <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-accent-sunset' : 'text-ink-mute group-hover:text-ink'}`} />
+                <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-ink-body' : 'text-ink-mute group-hover:text-ink'}`} />
                 {!collapsed && (
                   <div className="flex-1 flex items-center justify-between min-w-0">
                     <span className="truncate">{item.label}</span>
@@ -140,7 +140,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {/* Library & Tools */}
         <div className="space-y-0.5 pt-3 border-t border-hairline/40">
           {!collapsed && (
-            <div className="px-2.5 py-1 text-[10px] font-mono tracking-wider text-ink-mute/60 uppercase">
+            <div className="px-2.5 py-1 text-[10px] font-mono tracking-wider text-ink-mute/60">
               Library
             </div>
           )}
@@ -149,7 +149,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <button
             onClick={onOpenIngest}
             disabled={backendOnline === false}
-            className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-accent-sunset hover:bg-accent-sunset/10 transition-colors group cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+            className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-sm text-xs font-medium text-ink-body hover:bg-accent-sunset/10 transition-colors group cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
             title={collapsed ? "Add Content" : undefined}
           >
             <Plus className="w-4 h-4 shrink-0" />
@@ -159,7 +159,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           {/* Videos Library */}
           <button
             onClick={onOpenLibrary}
-            className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-ink-mute hover:text-ink hover:bg-canvas-soft transition-colors cursor-pointer"
+            className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-sm text-xs font-medium text-ink-mute hover:text-ink hover:bg-canvas-soft transition-colors cursor-pointer"
             title={collapsed ? "Media Library" : undefined}
           >
             <FileVideo className="w-4 h-4 shrink-0 text-ink-mute" />
@@ -174,14 +174,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
           {/* Highlights */}
           <button
             onClick={onOpenHighlights}
-            className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-ink-mute hover:text-ink hover:bg-canvas-soft transition-colors cursor-pointer"
+            className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-sm text-xs font-medium text-ink-mute hover:text-ink hover:bg-canvas-soft transition-colors cursor-pointer"
             title={collapsed ? "Saved Highlights" : undefined}
           >
-            <Bookmark className="w-4 h-4 shrink-0 text-accent-sunset" />
+            <Bookmark className="w-4 h-4 shrink-0 text-ink-body" />
             {!collapsed && (
               <div className="flex-1 flex items-center justify-between min-w-0 font-mono text-[11px]">
                 <span>Saved</span>
-                <span className="text-accent-sunset">{highlightCount}</span>
+                <span className="text-ink-body">{highlightCount}</span>
               </div>
             )}
           </button>
@@ -189,19 +189,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
           {/* Telemetry Progress */}
           <button
             onClick={onOpenProgress}
-            className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-ink-mute hover:text-ink hover:bg-canvas-soft transition-colors cursor-pointer"
+            className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-sm text-xs font-medium text-ink-mute hover:text-ink hover:bg-canvas-soft transition-colors cursor-pointer"
             title={collapsed ? "Telemetry" : undefined}
           >
-            <Activity className="w-4 h-4 shrink-0 text-emerald-400" />
+            <Activity className="w-4 h-4 shrink-0 text-ink" />
             {!collapsed && (
               <div className="flex-1 flex items-center justify-between min-w-0 font-mono text-[11px]">
                 <span>Telemetry</span>
                 {failedCount > 0 ? (
-                  <span className="text-red-400">{failedCount} err</span>
+                  <span className="text-danger">{failedCount} err</span>
                 ) : isFullyIndexed ? (
-                  <span className="text-emerald-400">100%</span>
+                  <span className="text-ink">100%</span>
                 ) : (
-                  <span className="text-amber-400">Indexing</span>
+                  <span className="text-ink-body">Indexing</span>
                 )}
               </div>
             )}
@@ -217,7 +217,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           }`}
         >
           <div className="flex items-center gap-1.5 overflow-hidden">
-            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${backendOnline ? 'bg-emerald-400' : 'bg-red-500'}`} />
+            <span className={`w-1.5 h-1.5 rounded-sm shrink-0 ${backendOnline ? 'bg-ink' : 'bg-danger'}`} />
             {!collapsed && (
               <span className="truncate font-mono">
                 {backendOnline ? 'API Connected' : 'API Offline'}

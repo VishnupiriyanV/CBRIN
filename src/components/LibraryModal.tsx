@@ -23,7 +23,7 @@ const ModelTierSelector: React.FC<{
 }> = ({ value, onChange, disabled }) => (
   <div className="flex items-center gap-3">
     <span className="text-[10px] font-mono text-ink-mute shrink-0">TRANSCRIPTION QUALITY:</span>
-    <div className="flex items-center gap-1 bg-canvas border border-hairline p-0.5 rounded-full">
+    <div className="flex items-center gap-1 bg-canvas border border-hairline p-0.5 rounded-sm">
       {WHISPER_MODEL_TIERS.map((tier) => (
         <button
           key={tier}
@@ -31,7 +31,7 @@ const ModelTierSelector: React.FC<{
           onClick={() => onChange(tier)}
           disabled={disabled}
           title={MODEL_TIER_HINTS[tier]}
-          className={`px-3 py-1 rounded-full text-[10px] font-mono uppercase transition-all disabled:opacity-40 ${
+          className={`px-3 py-1 rounded-sm text-[10px] font-mono transition-all disabled:opacity-40 ${
             value === tier ? 'bg-canvas-card text-ink border border-hairline-bright' : 'text-ink-mute hover:text-ink'
           }`}
         >
@@ -286,13 +286,13 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-black/80 animate-fade-in">
       <div
-        className="bg-canvas-card border border-hairline-bright rounded-lg w-full max-w-3xl overflow-hidden flex flex-col max-h-[85vh]"
+        className="bg-canvas-card border border-hairline-bright rounded-sm w-full max-w-3xl overflow-hidden flex flex-col max-h-[85vh]"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-hairline bg-canvas">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-full border border-hairline bg-canvas-soft flex items-center justify-center text-accent-sunset">
+            <div className="w-8 h-8 rounded-sm border border-hairline bg-canvas-soft flex items-center justify-center text-ink-body">
               <Video className="w-4 h-4" />
             </div>
             <div>
@@ -305,7 +305,7 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
 
           <button
             onClick={onClose}
-            className="p-2 text-ink-mute hover:text-ink hover:bg-canvas-soft rounded-full transition-colors"
+            className="p-2 text-ink-mute hover:text-ink hover:bg-canvas-soft rounded-sm transition-colors"
           >
             <X className="w-5 h-5" />
           </button>
@@ -313,7 +313,7 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
 
         {/* Backend Offline Warning */}
         {!backendOnline && (
-          <div className="mx-6 mt-4 p-3 bg-red-950/40 border border-red-800/30 rounded-lg text-xs text-red-300 font-mono flex items-center gap-2">
+          <div className="mx-6 mt-4 p-3 bg-canvas-card/40 border border-danger/30 rounded-sm text-xs text-danger font-mono flex items-center gap-2">
             <AlertCircle className="w-4 h-4 shrink-0" />
             <span>Backend is offline. Start the Python server to ingest content.</span>
           </div>
@@ -323,28 +323,28 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
         <div className="p-6 border-b border-hairline bg-canvas-soft/40 space-y-4">
           <div className="flex items-center justify-between">
             <span className="eyebrow-mono">INDEX NEW CONTENT</span>
-            <div className="flex items-center gap-1 bg-canvas border border-hairline p-1 rounded-full text-xs font-mono">
+            <div className="flex items-center gap-1 bg-canvas border border-hairline p-1 rounded-sm text-xs font-mono">
               <button
                 onClick={() => setIngestMode('url')}
-                className={`px-3 py-1 rounded-full transition-all ${ingestMode === 'url' ? 'bg-canvas-card text-ink border border-hairline-bright' : 'text-ink-mute hover:text-ink'}`}
+                className={`px-3 py-1 rounded-sm transition-all ${ingestMode === 'url' ? 'bg-canvas-card text-ink border border-hairline-bright' : 'text-ink-mute hover:text-ink'}`}
               >
                 YOUTUBE URL
               </button>
               <button
                 onClick={() => setIngestMode('file')}
-                className={`px-3 py-1 rounded-full transition-all ${ingestMode === 'file' ? 'bg-canvas-card text-ink border border-hairline-bright' : 'text-ink-mute hover:text-ink'}`}
+                className={`px-3 py-1 rounded-sm transition-all ${ingestMode === 'file' ? 'bg-canvas-card text-ink border border-hairline-bright' : 'text-ink-mute hover:text-ink'}`}
               >
                 UPLOAD FILES
               </button>
               <button
                 onClick={() => setIngestMode('folder')}
-                className={`px-3 py-1 rounded-full transition-all ${ingestMode === 'folder' ? 'bg-canvas-card text-ink border border-hairline-bright' : 'text-ink-mute hover:text-ink'}`}
+                className={`px-3 py-1 rounded-sm transition-all ${ingestMode === 'folder' ? 'bg-canvas-card text-ink border border-hairline-bright' : 'text-ink-mute hover:text-ink'}`}
               >
                 UPLOAD FOLDER
               </button>
               <button
                 onClick={() => setIngestMode('import')}
-                className={`px-3 py-1 rounded-full transition-all ${ingestMode === 'import' ? 'bg-canvas-card text-ink border border-hairline-bright' : 'text-ink-mute hover:text-ink'}`}
+                className={`px-3 py-1 rounded-sm transition-all ${ingestMode === 'import' ? 'bg-canvas-card text-ink border border-hairline-bright' : 'text-ink-mute hover:text-ink'}`}
               >
                 IMPORT BACKUP
               </button>
@@ -360,12 +360,12 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
                 onChange={(e) => setYoutubeUrl(e.target.value)}
                 placeholder="Paste YouTube Video URL (e.g. https://youtube.com/watch?v=...)"
                 disabled={!backendOnline || isIngesting}
-                className="flex-1 px-4 py-2.5 bg-canvas border border-hairline rounded-lg text-xs sm:text-sm text-ink placeholder:text-ink-mute focus:outline-none focus:border-hairline-bright disabled:opacity-40"
+                className="flex-1 px-4 py-2.5 bg-canvas border border-hairline rounded-sm text-xs sm:text-sm text-ink placeholder:text-ink-mute focus:outline-none focus:border-hairline-bright disabled:opacity-40"
               />
               <button
                 type="submit"
                 disabled={isIngesting || !youtubeUrl.trim() || !backendOnline}
-                className="px-4 py-2.5 bg-canvas-card border border-hairline-bright hover:border-accent-sunset hover:bg-accent-sunset hover:text-black rounded-lg text-xs font-medium text-ink disabled:opacity-40 transition-all flex items-center gap-1.5 shrink-0"
+                className="px-4 py-2.5 bg-canvas-card border border-hairline-bright hover:border-accent-sunset hover:bg-accent-sunset hover:text-black rounded-sm text-xs font-medium text-ink disabled:opacity-40 transition-all flex items-center gap-1.5 shrink-0"
               >
                 {isIngesting ? (
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -392,9 +392,9 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
               <button
                 onClick={() => fileInputRef.current?.click()}
                 disabled={isIngesting || !backendOnline}
-                className="w-full py-6 border border-dashed border-hairline-bright hover:border-accent-sunset bg-canvas/60 rounded-lg flex flex-col items-center justify-center gap-2 group transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                className="w-full py-6 border border-dashed border-hairline-bright hover:border-accent-sunset bg-canvas/60 rounded-sm flex flex-col items-center justify-center gap-2 group transition-all disabled:opacity-40 disabled:cursor-not-allowed"
               >
-                <Upload className="w-5 h-5 text-ink-mute group-hover:text-accent-sunset transition-colors" />
+                <Upload className="w-5 h-5 text-ink-mute group-hover:text-ink-body transition-colors" />
                 <span className="text-xs font-medium text-ink">
                   Click to select one or more local video/audio files (.mp4, .mov, .mp3, .wav)
                 </span>
@@ -419,9 +419,9 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
               <button
                 onClick={() => folderInputRef.current?.click()}
                 disabled={isIngesting || !backendOnline}
-                className="w-full py-6 border border-dashed border-hairline-bright hover:border-accent-sunset bg-canvas/60 rounded-lg flex flex-col items-center justify-center gap-2 group transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                className="w-full py-6 border border-dashed border-hairline-bright hover:border-accent-sunset bg-canvas/60 rounded-sm flex flex-col items-center justify-center gap-2 group transition-all disabled:opacity-40 disabled:cursor-not-allowed"
               >
-                <FolderUp className="w-5 h-5 text-ink-mute group-hover:text-accent-sunset transition-colors" />
+                <FolderUp className="w-5 h-5 text-ink-mute group-hover:text-ink-body transition-colors" />
                 <span className="text-xs font-medium text-ink">
                   Select an entire folder of videos/podcasts from your computer
                 </span>
@@ -436,16 +436,16 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
               {/* Merge / Replace toggle */}
               <div className="flex items-center gap-3">
                 <span className="text-[10px] font-mono text-ink-mute">IMPORT MODE:</span>
-                <div className="flex items-center gap-1 bg-canvas border border-hairline p-0.5 rounded-full">
+                <div className="flex items-center gap-1 bg-canvas border border-hairline p-0.5 rounded-sm">
                   <button
                     onClick={() => setImportMode('merge')}
-                    className={`px-3 py-1 rounded-full text-[10px] font-mono transition-all ${importMode === 'merge' ? 'bg-canvas-card text-ink border border-hairline-bright' : 'text-ink-mute hover:text-ink'}`}
+                    className={`px-3 py-1 rounded-sm text-[10px] font-mono transition-all ${importMode === 'merge' ? 'bg-canvas-card text-ink border border-hairline-bright' : 'text-ink-mute hover:text-ink'}`}
                   >
                     MERGE (SKIP DUPLICATES)
                   </button>
                   <button
                     onClick={() => setImportMode('replace')}
-                    className={`px-3 py-1 rounded-full text-[10px] font-mono transition-all ${importMode === 'replace' ? 'bg-red-950/60 text-red-300 border border-red-800/40' : 'text-ink-mute hover:text-ink'}`}
+                    className={`px-3 py-1 rounded-sm text-[10px] font-mono transition-all ${importMode === 'replace' ? 'bg-canvas-card/60 text-danger border border-danger/40' : 'text-ink-mute hover:text-ink'}`}
                   >
                     REPLACE (WIPE & RESTORE)
                   </button>
@@ -462,9 +462,9 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
               <button
                 onClick={() => importInputRef.current?.click()}
                 disabled={isIngesting || !backendOnline}
-                className="w-full py-6 border border-dashed border-hairline-bright hover:border-accent-sunset bg-canvas/60 rounded-lg flex flex-col items-center justify-center gap-2 group transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                className="w-full py-6 border border-dashed border-hairline-bright hover:border-accent-sunset bg-canvas/60 rounded-sm flex flex-col items-center justify-center gap-2 group transition-all disabled:opacity-40 disabled:cursor-not-allowed"
               >
-                <FileUp className="w-5 h-5 text-ink-mute group-hover:text-accent-sunset transition-colors" />
+                <FileUp className="w-5 h-5 text-ink-mute group-hover:text-ink-body transition-colors" />
                 <span className="text-xs font-medium text-ink">
                   Select a CBRIN library export (.json or .zip) to restore
                 </span>
@@ -477,9 +477,9 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
 
           {/* Multi-file Upload Queue (file / folder modes) */}
           {uploadQueue.length > 0 && (
-            <div className="border border-hairline-bright rounded-lg overflow-hidden animate-fade-in">
+            <div className="border border-hairline-bright rounded-sm overflow-hidden animate-fade-in">
               <div className="px-3 py-2 bg-canvas-soft border-b border-hairline flex items-center justify-between">
-                <span className="text-[10px] font-mono text-ink-mute uppercase tracking-wider">
+                <span className="text-[10px] font-mono text-ink-mute">
                   Upload queue ({uploadQueue.filter((q) => q.status === 'done').length}/{uploadQueue.length} done)
                 </span>
               </div>
@@ -488,15 +488,15 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
                   <div key={idx} className="px-3 py-2 flex items-center gap-2 bg-canvas">
                     <div className="shrink-0">
                       {item.status === 'done' ? (
-                        <Check className="w-3.5 h-3.5 text-emerald-500" />
+                        <Check className="w-3.5 h-3.5 text-ink" />
                       ) : item.status === 'failed' ? (
-                        <AlertCircle className="w-3.5 h-3.5 text-red-400" />
+                        <AlertCircle className="w-3.5 h-3.5 text-danger" />
                       ) : item.status === 'skipped' ? (
-                        <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+                        <AlertTriangle className="w-3.5 h-3.5 text-ink-body" />
                       ) : item.status === 'pending' ? (
-                        <div className="w-3.5 h-3.5 rounded-full border border-hairline-bright" />
+                        <div className="w-3.5 h-3.5 rounded-sm border border-hairline-bright" />
                       ) : (
-                        <Loader2 className="w-3.5 h-3.5 text-accent-sunset animate-spin" />
+                        <Loader2 className="w-3.5 h-3.5 text-ink-body animate-spin" />
                       )}
                     </div>
                     <div className="min-w-0 flex-1">
@@ -511,23 +511,23 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
 
           {/* Upload Progress (single-item flows: YouTube URL, import backup) */}
           {uploadProgress && (
-            <div className="p-3 bg-canvas border border-hairline-bright rounded-lg text-xs text-ink flex items-center gap-2 animate-fade-in font-mono">
-              <Loader2 className="w-4 h-4 text-accent-sunset animate-spin shrink-0" />
+            <div className="p-3 bg-canvas border border-hairline-bright rounded-sm text-xs text-ink flex items-center gap-2 animate-fade-in font-mono">
+              <Loader2 className="w-4 h-4 text-ink-body animate-spin shrink-0" />
               <span>{uploadProgress}</span>
             </div>
           )}
 
           {/* Success Message */}
           {ingestStatusMsg && (
-            <div className="p-3 bg-canvas border border-hairline-bright rounded-lg text-xs text-ink flex items-center gap-2 animate-fade-in">
-              <Check className="w-4 h-4 text-emerald-500 shrink-0" />
+            <div className="p-3 bg-canvas border border-hairline-bright rounded-sm text-xs text-ink flex items-center gap-2 animate-fade-in">
+              <Check className="w-4 h-4 text-ink shrink-0" />
               <span>{ingestStatusMsg}</span>
             </div>
           )}
 
           {/* Error Message */}
           {ingestError && (
-            <div className="p-3 bg-red-950/40 border border-red-800/30 rounded-lg text-xs text-red-300 flex items-center gap-2 animate-fade-in">
+            <div className="p-3 bg-canvas-card/40 border border-danger/30 rounded-sm text-xs text-danger flex items-center gap-2 animate-fade-in">
               <AlertCircle className="w-4 h-4 shrink-0" />
               <span>{ingestError}</span>
             </div>
@@ -555,7 +555,7 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
                   />
                   <div className="flex-1 min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-[10px] font-mono text-accent-sunset uppercase tracking-wider">
+                      <span className="text-[10px] font-mono text-ink-body">
                         {vid.category || (vid.is_local ? 'Local Upload' : 'YouTube')}
                       </span>
                       <span className="text-ink-mute text-xs">•</span>
@@ -563,25 +563,25 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
 
                       {/* Status Badge */}
                       {isFailed ? (
-                        <span className="px-2 py-0.5 rounded-full border border-red-800/60 bg-red-950/60 text-[9px] font-mono text-red-300 flex items-center gap-1">
-                          <AlertTriangle className="w-3 h-3 text-red-400" />
+                        <span className="px-2 py-0.5 rounded-sm border border-danger/60 bg-canvas-card/60 text-[9px] font-mono text-danger flex items-center gap-1">
+                          <AlertTriangle className="w-3 h-3 text-danger" />
                           <span>INDEXING FAILED</span>
                         </span>
                       ) : isIndexing ? (
-                        <span className="px-2 py-0.5 rounded-full border border-amber-800/60 bg-amber-950/60 text-[9px] font-mono text-amber-300 flex items-center gap-1">
-                          <Loader2 className="w-3 h-3 text-amber-400 animate-spin" />
+                        <span className="px-2 py-0.5 rounded-sm border border-hairline-bright/60 bg-canvas-card/60 text-[9px] font-mono text-ink-body flex items-center gap-1">
+                          <Loader2 className="w-3 h-3 text-ink-body animate-spin" />
                           <span>INDEXING...</span>
                         </span>
                       ) : (
-                        <span className="px-2 py-0.5 rounded-full border border-emerald-900/60 bg-emerald-950/60 text-[9px] font-mono text-emerald-400 flex items-center gap-1">
-                          <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                        <span className="px-2 py-0.5 rounded-sm border border-canvas-card/60 bg-canvas-card/60 text-[9px] font-mono text-ink flex items-center gap-1">
+                          <CheckCircle2 className="w-3 h-3 text-ink" />
                           <span>FULLY INDEXED</span>
                         </span>
                       )}
 
                       {/* Visual / Text index indicator */}
                       {!isFailed && !isIndexing && (
-                        <span className={`px-1.5 py-0.5 rounded-full border text-[9px] font-mono flex items-center gap-0.5 ${hasVisual ? 'border-emerald-900/40 bg-emerald-950/30 text-emerald-400' : 'border-hairline bg-canvas-soft text-ink-mute'}`}
+                        <span className={`px-1.5 py-0.5 rounded-sm border text-[9px] font-mono flex items-center gap-0.5 ${hasVisual ? 'border-canvas-card/40 bg-canvas-card/30 text-ink' : 'border-hairline bg-canvas-soft text-ink-mute'}`}
                           title={hasVisual ? `${vid.visual_chunk_count} chunks with CLIP visual embeddings` : 'Text-only (no visual embeddings)'}
                         >
                           {hasVisual ? <Eye className="w-2.5 h-2.5" /> : <FileText className="w-2.5 h-2.5" />}
@@ -590,12 +590,12 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
                       )}
                     </div>
 
-                    <h4 className="text-xs sm:text-sm font-medium text-ink truncate group-hover:text-accent-sunset transition-colors mt-0.5">
+                    <h4 className="text-xs sm:text-sm font-medium text-ink truncate group-hover:text-ink-body transition-colors mt-0.5">
                       {vid.title}
                     </h4>
 
                     {isFailed ? (
-                      <p className="text-[11px] text-red-400 font-mono mt-0.5">
+                      <p className="text-[11px] text-danger font-mono mt-0.5">
                         Error: {vid.error_message || 'Transcription/ingestion failed.'}
                       </p>
                     ) : (
@@ -610,7 +610,7 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
                     {isFailed && (
                       <button
                         onClick={() => handleRetry(vid)}
-                        className="p-1.5 text-amber-400 hover:text-amber-300 hover:bg-canvas-soft rounded transition-colors"
+                        className="p-1.5 text-ink-body hover:text-ink-body hover:bg-canvas-soft rounded transition-colors"
                         title="Retry Ingestion"
                       >
                         <RotateCcw className="w-4 h-4" />
@@ -632,7 +632,7 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
                     <button
                       onClick={() => handleDelete(vid.id, vid.title)}
                       disabled={deletingId === vid.id}
-                      className="p-1.5 text-ink-mute hover:text-red-400 hover:bg-canvas-soft rounded transition-colors disabled:opacity-40"
+                      className="p-1.5 text-ink-mute hover:text-danger hover:bg-canvas-soft rounded transition-colors disabled:opacity-40"
                       title="Delete Video"
                     >
                       {deletingId === vid.id ? (

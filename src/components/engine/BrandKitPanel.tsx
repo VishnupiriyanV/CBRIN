@@ -73,10 +73,10 @@ export const BrandKitPanel: React.FC = () => {
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Palette className="w-4 h-4 text-accent-sunset" />
+          <Palette className="w-4 h-4 text-ink-body" />
           <span className="text-xs font-semibold text-ink">Brand Kit</span>
           {kit.auto_seeded && (
-            <span className="px-2 py-0.5 rounded-full border border-hairline bg-canvas-soft text-[9px] font-mono text-ink-mute">
+            <span className="px-2 py-0.5 rounded-sm border border-hairline bg-canvas-soft text-[9px] font-mono text-ink-mute">
               AUTO-SEEDED
             </span>
           )}
@@ -84,14 +84,14 @@ export const BrandKitPanel: React.FC = () => {
         <button
           onClick={() => handleAutoseed(false)}
           disabled={loading}
-          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-hairline hover:border-hairline-bright text-[10px] font-mono text-ink-mute hover:text-ink transition-all disabled:opacity-40"
+          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-sm border border-hairline hover:border-hairline-bright text-[10px] font-mono text-ink-mute hover:text-ink transition-all disabled:opacity-40"
         >
           {loading ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
           <span>Re-seed from frames</span>
         </button>
       </div>
 
-      {error && <p className="text-[10px] font-mono text-red-400">{error}</p>}
+      {error && <p className="text-[10px] font-mono text-danger">{error}</p>}
 
       {/* Palette swatches */}
       <div className="grid grid-cols-4 gap-2">
@@ -101,7 +101,7 @@ export const BrandKitPanel: React.FC = () => {
               type="color"
               value={kit.colors[key]}
               onChange={(e) => applyPatch({ colors: { ...kit.colors, [key]: e.target.value } })}
-              className="w-9 h-9 rounded-lg border border-hairline bg-transparent cursor-pointer"
+              className="w-9 h-9 rounded-sm border border-hairline bg-transparent cursor-pointer"
             />
             <span className="text-[9px] font-mono text-ink-mute capitalize">{key}</span>
           </label>
@@ -116,9 +116,9 @@ export const BrandKitPanel: React.FC = () => {
             <button
               key={font}
               onClick={() => applyPatch({ fonts: { ...kit.fonts, caption: font } })}
-              className={`px-2.5 py-1 rounded-full border text-[10px] font-mono transition-all ${
+              className={`px-2.5 py-1 rounded-sm border text-[10px] font-mono transition-all ${
                 kit.fonts.caption === font
-                  ? 'border-accent-sunset bg-accent-sunset/10 text-accent-sunset'
+                  ? 'border-accent-sunset bg-accent-sunset/10 text-ink-body'
                   : 'border-hairline text-ink-mute hover:border-hairline-bright hover:text-ink'
               }`}
             >
@@ -135,7 +135,7 @@ export const BrandKitPanel: React.FC = () => {
           <select
             value={kit.caption.position}
             onChange={(e) => applyPatch({ caption: { ...kit.caption, position: e.target.value } })}
-            className="w-full bg-canvas-soft border border-hairline rounded-lg px-2 py-1.5 text-[11px] text-ink outline-none"
+            className="w-full bg-canvas-soft border border-hairline rounded-sm px-2 py-1.5 text-[11px] text-ink outline-none"
           >
             {CAPTION_POSITIONS.map((p) => (
               <option key={p} value={p}>{p}</option>
@@ -147,7 +147,7 @@ export const BrandKitPanel: React.FC = () => {
           <select
             value={kit.caption.size || 'medium'}
             onChange={(e) => applyPatch({ caption: { ...kit.caption, size: e.target.value } })}
-            className="w-full bg-canvas-soft border border-hairline rounded-lg px-2 py-1.5 text-[11px] text-ink outline-none"
+            className="w-full bg-canvas-soft border border-hairline rounded-sm px-2 py-1.5 text-[11px] text-ink outline-none"
           >
             {CAPTION_SIZES.map((s) => (
               <option key={s} value={s}>{s}</option>
@@ -159,7 +159,7 @@ export const BrandKitPanel: React.FC = () => {
           <select
             value={kit.caption.case}
             onChange={(e) => applyPatch({ caption: { ...kit.caption, case: e.target.value } })}
-            className="w-full bg-canvas-soft border border-hairline rounded-lg px-2 py-1.5 text-[11px] text-ink outline-none"
+            className="w-full bg-canvas-soft border border-hairline rounded-sm px-2 py-1.5 text-[11px] text-ink outline-none"
           >
             <option value="upper">upper</option>
             <option value="sentence">sentence</option>

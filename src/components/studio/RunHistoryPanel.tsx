@@ -36,7 +36,7 @@ export const RunHistoryPanel: React.FC<RunHistoryPanelProps> = ({ toolLabels }) 
         {runs.map((run) => {
           const isOpen = expanded === run.id;
           return (
-            <div key={run.id} className="bg-canvas-soft border border-hairline rounded-lg">
+            <div key={run.id} className="bg-canvas-soft border border-hairline rounded-sm">
               <div className="flex items-center justify-between p-3">
                 <button
                   onClick={() => setExpanded(isOpen ? null : run.id)}
@@ -46,7 +46,7 @@ export const RunHistoryPanel: React.FC<RunHistoryPanelProps> = ({ toolLabels }) 
                   <span className="text-xs font-medium text-ink">{toolLabels[run.tool_id] || run.tool_id}</span>
                   <span className="text-[11px] font-mono text-ink-mute">{new Date(run.created_at * 1000).toLocaleString()}</span>
                 </button>
-                <button onClick={() => handleDelete(run.id)} className="text-ink-mute hover:text-red-400 shrink-0">
+                <button onClick={() => handleDelete(run.id)} className="text-ink-mute hover:text-danger shrink-0">
                   <Trash2 className="w-3.5 h-3.5" />
                 </button>
               </div>

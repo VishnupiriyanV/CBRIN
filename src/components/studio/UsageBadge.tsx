@@ -16,10 +16,10 @@ export const UsageBadge: React.FC<{ refreshKey?: number }> = ({ refreshKey }) =>
 
   return (
     <div
-      className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-hairline bg-canvas-soft text-[10px] font-mono text-ink-mute"
+      className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-sm border border-hairline bg-canvas-soft text-[10px] font-mono text-ink-mute"
       title={`${usage.tokens_in_month.toLocaleString()} in / ${usage.tokens_out_month.toLocaleString()} out tokens this month`}
     >
-      <Activity className="w-3 h-3 text-accent-sunset" />
+      <Activity className="w-3 h-3 text-ink-body" />
       <span>{usage.runs_this_hour}/{usage.limits.max_runs_per_hour} this hour</span>
       <span className="text-hairline-bright">•</span>
       <span>{usage.runs_today} today</span>
