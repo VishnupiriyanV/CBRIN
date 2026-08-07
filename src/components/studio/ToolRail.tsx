@@ -1,9 +1,9 @@
 import React from 'react';
-import { Clock, Settings2, User } from 'lucide-react';
+import { Clock, User } from 'lucide-react';
 import { StudioToolInfo } from '../../types';
 import { cn } from '../ui/cn';
 
-export type StudioSection = string | 'voice_profile' | 'platform_rules' | 'history';
+export type StudioSection = string | 'voice_profile' | 'history';
 
 interface ToolRailProps {
   tools: StudioToolInfo[];
@@ -32,7 +32,6 @@ export const ToolRail: React.FC<ToolRailProps> = ({ tools, active, onSelect }) =
       {tools.map((t) => item(t.id, t.label))}
       <div className="eyebrow-mono px-3 mb-1 mt-4">Settings</div>
       {item('voice_profile', 'Voice Profile', <User className="w-3.5 h-3.5" />)}
-      {item('platform_rules', 'Platform Rules', <Settings2 className="w-3.5 h-3.5" />)}
       {item('history', 'Run History', <Clock className="w-3.5 h-3.5" />)}
     </nav>
   );

@@ -185,18 +185,6 @@ export interface VoiceProfile {
   auto_seeded: boolean;
 }
 
-export interface PlatformRule {
-  label: string;
-  style: string;
-  char_limit: number;
-  hashtag_min: number;
-  hashtag_max: number;
-  hashtag_placement: string;
-  links_clickable: boolean;
-}
-
-export type PlatformRules = Record<string, PlatformRule>;
-
 export interface StudioUsageSummary {
   runs_this_hour: number;
   runs_today: number;

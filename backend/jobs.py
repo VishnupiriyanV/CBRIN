@@ -26,6 +26,7 @@ from dataclasses import dataclass, field, asdict
 from typing import Any, Callable, Dict, List, Optional
 
 import paths
+import atomic_io
 
 MAX_RETAINED_JOBS = 200
 
@@ -77,8 +78,7 @@ def _save_all():
         for j in keep:
             _jobs[j.id] = j
         payload = {jid: j.to_dict() for jid, j in _jobs.items()}
-    with open(paths.JOBS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(payload, f, indent=2, ensure_ascii=False)
+    atomic_io.write_json(paths.JOBS_FILE, payload)
 
 
 def _init_from_disk():

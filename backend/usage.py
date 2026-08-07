@@ -16,6 +16,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 import paths
+import atomic_io
 
 MAX_INPUT_WORDS = 15_000
 MAX_RUNS_PER_HOUR = 60
@@ -49,8 +50,7 @@ def _load_all() -> List[Dict[str, Any]]:
 def _save_all(entries: List[Dict[str, Any]]) -> None:
     os.makedirs(paths.DATA_DIR, exist_ok=True)
     entries = sorted(entries, key=lambda e: e.get("ts", 0))[-MAX_RETAINED_ENTRIES:]
-    with open(paths.TOOL_USAGE_FILE, 'w', encoding='utf-8') as f:
-        json.dump(entries, f, indent=2, ensure_ascii=False)
+    atomic_io.write_json(paths.TOOL_USAGE_FILE, entries)
 
 
 def check_input_words(word_count: int) -> None:

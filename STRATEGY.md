@@ -75,6 +75,7 @@ That single sentence turns every current liability (local torch, GPU requirement
 |---|---|
 | **Agent / Copilot layer** (`agent_engine.py`, `agent_tools.py`, `AgentWorkspace.tsx`, content pack, deep research, SSE streaming) | Unverified, quota-bound, highest maintenance, zero pricing power. This is the hardest cut because it's the newest work. Make it anyway. |
 | **STUDIO — 4 of 6 tools** (repurposer, titles, replies, captions) | Commoditized. Keep show_notes + moments only because they ride the transcript you already have. |
+| **`platform_rules`** (module, 2 routes, `PlatformRulesPanel.tsx`) | *Added 2026-08-07.* Orphaned by the captions cut — nothing referenced it afterwards. Cut rather than carried; reimplement alongside a feature that actually needs platform limits. Appendix B's matching guardrail is retired with it. |
 | **3 of 4 search modes** | HYBRID/QUESTIONS/TOPICS are byte-identical. Shipping decorative UI in a product whose pitch is "honest by design" is the worst possible inconsistency. |
 | **Import/export/highlights** | Nobody asked. Pure surface area. |
 | **Dual-provider LLM juggling** (`VAULT_LLM` + `VAULT_TOOLS_LLM`) | Complexity that exists only to dodge free-tier limits. Solved by a paid key or BYO key. |
@@ -232,6 +233,34 @@ Hard rules, each one a direct answer to a row in the table above:
 
 ---
 
+## 10. Storage — current design and the one decision deferred
+
+*Added 2026-08-07 after auditing the persistence layer.*
+
+**There is no database.** Flat files under `backend/data/`, every path centralized in `paths.py`: JSON for records (chunks, videos, clips, jobs, tool runs), `.npy` for embeddings, blobs on the filesystem (media 580 MB, clips 128 MB, keyframes). The whole index loads into RAM at boot and search is a brute-force `np.dot` over the full matrix.
+
+For a single-user local-first desktop tool this is a defensible design, not a shortcut. Two properties are worth stating so nobody "fixes" them:
+
+1. **`embeddings.npy` row *i* corresponds to `chunks[i]` by position.** No key joins them. Any code that reorders or filters `self.chunks` must rebuild the aligned arrays — this is the single most breakable invariant in the backend.
+2. **Brute-force search is correct here.** 40k chunks × 384 dims is ~15M multiply-adds, single-digit milliseconds in numpy. An ANN index (FAISS/Chroma/LanceDB/sqlite-vec) solves a latency problem that appears around 100× this scale, and costs installer weight, a dependency that can break, and approximate results in a product whose pitch is precision. **Do not add a vector database.**
+
+### Fixed already
+
+- **Atomic writes** (`backend/atomic_io.py`) — temp file → fsync → `os.replace` for every persisted store. Previously a crash mid-write could truncate `chunks.json`, which *is* the library. Also closes the unlocked read-modify-write hazard Appendix C flagged for `tool_runs.py` / `usage.py`.
+- **Keyframes capped at 480px** — were stored at 1280×720 (~125 KB) though CLIP resizes to 224×224 and the UI never renders wider than 256px. Now ~23 KB. At the 50-hour archive this section's target user has, that is ~4.8 GB → ~0.86 GB. Embeddings still come from the full-resolution frame, so search quality is unchanged.
+
+### Deferred: SQLite for records
+
+**Trigger: build this only when batch mode is built (Phase 2), not before.**
+
+The one real scaling defect left is that every mutation rewrites all of `chunks.json`. At 436 chunks that is 552 KB and invisible; at ~40k chunks (a 50-hour archive) it is ~50 MB rewritten per highlight toggle or re-index. SQLite fixes exactly that: it ships in the Python stdlib so it adds **zero installer weight** — which matters given §7's warning that desktop distribution cost is underestimated 2× — gives ACID transactions, indexed `video_id` lookups, and incremental `UPDATE`s, and stays a single portable file.
+
+Keep embeddings in `.npy` loaded with `mmap_mode='r'` rather than moving them into the DB; numpy is already the right tool and mmap avoids paging 61 MB into RAM at boot.
+
+Doing this now would be a rewrite of working code ahead of a single paying user — the exact pattern §7 calls the biggest risk in the project. The current design carries the product through Phase 0 and Phase 1 without complaint.
+
+---
+
 ## 9. The one-paragraph version
 
 You've built a genuinely well-engineered system around one real differentiator — clip boundaries that can't decapitate a punchline — and then buried it under two other half-products, six commodity prompt wrappers, and an unverified agent layer, none of which anyone has ever paid for or even used. Keep the boundary solver and the local archive search, delete the rest, stop treating local-first as a limitation and sell it as the reason to buy, and go get 10 people to pay $49 before you write another line. If 10 people won't, that's the most valuable thing you'll learn all year — and this stays what it already is, which is a strong piece of engineering work.
@@ -266,7 +295,7 @@ These survive the cut because they apply to the clip and show-notes paths that r
 | Never fabricates a timestamp | The model returns sentence *indices*; the backend derives every displayed time from parsed cue data. A model-emitted time is not a code path that exists. |
 | Never cuts between a setup and its payoff | Candidates are built by a dependency-chain solver over sentence boundaries, not a heuristic. |
 | Never invents a confidence number | No "82% viral score." Five named, inspectable signals; ranking scores are shown as buckets, never as percentages. |
-| Never truncates over a platform limit | Over-limit triggers one targeted regenerate. Slicing text is not a code path that exists. |
+| ~~Never truncates over a platform limit~~ | **Retired 2026-08-07.** Its only subject was the captions tool, cut in §4; `platform_rules` went with it. This was a promise about a feature that no longer exists — kept in the register it would have been a claim with nothing behind it. Reinstate it *with* any future feature that emits length-capped text; do not reinstate it on its own. |
 | Never connects to a social account | No platform SDK is a dependency anywhere in the tree. Copy-to-clipboard is the only path out. |
 | Hard-gates instead of degrading | With no LLM key, generation refuses rather than emitting a rule-based imitation. |
 
@@ -288,7 +317,7 @@ These survive the cut because they apply to the clip and show-notes paths that r
 
   **Process note worth more than the finding itself:** this entry sat in two planning docs and drove a decision to delete a whole working subsystem. Both of its claims were false, and each cost one command to check. Note that in re-testing it, the first replacement claim written here was *also* wrong — asserted from a mistyped grep rather than a read of the component. Verify against the artifact, not against a search that returned nothing: an empty result is evidence about your query first, and about the code second. Apply this to the rest of Appendix A before acting on any of it.
 - **`generate_content_pack` has never completed a live run.** Cut.
-- **`tool_runs.py` / `usage.py` do whole-file JSON read-modify-write with no locking.** Fine single-user; a data-loss bug the moment anything runs concurrently.
+- ~~**`tool_runs.py` / `usage.py` do whole-file JSON read-modify-write with no locking.**~~ **Fixed 2026-08-07** — all persisted stores now write through `backend/atomic_io.py` (temp file → fsync → `os.replace`), so a torn write can no longer be observed. Note the same exposure existed on `chunks.json`, which is the entire library and was never flagged here; it is covered by the same fix. See §10.
 - **The Groq key in `.env` is plaintext in the working tree.** Flagged in two prior audits, still present. Rotate it.
 
 ## D. Architectural invariants — carried forward unchanged

@@ -35,7 +35,6 @@ CLIP_FEEDBACK_FILE = os.path.join(DATA_DIR, "clip_feedback.json")
 
 # STUDIO (Layer 4)
 VOICE_PROFILE_FILE = os.path.join(DATA_DIR, "voice_profile.json")
-PLATFORM_RULES_FILE = os.path.join(DATA_DIR, "platform_rules.json")
 TOOL_RUNS_FILE = os.path.join(DATA_DIR, "tool_runs.json")
 TOOL_USAGE_FILE = os.path.join(DATA_DIR, "tool_usage.json")
 
@@ -46,7 +45,7 @@ def use_root(root: str) -> None:
     global DATA_DIR, MEDIA_DIR, KEYFRAMES_DIR, CHUNKS_FILE, EMBEDDINGS_FILE
     global VISUAL_EMBEDDINGS_FILE, VIDEOS_FILE, INDEX_META_FILE
     global WORDS_DIR, CLIPS_DIR, CLIPS_FILE, BRAND_KIT_FILE, JOBS_FILE, CLIP_FEEDBACK_FILE
-    global VOICE_PROFILE_FILE, PLATFORM_RULES_FILE, TOOL_RUNS_FILE, TOOL_USAGE_FILE
+    global VOICE_PROFILE_FILE, TOOL_RUNS_FILE, TOOL_USAGE_FILE
 
     DATA_DIR = root
     MEDIA_DIR = os.path.join(DATA_DIR, "media")
@@ -65,6 +64,5 @@ def use_root(root: str) -> None:
     CLIP_FEEDBACK_FILE = os.path.join(DATA_DIR, "clip_feedback.json")
 
     VOICE_PROFILE_FILE = os.path.join(DATA_DIR, "voice_profile.json")
-    PLATFORM_RULES_FILE = os.path.join(DATA_DIR, "platform_rules.json")
     TOOL_RUNS_FILE = os.path.join(DATA_DIR, "tool_runs.json")
     TOOL_USAGE_FILE = os.path.join(DATA_DIR, "tool_usage.json")

@@ -40,7 +40,6 @@ import llm_client
 import studio_runner
 import studio_prompts
 import voice_profile
-import platform_rules
 import tool_runs
 import usage
 
@@ -949,15 +948,6 @@ def studio_autoseed_voice_profile(force: bool = Query(False)):
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
 
-
-@app.get("/api/studio/platform_rules")
-def studio_get_platform_rules():
-    return platform_rules.load()
-
-
-@app.put("/api/studio/platform_rules")
-def studio_update_platform_rules(patch: Dict[str, Dict[str, Any]]):
-    return platform_rules.apply_edit(patch)
 
 
 if __name__ == "__main__":
