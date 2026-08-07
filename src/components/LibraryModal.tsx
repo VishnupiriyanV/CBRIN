@@ -22,7 +22,7 @@ const ModelTierSelector: React.FC<{
   disabled?: boolean;
 }> = ({ value, onChange, disabled }) => (
   <div className="flex items-center gap-3">
-    <span className="text-[10px] font-mono text-ink-mute shrink-0">TRANSCRIPTION QUALITY:</span>
+    <span className="text-[10px] font-mono text-ink-mute shrink-0">Transcription quality:</span>
     <div className="flex items-center gap-1 bg-canvas border border-hairline p-0.5 rounded-sm">
       {WHISPER_MODEL_TIERS.map((tier) => (
         <button
@@ -322,7 +322,7 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
         {/* Ingest Mode Tabs */}
         <div className="p-6 border-b border-hairline bg-canvas-soft/40 space-y-4">
           <div className="flex items-center justify-between">
-            <span className="eyebrow-mono">INDEX NEW CONTENT</span>
+            <span className="eyebrow-mono">Index new content</span>
             <div className="flex items-center gap-1 bg-canvas border border-hairline p-1 rounded-sm text-xs font-mono">
               <button
                 onClick={() => setIngestMode('url')}
@@ -425,7 +425,7 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
                 <span className="text-xs font-medium text-ink">
                   Select an entire folder of videos/podcasts from your computer
                 </span>
-                <span className="text-[10px] font-mono text-ink-mute font-sans">ALL MEDIA TRANSCRIBED AND EMBEDDED AUTOMATICALLY</span>
+                <span className="text-[10px] font-mono text-ink-mute font-sans">All media transcribed and embedded automatically</span>
               </button>
             </div>
           )}
@@ -435,7 +435,7 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
             <div className="space-y-3">
               {/* Merge / Replace toggle */}
               <div className="flex items-center gap-3">
-                <span className="text-[10px] font-mono text-ink-mute">IMPORT MODE:</span>
+                <span className="text-[10px] font-mono text-ink-mute">Import mode:</span>
                 <div className="flex items-center gap-1 bg-canvas border border-hairline p-0.5 rounded-sm">
                   <button
                     onClick={() => setImportMode('merge')}
@@ -565,17 +565,17 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
                       {isFailed ? (
                         <span className="px-2 py-0.5 rounded-sm border border-danger/60 bg-canvas-card/60 text-[9px] font-mono text-danger flex items-center gap-1">
                           <AlertTriangle className="w-3 h-3 text-danger" />
-                          <span>INDEXING FAILED</span>
+                          <span>Indexing failed</span>
                         </span>
                       ) : isIndexing ? (
                         <span className="px-2 py-0.5 rounded-sm border border-hairline-bright/60 bg-canvas-card/60 text-[9px] font-mono text-ink-body flex items-center gap-1">
                           <Loader2 className="w-3 h-3 text-ink-body animate-spin" />
-                          <span>INDEXING...</span>
+                          <span>Indexing…</span>
                         </span>
                       ) : (
                         <span className="px-2 py-0.5 rounded-sm border border-canvas-card/60 bg-canvas-card/60 text-[9px] font-mono text-ink flex items-center gap-1">
                           <CheckCircle2 className="w-3 h-3 text-ink" />
-                          <span>FULLY INDEXED</span>
+                          <span>Fully indexed</span>
                         </span>
                       )}
 

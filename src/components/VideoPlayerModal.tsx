@@ -107,7 +107,7 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
           <div className="flex items-center gap-3">
             <div className="w-2.5 h-2.5 rounded-sm bg-accent-sunset"></div>
             <div>
-              <span className="eyebrow-mono text-[9px] block">JUMPED TO MOMENT // {result.start_timestamp}</span>
+              <span className="eyebrow-mono text-[9px] block">Jumped to moment · {result.start_timestamp}</span>
               <h2 className="text-sm sm:text-base font-semibold text-ink truncate max-w-md sm:max-w-lg">
                 {result.video_title}
               </h2>
@@ -185,7 +185,7 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
                 <div className="space-y-1">
                   <div className="flex items-center justify-center gap-1.5 text-xs text-ink-body font-mono">
                     <AlertCircle className="w-4 h-4" />
-                    <span>DIRECT MEDIA STREAM RESTRICTED</span>
+                    <span>Direct media stream restricted</span>
                   </div>
                   <p className="text-xs text-ink-body font-sans">
                     This video playback is optimized via YouTube or local reference. Click below to view this exact timestamp moment directly.
@@ -240,7 +240,7 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
           )}
 
           <div className="bg-canvas-soft border border-hairline rounded-sm p-4 text-sm text-ink-body leading-relaxed">
-            <p className="eyebrow-mono text-[9px] mb-1.5 text-ink-body">SPOKEN TRANSCRIPT</p>
+            <p className="eyebrow-mono text-[9px] mb-1.5 text-ink-body">Spoken transcript</p>
             <p className="italic text-ink font-sans">"{result.text}"</p>
           </div>
 
@@ -248,7 +248,7 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({
             <div className="space-y-1 pt-1">
               <div className="flex items-center gap-1 text-[10px] font-mono text-ink-mute">
                 <HelpCircle className="w-3 h-3 text-ink-body" />
-                <span>ANSWERED QUESTION:</span>
+                <span>Answered question:</span>
               </div>
               <p className="text-xs text-ink italic font-sans pl-4 border-l border-hairline-bright">
                 "{result.questions_answered[0]}"

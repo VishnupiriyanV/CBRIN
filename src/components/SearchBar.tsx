@@ -18,8 +18,8 @@ interface SearchBarProps {
 // all ran identical backend code and gave no actual mode-dependent behavior — 'spoken' and
 // 'visual_scenes' are the only two search modes that are genuinely different pipelines.
 export const SEARCH_MODES = [
-  { id: 'spoken', label: 'SPOKEN' },
-  { id: 'visual_scenes', label: 'ON-SCREEN (CLIP)' },
+  { id: 'spoken', label: 'Spoken' },
+  { id: 'visual_scenes', label: 'On-screen (CLIP)' },
 ];
 
 export const SearchBar: React.FC<SearchBarProps> = ({
@@ -63,14 +63,14 @@ export const SearchBar: React.FC<SearchBarProps> = ({
         {/* Top Header Row: Eyebrow + Mode Tabs */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="flex items-center gap-2">
-            <span className="eyebrow-mono text-[10px]">SEARCH YOUR CONTENT</span>
+            <span className="eyebrow-mono text-[10px]">Search your content</span>
           </div>
 
           {/* Search Mode Segmented Pills */}
           <div className="flex items-center gap-1 bg-canvas border border-hairline p-1 rounded-sm overflow-x-auto scrollbar-none">
             <div className="flex items-center gap-1 px-2 text-[10px] font-mono text-ink-mute shrink-0">
               <SlidersHorizontal className="w-3 h-3 text-ink-body" />
-              <span className="hidden sm:inline">MODE:</span>
+              <span className="hidden sm:inline">Mode:</span>
             </div>
             {SEARCH_MODES.map((mode) => (
               <button

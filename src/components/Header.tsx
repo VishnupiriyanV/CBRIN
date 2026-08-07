@@ -84,7 +84,7 @@ export const Header: React.FC<HeaderProps> = ({
               ) : (
                 <div className="flex items-center gap-1.5 text-ink-body shrink-0">
                   <span className="w-1.5 h-1.5 rounded-sm bg-ink-body shrink-0"></span>
-                  <span className="shrink-0">INDEXING</span>
+                  <span className="shrink-0">Indexing</span>
                 </div>
               )}
 

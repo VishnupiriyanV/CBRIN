@@ -59,7 +59,7 @@ export const HighlightsPanel: React.FC<HighlightsPanelProps> = ({
             <div>
               <h2 className="text-base font-semibold text-ink">Highlighted Moments</h2>
               <p className="eyebrow-mono text-[9px] text-ink-mute">
-                {highlights.length} BOOKMARKED MOMENT{highlights.length !== 1 ? 'S' : ''}
+                {highlights.length} bookmarked moment{highlights.length !== 1 ? 's' : ''}
               </p>
             </div>
           </div>
