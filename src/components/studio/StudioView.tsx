@@ -7,11 +7,7 @@ import { UsageBadge } from './UsageBadge';
 import { VoiceProfilePanel } from './VoiceProfilePanel';
 import { PlatformRulesPanel } from './PlatformRulesPanel';
 import { RunHistoryPanel } from './RunHistoryPanel';
-import { RepurposerTool } from './tools/RepurposerTool';
 import { ShowNotesTool } from './tools/ShowNotesTool';
-import { TitlesTool } from './tools/TitlesTool';
-import { RepliesTool } from './tools/RepliesTool';
-import { CaptionsTool } from './tools/CaptionsTool';
 import { MomentsTool } from './tools/MomentsTool';
 
 interface StudioViewProps {
@@ -20,20 +16,16 @@ interface StudioViewProps {
 }
 
 const TOOL_COMPONENTS: Record<string, React.ComponentType<{ videos: VideoItem[] }>> = {
-  repurposer: RepurposerTool,
   show_notes: ShowNotesTool,
-  titles: TitlesTool,
-  replies: RepliesTool,
-  captions: CaptionsTool,
   moments: MomentsTool,
 };
 
-// STUDIO (Layer 4): six text-in/text-out creator tools sharing the Voice Profile, Platform
+// STUDIO (Layer 4): two text-in/text-out creator tools sharing the Voice Profile, Platform
 // Rules, run history, and usage meter built in the shared foundation
 export const StudioView: React.FC<StudioViewProps> = ({ videos, backendOnline }) => {
   const [tools, setTools] = useState<StudioToolInfo[]>([]);
   const [llmConfigured, setLlmConfigured] = useState<boolean | null>(null);
-  const [section, setSection] = useState<StudioSection>('repurposer');
+  const [section, setSection] = useState<StudioSection>('show_notes');
 
   useEffect(() => {
     if (!backendOnline) return;

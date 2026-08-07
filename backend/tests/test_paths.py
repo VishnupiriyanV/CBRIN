@@ -26,7 +26,6 @@ class TestUseRootRedirectsEverything:
             assert paths.EMBEDDINGS_FILE == os.path.join(root, "embeddings.npy")
             assert paths.VISUAL_EMBEDDINGS_FILE == os.path.join(root, "visual_embeddings.npy")
             assert paths.VIDEOS_FILE == os.path.join(root, "videos.json")
-            assert paths.HIGHLIGHTS_FILE == os.path.join(root, "highlights.json")
             assert paths.INDEX_META_FILE == os.path.join(root, "index_meta.json")
             assert paths.WORDS_DIR == os.path.join(root, "words")
             assert paths.CLIPS_DIR == os.path.join(root, "clips")

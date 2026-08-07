@@ -11,11 +11,10 @@ interface EmptyStateProps {
   // Previously computed by the backend but never actually rendered anywhere in the UI.
   message?: string;
   onJumpToMoment?: (result: ChunkResult) => void;
-  onToggleHighlight?: (result: ChunkResult) => void;
   searchMode?: string;
 }
 
-export const EmptyState: React.FC<EmptyStateProps> = ({ query, nearMisses = [], message, onJumpToMoment, onToggleHighlight, searchMode }) => {
+export const EmptyState: React.FC<EmptyStateProps> = ({ query, nearMisses = [], message, onJumpToMoment, searchMode }) => {
   return (
     <div className="space-y-6 my-8">
       <div className="bg-canvas-soft border border-hairline rounded-sm p-10 text-center max-w-2xl mx-auto space-y-4">
@@ -40,10 +39,10 @@ export const EmptyState: React.FC<EmptyStateProps> = ({ query, nearMisses = [], 
       {/* Near-misses: the closest candidates that didn't clear the relevance bar. Showing
           these — rather than a bare void — is the difference between an honest "nothing
           strong here" and a demo that confidently returns a wrong clip (IMPROVEMENT-PLAN.md 3.2). */}
-      {nearMisses.length > 0 && onJumpToMoment && onToggleHighlight && (
+      {nearMisses.length > 0 && onJumpToMoment && (
         <div className="space-y-3 max-w-2xl mx-auto opacity-80">
           <span className="eyebrow-mono text-[9px] block text-ink-mute text-center">
-            NOTHING STRONG — CLOSEST MATCHES
+            Nothing strong — closest matches
           </span>
           <div className="space-y-4">
             {nearMisses.map((result) => (
@@ -52,7 +51,6 @@ export const EmptyState: React.FC<EmptyStateProps> = ({ query, nearMisses = [], 
                 result={result}
                 searchQuery={query}
                 onJumpToMoment={onJumpToMoment}
-                onToggleHighlight={onToggleHighlight}
                 searchMode={searchMode}
               />
             ))}

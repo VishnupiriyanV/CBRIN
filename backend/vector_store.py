@@ -3,9 +3,6 @@ import math
 import re
 import os
 import json
-import csv
-import io
-import zipfile
 import datetime
 from typing import List, Dict, Any, Optional
 import numpy as np
@@ -90,7 +87,6 @@ class VectorStore:
     def __init__(self):
         self.chunks: List[Dict[str, Any]] = []
         self.videos: Dict[str, Dict[str, Any]] = {}  # video_id -> metadata
-        self.highlights: Dict[str, Dict[str, Any]] = {}  # chunk_id -> highlight data
         self.is_fitted = False
         self.dense_embeddings: Optional[np.ndarray] = None
         self.visual_embeddings: Optional[np.ndarray] = None
@@ -114,7 +110,7 @@ class VectorStore:
         os.makedirs(paths.MEDIA_DIR, exist_ok=True)
 
     def _save_to_disk(self):
-        """Persist chunks, video metadata, highlights, and dual embeddings to disk."""
+        """Persist chunks, video metadata, and dual embeddings to disk."""
         self._ensure_dirs()
 
         with open(paths.CHUNKS_FILE, 'w', encoding='utf-8') as f:
@@ -123,16 +119,13 @@ class VectorStore:
         with open(paths.VIDEOS_FILE, 'w', encoding='utf-8') as f:
             json.dump(self.videos, f, indent=2, ensure_ascii=False)
 
-        with open(paths.HIGHLIGHTS_FILE, 'w', encoding='utf-8') as f:
-            json.dump(self.highlights, f, indent=2, ensure_ascii=False)
-
         if self.dense_embeddings is not None:
             np.save(paths.EMBEDDINGS_FILE, self.dense_embeddings)
 
         if self.visual_embeddings is not None:
             np.save(paths.VISUAL_EMBEDDINGS_FILE, self.visual_embeddings)
 
-        print(f"[Cbrin] Persisted {len(self.chunks)} chunks, {len(self.videos)} videos, {len(self.highlights)} highlights to disk.")
+        print(f"[Cbrin] Persisted {len(self.chunks)} chunks and {len(self.videos)} videos to disk.")
 
     def _load_from_disk(self):
         """Load previously persisted library data on startup."""
@@ -151,10 +144,6 @@ class VectorStore:
             if os.path.exists(paths.VIDEOS_FILE):
                 with open(paths.VIDEOS_FILE, 'r', encoding='utf-8') as f:
                     self.videos = json.load(f)
-
-            if os.path.exists(paths.HIGHLIGHTS_FILE):
-                with open(paths.HIGHLIGHTS_FILE, 'r', encoding='utf-8') as f:
-                    self.highlights = json.load(f)
 
             evicted = self._evict_stale_chunks()
 
@@ -190,7 +179,6 @@ class VectorStore:
             print(f"[Cbrin] Error loading persisted library: {e}. Starting fresh.")
             self.chunks = []
             self.videos = {}
-            self.highlights = {}
             self.is_fitted = True
 
     def _evict_stale_chunks(self) -> bool:
@@ -597,11 +585,6 @@ class VectorStore:
                 except Exception as e:
                     print(f"[Vault] Error deleting keyframe {keyframe_path}: {e}")
 
-        # Remove associated highlights
-        chunk_ids_to_remove = [cid for cid, h in self.highlights.items() if h.get('video_id') == video_id]
-        for cid in chunk_ids_to_remove:
-            del self.highlights[cid]
-
         # Delete local media file if present
         for ext in ['.mp4', '.mov', '.webm', '.mkv', '.avi', '.mp3', '.wav', '.m4a']:
             fpath = os.path.join(paths.MEDIA_DIR, f"{video_id}{ext}")
@@ -942,7 +925,6 @@ class VectorStore:
                 "implicit_concepts": target_chunk.get('implicit_concepts', []),
                 "has_visual_embedding": target_chunk.get('has_visual_embedding', False),
                 "visual_status": target_chunk.get('visual_status'),
-                "is_highlighted": target_chunk['id'] in self.highlights,
                 # Legacy (pre-sentence-index) chunks get a unique sentinel range keyed on
                 # their position in self.chunks, so they sort deterministically but can
                 # never numerically overlap/merge with a real sentence range (guarded
@@ -1182,152 +1164,6 @@ class VectorStore:
     def _invalidate_suggested_queries_cache(self):
         self._suggested_queries_cache = None
 
-    # --- Highlights / Bookmark API ---
-
-    def add_highlight(self, chunk_id: str, note: str = "") -> Dict[str, Any]:
-        """Bookmark a chunk result with an optional note."""
-        # Find the chunk
-        chunk = next((c for c in self.chunks if c['id'] == chunk_id), None)
-        if not chunk:
-            return {"success": False, "message": f"Chunk '{chunk_id}' not found."}
-
-        highlight = {
-            "chunk_id": chunk_id,
-            "video_id": chunk.get('video_id', ''),
-            "video_title": chunk.get('video_title', ''),
-            "channel": chunk.get('channel', ''),
-            "text": chunk.get('text', ''),
-            "start_sec": chunk.get('start_sec', 0),
-            "end_sec": chunk.get('end_sec', 0),
-            "start_timestamp": chunk.get('start_timestamp', ''),
-            "end_timestamp": chunk.get('end_timestamp', ''),
-            "thumbnail_url": chunk.get('thumbnail_url', ''),
-            "keyframe_url": chunk.get('keyframe_url'),
-            "youtube_id": chunk.get('youtube_id'),
-            "is_local": chunk.get('is_local', False),
-            "section_topic": chunk.get('section_topic', ''),
-            "note": note,
-            "highlighted_at": datetime.datetime.now().isoformat(),
-        }
-
-        self.highlights[chunk_id] = highlight
-        self._save_to_disk()
-        return {"success": True, "message": f"Highlighted moment at {chunk.get('start_timestamp', '')}.", "highlight": highlight}
-
-    def remove_highlight(self, chunk_id: str) -> Dict[str, Any]:
-        """Remove a bookmarked highlight."""
-        if chunk_id not in self.highlights:
-            return {"success": False, "message": f"Highlight '{chunk_id}' not found."}
-
-        del self.highlights[chunk_id]
-        self._save_to_disk()
-        return {"success": True, "message": "Highlight removed."}
-
-    def get_highlights(self) -> List[Dict[str, Any]]:
-        """Return all highlighted moments sorted by highlight time (newest first)."""
-        items = list(self.highlights.values())
-        items.sort(key=lambda x: x.get('highlighted_at', ''), reverse=True)
-        return items
-
-    # --- Export API ---
-
-    def export_library_json(self) -> Dict[str, Any]:
-        """Export the full library as a JSON-serializable dict."""
-        return {
-            "cbrin_export_version": "1.0",
-            "exported_at": datetime.datetime.now().isoformat(),
-            "stats": self.get_stats(),
-            "videos": self.videos,
-            "chunks": self.chunks,
-            "highlights": self.highlights,
-        }
-
-    def export_library_zip(self) -> bytes:
-        """Export the full library as a ZIP archive containing videos.json, chunks.json, highlights.json."""
-        buffer = io.BytesIO()
-        with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr("videos.json", json.dumps(self.videos, indent=2, ensure_ascii=False))
-            zf.writestr("chunks.json", json.dumps(self.chunks, indent=2, ensure_ascii=False))
-            zf.writestr("highlights.json", json.dumps(self.highlights, indent=2, ensure_ascii=False))
-            meta = {
-                "cbrin_export_version": "1.0",
-                "exported_at": datetime.datetime.now().isoformat(),
-                "stats": self.get_stats(),
-            }
-            zf.writestr("metadata.json", json.dumps(meta, indent=2, ensure_ascii=False))
-        return buffer.getvalue()
-
-    def export_search_results_csv(self, results: List[Dict[str, Any]], query: str) -> str:
-        """Export search results as a CSV string."""
-        output = io.StringIO()
-        writer = csv.writer(output)
-        writer.writerow(["query", "video_title", "channel", "start_timestamp", "end_timestamp", "score", "section_topic", "text"])
-        for r in results:
-            writer.writerow([
-                query,
-                r.get('video_title', ''),
-                r.get('channel', ''),
-                r.get('start_timestamp', ''),
-                r.get('end_timestamp', ''),
-                r.get('score', 0),
-                r.get('section_topic', ''),
-                r.get('text', ''),
-            ])
-        return output.getvalue()
-
-    def import_library(self, data: Dict[str, Any], mode: str = "merge") -> Dict[str, Any]:
-        """
-        Import a previously exported library.
-        mode: 'merge' — skip duplicate video IDs, add new ones.
-        mode: 'replace' — wipe current library and replace entirely.
-        """
-        imported_videos = data.get('videos', {})
-        imported_chunks = data.get('chunks', [])
-        imported_highlights = data.get('highlights', {})
-
-        if mode == "replace":
-            self.videos = imported_videos
-            self.chunks = imported_chunks
-            self.highlights = imported_highlights
-            self.reindex()
-            self._save_to_disk()
-            return {
-                "success": True,
-                "message": f"Replaced library with {len(imported_videos)} videos, {len(imported_chunks)} chunks.",
-                "videos_imported": len(imported_videos),
-                "chunks_imported": len(imported_chunks),
-            }
-        else:
-            # Merge mode: skip existing video IDs
-            existing_video_ids = set(self.videos.keys())
-            new_videos = 0
-
-            for vid_id, vid_meta in imported_videos.items():
-                if vid_id not in existing_video_ids:
-                    self.videos[vid_id] = vid_meta
-                    new_videos += 1
-
-            # Collect (don't append yet) so _add_chunks_incremental only embeds the genuinely
-            # new ones instead of re-encoding the whole merged corpus.
-            existing_chunk_ids = {c['id'] for c in self.chunks}
-            new_chunk_objs = [c for c in imported_chunks if c['id'] not in existing_chunk_ids]
-
-            # Merge highlights (don't overwrite existing)
-            for cid, highlight in imported_highlights.items():
-                if cid not in self.highlights:
-                    self.highlights[cid] = highlight
-
-            if new_chunk_objs:
-                self._add_chunks_incremental(new_chunk_objs)
-            self._save_to_disk()
-
-            return {
-                "success": True,
-                "message": f"Merged {new_videos} new videos, {len(new_chunk_objs)} new chunks. Skipped {len(imported_videos) - new_videos} duplicates.",
-                "videos_imported": new_videos,
-                "chunks_imported": len(new_chunk_objs),
-            }
-
     def get_stats(self) -> Dict[str, Any]:
         """Return comprehensive library stats including status counts and visual coverage."""
         total_seconds = sum(v.get('total_seconds', 0) for v in self.videos.values() if v.get('status') == 'fully_indexed')
@@ -1350,7 +1186,6 @@ class VectorStore:
             "is_fully_indexed": is_fully_indexed,
             "total_chunks": len(self.chunks),
             "visual_indexed_count": visual_indexed_count,
-            "total_highlights": len(self.highlights),
             "total_hours": f"{hours}h {minutes}m",
             "embedding_model": "all-MiniLM-L6-v2 + CLIP" if HAS_DENSE_MODEL else "TF-IDF",
             "is_fitted": self.is_fitted

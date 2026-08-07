@@ -40,18 +40,6 @@ def get_model() -> str:
     return os.getenv("VAULT_LLM_MODEL", "Meta-Llama-3.3-70B-Instruct")
 
 
-def get_tools_base_url() -> str:
-    return os.getenv("VAULT_TOOLS_LLM_BASE_URL") or get_base_url()
-
-
-def get_tools_api_key() -> Optional[str]:
-    return os.getenv("VAULT_TOOLS_LLM_API_KEY") or get_api_key()
-
-
-def get_tools_model() -> str:
-    return os.getenv("VAULT_TOOLS_LLM_MODEL") or get_model()
-
-
 def __getattr__(name: str) -> Any:
     if name == "BASE_URL":
         return get_base_url()
@@ -65,19 +53,14 @@ def __getattr__(name: str) -> Any:
 _client = None
 _client_config = None
 
-_tools_client = None
-_tools_client_config = None
-
 
 class LLMUnavailable(Exception):
     """No key configured, provider unreachable, or the response never validated against the
     requested schema even after one retry. Callers should fall back to heuristic analysis."""
 
 
-def is_configured(for_tools: bool = False) -> bool:
-    if for_tools:
-        return bool(get_tools_api_key())
-    return bool(get_api_key() or get_tools_api_key())
+def is_configured() -> bool:
+    return bool(get_api_key())
 
 
 def _get_client():
@@ -90,16 +73,6 @@ def _get_client():
     return _client
 
 
-def _get_tools_client():
-    global _tools_client, _tools_client_config
-    current_config = (get_tools_base_url(), get_tools_api_key())
-    if _tools_client is None or _tools_client_config != current_config:
-        import openai
-        _tools_client = openai.OpenAI(base_url=current_config[0], api_key=current_config[1])
-        _tools_client_config = current_config
-    return _tools_client
-
-
 class Resolved(NamedTuple):
     client: Any
     model: str
@@ -108,33 +81,17 @@ class Resolved(NamedTuple):
     bucket: str
 
 
-def resolve(for_tools: bool = False) -> "Resolved":
+def resolve() -> "Resolved":
     """Single source of truth for which (client, model, base_url) a call actually uses.
 
-    Before this existed, is_configured(for_tools=False) returned True whenever EITHER key was
-    set (line ~78 below), but the caller (complete_json_with_usage) built its client from
-    get_api_key() only — so a tools-only config (VAULT_TOOLS_LLM_API_KEY set, VAULT_LLM_API_KEY
-    unset) passed is_configured() and then constructed `openai.OpenAI(api_key=None)`, which
-    raises at construction time outside agent_engine's try/except, producing a 500 where
-    main.py intends a 503. resolve() implements the fallback in both directions so the two
-    checks can never disagree, and raises LLMUnavailable itself when neither key exists.
+    Single provider by design (STRATEGY.md §4): the VAULT_TOOLS_LLM_* pair existed only to
+    dodge free-tier rate limits by splitting traffic across two accounts. That is solved by
+    a paid key or BYO key, not by config complexity.
     """
-    if for_tools:
-        if get_tools_api_key():
-            return Resolved(_get_tools_client(), get_tools_model(), get_tools_base_url(), get_tools_api_key(),
-                             llm_throttle.bucket_key(get_tools_base_url(), get_tools_model()))
-        if get_api_key():
-            return Resolved(_get_client(), get_model(), get_base_url(), get_api_key(),
-                             llm_throttle.bucket_key(get_base_url(), get_model()))
-        raise LLMUnavailable("VAULT_TOOLS_LLM_API_KEY (or VAULT_LLM_API_KEY) is not set.")
-    else:
-        if get_api_key():
-            return Resolved(_get_client(), get_model(), get_base_url(), get_api_key(),
-                             llm_throttle.bucket_key(get_base_url(), get_model()))
-        if get_tools_api_key():
-            return Resolved(_get_tools_client(), get_tools_model(), get_tools_base_url(), get_tools_api_key(),
-                             llm_throttle.bucket_key(get_tools_base_url(), get_tools_model()))
-        raise LLMUnavailable("VAULT_LLM_API_KEY (or VAULT_TOOLS_LLM_API_KEY) is not set.")
+    if get_api_key():
+        return Resolved(_get_client(), get_model(), get_base_url(), get_api_key(),
+                        llm_throttle.bucket_key(get_base_url(), get_model()))
+    raise LLMUnavailable("VAULT_LLM_API_KEY is not set.")
 
 
 # Candidate fallback models per provider, tried in order if the primary model is rate limited.
@@ -242,10 +199,9 @@ def complete_json(
     max_retries: int = 1,
     temperature: float = 0.2,
     max_tokens: Optional[int] = None,
-    for_tools: bool = False,
 ) -> Any:
     parsed, _usage = complete_json_with_usage(
-        system, user, schema, max_retries=max_retries, temperature=temperature, max_tokens=max_tokens, for_tools=for_tools
+        system, user, schema, max_retries=max_retries, temperature=temperature, max_tokens=max_tokens
     )
     return parsed
 
@@ -257,9 +213,8 @@ def complete_json_with_usage(
     max_retries: int = 1,
     temperature: float = 0.2,
     max_tokens: Optional[int] = None,
-    for_tools: bool = False,
 ) -> "tuple[Any, Dict[str, Any]]":
-    resolved = resolve(for_tools=for_tools)
+    resolved = resolve()
     client, model_name = resolved.client, resolved.model
 
     attempt_user = user

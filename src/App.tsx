@@ -5,14 +5,12 @@ import { SearchBar } from './components/SearchBar';
 import { ResultCard } from './components/ResultCard';
 import { VideoPlayerModal } from './components/VideoPlayerModal';
 import { LibraryModal } from './components/LibraryModal';
-import { HighlightsPanel } from './components/HighlightsPanel';
 import { IndexingProgressModal } from './components/IndexingProgressModal';
 import { EmptyState } from './components/EmptyState';
 import { ClipStudio } from './components/engine/ClipStudio';
 import { StudioView } from './components/studio/StudioView';
-import { AgentWorkspace } from './components/agent/AgentWorkspace';
-import { ChunkResult, VideoItem, SearchResponse, LibraryStats, Highlight } from './types';
-import { performSearch, fetchLibraryVideos, fetchLibraryStats, checkBackendHealth, fetchSuggestedQueries, addHighlight, removeHighlight, fetchHighlights, exportSearchJSON, exportSearchCSV } from './services/api';
+import { ChunkResult, VideoItem, SearchResponse, LibraryStats } from './types';
+import { performSearch, fetchLibraryVideos, fetchLibraryStats, checkBackendHealth, fetchSuggestedQueries } from './services/api';
 import { getQueryHistory, addToQueryHistory } from './services/queryHistory';
 import { Plus, Video, WifiOff, FileDown, ChevronDown, Info, Filter } from 'lucide-react';
 
@@ -25,15 +23,12 @@ export const App: React.FC = () => {
   const [searchError, setSearchError] = useState<string | null>(null);
   const [selectedResult, setSelectedResult] = useState<ChunkResult | null>(null);
   const [isLibraryOpen, setIsLibraryOpen] = useState(false);
-  const [isHighlightsOpen, setIsHighlightsOpen] = useState(false);
   const [isProgressOpen, setIsProgressOpen] = useState(false);
   const [videos, setVideos] = useState<VideoItem[]>([]);
   const [stats, setStats] = useState<LibraryStats | null>(null);
   const [suggestedQueries, setSuggestedQueries] = useState<string[]>([]);
-  const [highlights, setHighlights] = useState<Highlight[]>([]);
   const [hasSearched, setHasSearched] = useState(false);
   const [backendOnline, setBackendOnline] = useState<boolean | null>(null);
-  const [exportResultsOpen, setExportResultsOpen] = useState(false);
   const [queryHistory, setQueryHistory] = useState<string[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(-1);
   const [videoFilter, setVideoFilter] = useState<string>('all');
@@ -51,16 +46,14 @@ export const App: React.FC = () => {
 
     if (health.healthy) {
       try {
-        const [libraryData, statsData, queriesData, highlightsData] = await Promise.all([
+        const [libraryData, statsData, queriesData] = await Promise.all([
           fetchLibraryVideos(),
           fetchLibraryStats(),
-          fetchSuggestedQueries(),
-          fetchHighlights()
+          fetchSuggestedQueries()
         ]);
         setVideos(libraryData);
         setStats(statsData);
         setSuggestedQueries(queriesData);
-        setHighlights(highlightsData);
       } catch (err) {
         console.error('Error fetching library data:', err);
       }
@@ -107,52 +100,6 @@ export const App: React.FC = () => {
       } catch (err) {
         console.error("Re-search error:", err);
       }
-    }
-  };
-
-  const handleToggleHighlight = async (result: ChunkResult) => {
-    try {
-      if (result.is_highlighted) {
-        await removeHighlight(result.id);
-      } else {
-        // The backend has supported a note on a highlight since the start, but nothing in
-        // the UI ever collected one — addHighlight(id, "") always sent an empty string
-        // (IMPROVEMENT-PLAN.md 3.6). A prompt() is a minimal way to actually reach it,
-        // consistent with this app's existing use of confirm()/alert() for quick actions.
-        const note = window.prompt('Add a note to this highlight (optional):', '') ?? '';
-        await addHighlight(result.id, note);
-      }
-      const updated = await fetchHighlights();
-      setHighlights(updated);
-
-      if (searchResponse) {
-        setSearchResponse({
-          ...searchResponse,
-          results: searchResponse.results.map(r =>
-            r.id === result.id ? { ...r, is_highlighted: !r.is_highlighted } : r
-          )
-        });
-      }
-    } catch (err) {
-      console.error("Highlight toggle error:", err);
-    }
-  };
-
-  const handleRemoveHighlight = async (chunkId: string) => {
-    try {
-      await removeHighlight(chunkId);
-      const updated = await fetchHighlights();
-      setHighlights(updated);
-      if (searchResponse) {
-        setSearchResponse({
-          ...searchResponse,
-          results: searchResponse.results.map(r =>
-            r.id === chunkId ? { ...r, is_highlighted: false } : r
-          )
-        });
-      }
-    } catch (err) {
-      console.error("Remove highlight error:", err);
     }
   };
 
@@ -221,11 +168,9 @@ export const App: React.FC = () => {
         totalVideos={videos.length}
         totalChunks={totalChunks}
         stats={stats}
-        highlightCount={highlights.length}
         backendOnline={backendOnline}
         onOpenLibrary={() => setIsLibraryOpen(true)}
         onOpenIngest={() => setIsLibraryOpen(true)}
-        onOpenHighlights={() => setIsHighlightsOpen(true)}
         onOpenProgress={() => setIsProgressOpen(true)}
       />
 
@@ -247,19 +192,15 @@ export const App: React.FC = () => {
           stats={stats}
           onOpenLibrary={() => setIsLibraryOpen(true)}
           onOpenIngest={() => setIsLibraryOpen(true)}
-          onOpenHighlights={() => setIsHighlightsOpen(true)}
           onOpenProgress={() => setIsProgressOpen(true)}
-          highlightCount={highlights.length}
           activeView={activeView}
           onChangeView={setActiveView}
         />
 
         {/* Main Container */}
-        <main className={`flex-1 w-full mx-auto px-4 sm:px-6 py-8 sm:py-12 space-y-10 ${activeView === 'engine' || activeView === 'studio' || activeView === 'agent' ? 'max-w-6xl' : 'max-w-5xl'}`}>
+        <main className={`flex-1 w-full mx-auto px-4 sm:px-6 py-8 sm:py-12 space-y-10 ${activeView === 'engine' || activeView === 'studio' ? 'max-w-6xl' : 'max-w-5xl'}`}>
 
-        {activeView === 'agent' ? (
-          <AgentWorkspace videos={videos} backendOnline={backendOnline ?? false} />
-        ) : activeView === 'engine' ? (
+        {activeView === 'engine' ? (
           <ClipStudio videos={videos} backendOnline={backendOnline ?? false} />
         ) : activeView === 'studio' ? (
           <StudioView videos={videos} backendOnline={backendOnline ?? false} />
@@ -360,36 +301,6 @@ export const App: React.FC = () => {
                   </div>
                 )}
 
-                {/* Export Search Results */}
-                {searchResponse && searchResponse.results.length > 0 && (
-                  <div className="relative">
-                    <button
-                      onClick={() => setExportResultsOpen(!exportResultsOpen)}
-                      className="px-3 py-1 rounded-sm border border-hairline bg-canvas-soft hover:border-hairline-bright text-[10px] font-mono text-ink-mute hover:text-ink transition-all flex items-center gap-1"
-                    >
-                      <FileDown className="w-3 h-3" />
-                      <span>Export</span>
-                      <ChevronDown className={`w-2.5 h-2.5 transition-transform ${exportResultsOpen ? 'rotate-180' : ''}`} />
-                    </button>
-                    {exportResultsOpen && (
-                      <div className="absolute right-0 mt-1.5 w-36 bg-canvas-card border border-hairline-bright rounded-sm overflow-hidden z-50 animate-fade-in py-1">
-                        <button
-                          onClick={() => { exportSearchJSON(query, searchMode); setExportResultsOpen(false); }}
-                          className="w-full px-3 py-2 text-left text-[11px] text-ink hover:bg-canvas-soft transition-colors"
-                        >
-                          Export as JSON
-                        </button>
-                        <button
-                          onClick={() => { exportSearchCSV(query, searchMode); setExportResultsOpen(false); }}
-                          className="w-full px-3 py-2 text-left text-[11px] text-ink hover:bg-canvas-soft transition-colors border-t border-hairline/40"
-                        >
-                          Export as CSV
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                )}
-
                 {/* Telemetry info toggle (Replaces full-weight header text) */}
                 {searchResponse && (
                   <div className="relative group/telemetry">
@@ -418,7 +329,6 @@ export const App: React.FC = () => {
                       result={result}
                       searchQuery={query}
                       onJumpToMoment={(res) => setSelectedResult(res)}
-                      onToggleHighlight={handleToggleHighlight}
                       searchMode={searchResponse?.search_mode || searchMode}
                     />
                   </div>
@@ -431,7 +341,6 @@ export const App: React.FC = () => {
                 nearMisses={searchResponse?.near_misses}
                 message={searchResponse?.message}
                 onJumpToMoment={(res) => setSelectedResult(res)}
-                onToggleHighlight={handleToggleHighlight}
                 searchMode={searchResponse?.search_mode || searchMode}
               />
             ) : null}
@@ -515,17 +424,6 @@ export const App: React.FC = () => {
         backendOnline={backendOnline ?? false}
       />
 
-      {/* Highlights Panel */}
-      <HighlightsPanel
-        isOpen={isHighlightsOpen}
-        onClose={() => setIsHighlightsOpen(false)}
-        highlights={highlights}
-        onJumpToMoment={(h) => {
-          setIsHighlightsOpen(false);
-          setSelectedResult(h as any);
-        }}
-        onRemoveHighlight={handleRemoveHighlight}
-      />
 
       {/* Indexing Progress Telemetry Modal */}
       <IndexingProgressModal

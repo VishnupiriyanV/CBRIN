@@ -164,7 +164,7 @@ The risk is **bundling yt-dlp inside a paid, signed desktop binary**: downloadin
 
 This is a **Phase 2 packaging decision, not a Phase 0 one.** It does not threaten the positioning: yt-dlp and Whisper both run locally, so "your footage never leaves your machine" still holds.
 
-## 11. CLIP bugs fixed — every chunk now has a real per-moment keyframe
+## 10. CLIP bugs fixed — every chunk now has a real per-moment keyframe
 
 `backend/vector_store.py`:
 
@@ -184,10 +184,35 @@ Confirmed through the search API: MKBHD hits return `status=ok` with different k
 
 Backup of the pre-fix index is in the session scratchpad (`chunks.json.bak`, `visual_embeddings.npy.bak`) if you want to compare.
 
+## 11. The §4 CUT list is executed
+
+**33 files changed, 54 insertions, 4,932 deletions. 16 files deleted.** JS bundle 344 KB → 293 KB (−15%).
+
+| Cut | What went |
+|---|---|
+| **Agent / copilot** | `agent_engine.py`, `agent_tools.py`, `src/components/agent/`, both `/api/studio/agent/chat*` routes (incl. SSE streaming), `studioAgentChat*` clients, the Agent nav entry in `Sidebar`/`Header`/`App`, and 2 test files. |
+| **STUDIO — 4 of 6 tools** | repurposer, titles, replies, captions: prompts, run fns, registry entries, 4 tool components, 4 test files. `studio_prompts.py` 666 → ~290 lines. `show_notes` + `moments` kept. |
+| **Import / export / highlights** | 3 highlight routes, 3 export routes, the import route, 7 `VectorStore` methods, `highlights.json` persistence, `HIGHLIGHTS_FILE`, `HighlightsPanel.tsx`, 9 API client fns, the header export dropdown, the search-results export dropdown, the sidebar Saved item, the ResultCard bookmark button, and the LibraryModal import-backup mode. |
+| **Dual-provider LLM** | `VAULT_TOOLS_LLM_*` collapsed to a single provider — `get_tools_*`, `_get_tools_client`, and the `for_tools` parameter threaded through `resolve` / `is_configured` / `complete_json_with_usage` are gone. |
+
+**CLIP and `visual_scenes` search mode were NOT cut** — see §8. The "3 of 4 search modes" line in §4 was already satisfied; the code was down to `spoken` + `visual_scenes` and the latter stays.
+
+**Verified:** 227 backend tests pass, `tsc` clean, `vite build` passes, backend boots and serves, search returns results with real keyframes, `/api/studio/tools` reports exactly `['show_notes', 'moments']`, and the removed routes 404. UI renders with the Agent nav entry and Saved/Export controls gone.
+
+### Two things that came out of the cut
+
+1. **A test caught a real bug I introduced.** A line-wise regex removing `HIGHLIGHTS_FILE` from `paths.py` also deleted a `global` declaration that merely *mentioned* it alongside `VISUAL_EMBEDDINGS_FILE`, `VIDEOS_FILE`, and `INDEX_META_FILE` — silently breaking `use_root()` for all three, which would have let tests write into real `backend/data/`. `test_paths.py` failed immediately. Line-wise regex on shared declaration lines is the hazard; the test suite is what made it cheap.
+2. **`EmptyState` had a latent trap.** Its near-miss render was gated on `onJumpToMoment && onToggleHighlight &&`. Removing the highlight prop would have made that guard permanently false and silently stopped near-misses rendering — the honest-empty-state behaviour §C cares about — with no type error. Caught by reading the guard, not by the compiler.
+
+### Left standing deliberately
+
+- **`platform_rules`** (module, 2 routes, `PlatformRulesPanel.tsx`) is now orphaned — captions was its only consumer. Not in the §4 CUT list, so not removed. Decide separately; note that Appendix B's "never truncates over a platform limit" guardrail no longer has a subject.
+- **`test_jobs.py::test_running_job_marked_failed_on_reimport` is flaky** — passes ~2 of 3 runs. A pre-existing race in the test (job persisted asynchronously vs. module re-import), unrelated to these cuts. Don't read a red suite as a regression without re-running.
+
 ## 12. Still open
 
 1. **Rotate the Groq key.** Untouched, and still the one item that shouldn't wait.
 2. **`components/agent/` was deliberately left unstyled** — it's on the §4 CUT list. It still contains caps labels and will look inconsistent if you open the Agent view. That's expected, not a regression.
 3. **Nothing in Phase 0 has started.** The design work above is polish on a product with zero validation — it does not substitute for the pre-sale, and the kill criterion still stands.
-4. **The rest of the §4 CUT list is not executed.** CLIP was removed from it (§8). The remainder — agent layer, 4 of 6 STUDIO tools, import/export/highlights, dual-provider LLM — is still pending a decision. Note that the "3 of 4 search modes" cut is already effectively done: the code is down to `spoken` + `visual_scenes`, and `visual_scenes` now stays with CLIP.
-5. ~~Two CLIP bugs are documented but unfixed.~~ **Both fixed and verified — see §11.**
+4. ~~The rest of the §4 CUT list is not executed.~~ **Done — see §11.** Remaining storage work is tracked as tasks: downscale keyframes, atomic index writes, and the SQLite decision record.
+5. ~~Two CLIP bugs are documented but unfixed.~~ **Both fixed and verified — see §10.**

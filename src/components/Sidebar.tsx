@@ -1,11 +1,9 @@
 import React, { useState } from 'react';
 import { 
   Search, 
-  Bot, 
   Sparkles, 
   Wand2, 
   FileVideo, 
-  Bookmark, 
   Activity, 
   Plus, 
   ChevronLeft, 
@@ -14,7 +12,7 @@ import {
 import { CbrinLogo } from './CbrinLogo';
 import { LibraryStats } from '../types';
 
-export type AppView = 'search' | 'agent' | 'engine' | 'studio';
+export type AppView = 'search' | 'engine' | 'studio';
 
 interface SidebarProps {
   activeView: AppView;
@@ -22,11 +20,9 @@ interface SidebarProps {
   totalVideos: number;
   totalChunks: number;
   stats: LibraryStats | null;
-  highlightCount: number;
   backendOnline: boolean | null;
   onOpenLibrary: () => void;
   onOpenIngest: () => void;
-  onOpenHighlights: () => void;
   onOpenProgress: () => void;
 }
 
@@ -36,11 +32,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   totalVideos,
   totalChunks,
   stats,
-  highlightCount,
   backendOnline,
   onOpenLibrary,
   onOpenIngest,
-  onOpenHighlights,
   onOpenProgress,
 }) => {
   const [collapsed, setCollapsed] = useState(false);
@@ -54,11 +48,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
       label: 'Search',
       icon: Search,
       shortcut: '/',
-    },
-    {
-      id: 'agent',
-      label: 'Agent',
-      icon: Bot,
     },
     {
       id: 'engine',
@@ -167,21 +156,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <div className="flex-1 flex items-center justify-between min-w-0 font-mono text-[11px]">
                 <span>Media</span>
                 <span className="text-ink-mute/70">{totalVideos}</span>
-              </div>
-            )}
-          </button>
-
-          {/* Highlights */}
-          <button
-            onClick={onOpenHighlights}
-            className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-sm text-xs font-medium text-ink-mute hover:text-ink hover:bg-canvas-soft transition-colors cursor-pointer"
-            title={collapsed ? "Saved Highlights" : undefined}
-          >
-            <Bookmark className="w-4 h-4 shrink-0 text-ink-body" />
-            {!collapsed && (
-              <div className="flex-1 flex items-center justify-between min-w-0 font-mono text-[11px]">
-                <span>Saved</span>
-                <span className="text-ink-body">{highlightCount}</span>
               </div>
             )}
           </button>
