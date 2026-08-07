@@ -75,12 +75,13 @@ That single sentence turns every current liability (local torch, GPU requirement
 |---|---|
 | **Agent / Copilot layer** (`agent_engine.py`, `agent_tools.py`, `AgentWorkspace.tsx`, content pack, deep research, SSE streaming) | Unverified, quota-bound, highest maintenance, zero pricing power. This is the hardest cut because it's the newest work. Make it anyway. |
 | **STUDIO — 4 of 6 tools** (repurposer, titles, replies, captions) | Commoditized. Keep show_notes + moments only because they ride the transcript you already have. |
-| **CLIP visual search** | Your own PRD §10 already flags it: most complex subsystem, structurally broken for YouTube (identical embeddings per video), never in v0.1 scope. Cutting it removes torch-CLIP, `visual_embeddings.npy`, keyframe extraction, and 37MB of state. |
 | **3 of 4 search modes** | HYBRID/QUESTIONS/TOPICS are byte-identical. Shipping decorative UI in a product whose pitch is "honest by design" is the worst possible inconsistency. |
 | **Import/export/highlights** | Nobody asked. Pure surface area. |
 | **Dual-provider LLM juggling** (`VAULT_LLM` + `VAULT_TOOLS_LLM`) | Complexity that exists only to dodge free-tier limits. Solved by a paid key or BYO key. |
 
-Estimated reduction: **~55–60% of code surface**, ~70% of the "things that must stay correct."
+Estimated reduction: **~45–50% of code surface** (was ~55–60% before CLIP was moved to KEEP), ~70% of the "things that must stay correct."
+
+> **Revision 2026-08-07 — CLIP visual search moved from CUT to KEEP.** The original cut rested on the claim that it was "structurally broken for YouTube." That claim was tested against the live index and is **false**. See the KEEP list below and the corrected Appendix C entry. The decision was reversed on the evidence, not on preference.
 
 ### KEEP — this is the product
 
@@ -89,6 +90,13 @@ Estimated reduction: **~55–60% of code surface**, ~70% of the "things that mus
 3. **Narrative boundary solver + 5 inspectable signals** — the whole differentiator
 4. Clip render with burned captions, one vertical preset (`clip_renderer.py`, NVENC already detected)
 5. Text search over your own archive with accurate seek — the retention hook that makes people keep the app installed after the first batch of clips
+6. **CLIP visual search** — kept. Both bugs found here are now **fixed**; one decision stays open:
+   - It genuinely works. Before the fix, 320 of 436 chunks carried real per-moment keyframes; **after, 436 of 436 do.**
+   - **Bug 1 — one-way gate. FIXED.** `reindex_visual_embeddings()` re-attempted only chunks with `has_visual_embedding == False`, so a chunk that got a thumbnail embedding was marked done and never revisited — it could never upgrade `video-level` → `ok` once the local file landed. It now also re-attempts when `visual_status == "video-level"` and local media exists, guarded by a `visual_upgrade_failed` pin so it can't retry every boot. A failed upgrade can no longer destroy a working embedding.
+   - **Bug 2 — filename lookup. FIXED.** The media lookup demanded an exact `{video_id}{ext}`, so `yt-dQw4w9WgXcQ.mp4.part.mp4` (a legacy artifact of the `.part` hazard at `media_service.py:131`) was permanently unmatchable. `VectorStore.find_local_media()` now also accepts `{video_id}.<anything>{ext}`. Note the *download* path was already fixed — `_download_youtube` downloads into a temp dir and picks up whatever landed, so new ingests don't reproduce the bad name.
+   - Verified end-to-end: all 116 YouTube chunks upgraded to `ok`, producing 108 distinct images across 109 MKBHD keyframes (previously all identical). 277 backend tests pass.
+   - **Honesty: mostly already handled.** An earlier draft of this entry claimed the frontend ignored `visual_status` entirely. That was wrong — it came from a mistyped grep, and is retracted. `ResultCard.tsx:188–201` already discriminates `ok` / `video-level` / text-only by badge tint and tooltip copy ("Video-level thumbnail only — can't localize this specific moment"). What's actually left is minor: the distinction is **hover-only** and both visual states share the same `Eye` glyph, and `LibraryModal.tsx:588` badges a video "VISUAL" whenever *any* chunk has an embedding, even if all of them are video-level. Worth tightening; not a correctness problem.
+   - **Open decision, deferred to Phase 2:** torch-CLIP is a large share of installer size and the GPU floor. The case for cutting it is **install weight and focus — never brokenness**. Decide it when the installer is real and the tradeoff is measurable, not before.
 
 ### ADD — the minimum to charge money
 
@@ -265,7 +273,20 @@ These survive the cut because they apply to the clip and show-notes paths that r
 ## C. Known defects still open
 
 - **Two search modes are decorative.** `HYBRID`/`QUESTIONS`/`TOPICS` are byte-identical in code. Shipping fake UI controls in a product whose pitch is honesty is the worst available inconsistency — fixed by §4's cut to a single mode.
-- **CLIP visual search is structurally broken for YouTube** — every chunk of a video shares one thumbnail, so all chunks have identical visual embeddings, while the UI badges each result as visually indexed. Cut.
+- ~~**CLIP visual search is structurally broken for YouTube**~~ — **this claim was wrong and is retracted (2026-08-07).** It was inherited from the deleted `AGENTIC-SYSTEM-AUDIT.md` and repeated here without being tested. Measured against the live index:
+
+  | Video | Chunks | `visual_status` |
+  |---|---|---|
+  | `local-99ce947e13e5` | 270 | `ok` (real per-moment frames) |
+  | `local-f718cb618763` | 50 | `ok` (real per-moment frames) |
+  | `yt-pWH1TF1ZfKA` | 109 | `video-level` |
+  | `yt-dQw4w9WgXcQ` | 7 | `video-level` |
+
+  YouTube chunks *do* fall back to the shared poster thumbnail — but not for structural reasons. The ingest downloads video up to 1080p (`media_service.py:141`), and `yt-pWH1TF1ZfKA.mp4` sits in `data/media/` at exactly the path `vector_store.py:291` globs for. The fallback is a **race plus a one-way state gate**, both fixable in a few lines. See §4 KEEP item 6.
+
+  **What survives from the original entry: almost nothing.** The claim that "the UI badges each result as visually indexed" is also false — `ResultCard.tsx:188–201` distinguishes `ok` from `video-level` in both badge tint and tooltip. Only a weak version holds: that disclosure is hover-only, and `LibraryModal.tsx:588` over-reports at the video level. See §4 KEEP item 6.
+
+  **Process note worth more than the finding itself:** this entry sat in two planning docs and drove a decision to delete a whole working subsystem. Both of its claims were false, and each cost one command to check. Note that in re-testing it, the first replacement claim written here was *also* wrong — asserted from a mistyped grep rather than a read of the component. Verify against the artifact, not against a search that returned nothing: an empty result is evidence about your query first, and about the code second. Apply this to the rest of Appendix A before acting on any of it.
 - **`generate_content_pack` has never completed a live run.** Cut.
 - **`tool_runs.py` / `usage.py` do whole-file JSON read-modify-write with no locking.** Fine single-user; a data-loss bug the moment anything runs concurrently.
 - **The Groq key in `.env` is plaintext in the working tree.** Flagged in two prior audits, still present. Rotate it.

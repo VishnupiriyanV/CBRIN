@@ -255,12 +255,48 @@ class VectorStore:
                   f"were calibrated against a small eval library and may not generalize — "
                   f"re-run `python eval/run_eval.py --verbose` before trusting search quality.")
 
+    @staticmethod
+    def find_local_media(video_id: str) -> Optional[str]:
+        """
+        Locate the downloaded media file for a video, if one is on disk.
+
+        Prefers the canonical "{video_id}{ext}" name, but also accepts any
+        "{video_id}.<anything>{ext}" — older ingest code could leave a merged file named
+        e.g. "yt-dQw4w9WgXcQ.mp4.part.mp4" (the .part hazard described in
+        media_service._download_youtube). Those files are perfectly valid video; only the
+        name is odd, and an exact-name lookup silently downgraded them to thumbnail-only
+        visual embeddings forever.
+        """
+        exts = ['.mp4', '.mov', '.webm', '.mkv', '.avi', '.mp3', '.wav', '.m4a']
+
+        for ext in exts:
+            fpath = os.path.join(paths.MEDIA_DIR, f"{video_id}{ext}")
+            if os.path.exists(fpath):
+                return fpath
+
+        try:
+            for name in sorted(os.listdir(paths.MEDIA_DIR)):
+                if name.startswith(f"{video_id}.") and any(name.lower().endswith(e) for e in exts):
+                    return os.path.join(paths.MEDIA_DIR, name)
+        except OSError:
+            pass
+
+        return None
+
     def reindex_visual_embeddings(self):
         """
         Generate CLIP visual embeddings for stored chunks (YouTube thumbnails or local video
         keyframes) that don't have one yet and haven't already been marked permanently
         unattainable (1.6: an audio-only file or a dead thumbnail URL would otherwise be
         re-attempted on every single boot, forever).
+
+        Also upgrades 'video-level' chunks to real per-moment keyframes once the source
+        media is on disk. This matters because visual embedding can run while a YouTube
+        download is still being merged to its final filename: the chunk falls back to the
+        shared poster thumbnail, gets has_visual_embedding=True, and — before this — was
+        never revisited, so a transient race became a permanent downgrade. Measured on the
+        dev library, that left all 116 YouTube chunks thumbnail-only while the merged .mp4
+        sat in data/media/ the whole time.
         """
         if not self.chunks:
             return
@@ -271,12 +307,38 @@ class VectorStore:
         if self.visual_embeddings is not None and len(self.visual_embeddings) == len(self.chunks):
             existing_by_id = {c['id']: self.visual_embeddings[i] for i, c in enumerate(self.chunks)}
 
-        to_attempt = [
-            c for c in self.chunks
-            if not c.get('has_visual_embedding', False) and c.get('visual_status') != 'failed'
-        ]
+        # Cache the media lookup per video so a 400-chunk library does one stat pass per
+        # video rather than one per chunk.
+        local_media_cache: Dict[str, Optional[str]] = {}
+
+        def _local_media_for(video_id: str) -> Optional[str]:
+            if video_id not in local_media_cache:
+                local_media_cache[video_id] = self.find_local_media(video_id)
+            return local_media_cache[video_id]
+
+        def _wants_attempt(c: Dict[str, Any]) -> bool:
+            if c.get('visual_status') == 'failed':
+                return False
+            if not c.get('has_visual_embedding', False):
+                return True
+            # Upgrade path: a shared video-level thumbnail can become a real per-moment
+            # frame once the source media is on disk. 'visual_upgrade_failed' pins the ones
+            # where we already tried that with the file present and still got a thumbnail,
+            # so this can't retry on every boot forever (same reasoning as 'failed').
+            return (
+                c.get('visual_status') == 'video-level'
+                and not c.get('visual_upgrade_failed', False)
+                and _local_media_for(c.get('video_id', '')) is not None
+            )
+
+        to_attempt = [c for c in self.chunks if _wants_attempt(c)]
         if not to_attempt:
             return
+
+        upgrades = sum(1 for c in to_attempt if c.get('has_visual_embedding', False))
+        if upgrades:
+            print(f"[Vault] {upgrades} chunk(s) have video-level thumbnails but local media is "
+                  f"now available — re-extracting real per-moment keyframes.")
 
         print(f"[Vault] Generating CLIP visual embeddings for {len(to_attempt)} chunk(s)...")
         updated_chunks = False
@@ -287,12 +349,8 @@ class VectorStore:
             start_sec = chunk.get('start_sec', 0)
             video_id = chunk.get('video_id', '')
 
-            local_path = None
-            for ext in ['.mp4', '.mov', '.webm', '.mkv', '.avi', '.mp3', '.wav', '.m4a']:
-                fpath = os.path.join(paths.MEDIA_DIR, f"{video_id}{ext}")
-                if os.path.exists(fpath):
-                    local_path = fpath
-                    break
+            local_path = _local_media_for(video_id)
+            is_upgrade = chunk.get('has_visual_embedding', False)
 
             thumb_url = chunk.get('thumbnail_url') or (
                 f"https://img.youtube.com/vi/{chunk.get('youtube_id')}/hqdefault.jpg" if chunk.get('youtube_id') else None
@@ -315,6 +373,17 @@ class VectorStore:
                 if keyframe_url:
                     chunk["keyframe_url"] = keyframe_url
                 attempted_ok += 1
+                # Tried to upgrade with the media file present and still got a video-level
+                # image (unreadable container, timestamp past the real duration, ...). Pin
+                # it so the upgrade isn't retried on every boot.
+                if is_upgrade and source_kind != 'frame':
+                    chunk["visual_upgrade_failed"] = True
+                elif source_kind == 'frame':
+                    chunk.pop("visual_upgrade_failed", None)
+            elif is_upgrade:
+                # Never let a failed *upgrade* destroy a working embedding: the old vector
+                # stays in existing_by_id and the chunk keeps its 'video-level' status.
+                chunk["visual_upgrade_failed"] = True
             else:
                 chunk["visual_status"] = "failed"
 
@@ -379,7 +448,14 @@ class VectorStore:
                         chunk_idx += 1
                 current_start += (window_duration - overlap_duration)
 
+        # Fall back to a disk lookup when the caller didn't pass a media path (or passed one
+        # that isn't there yet). Without this, ingest that runs while a download is still
+        # being merged embeds the shared poster thumbnail for every chunk; reindex_visual_
+        # embeddings() will now repair that on the next boot, but it's cheaper to get it
+        # right the first time.
         local_target = media_path if (media_path and os.path.exists(media_path)) else None
+        if local_target is None:
+            local_target = self.find_local_media(video_meta['id'])
         thumb_url = video_meta.get('thumbnail_url') or (
             f"https://img.youtube.com/vi/{video_meta.get('youtube_id')}/hqdefault.jpg" if video_meta.get('youtube_id') else None
         )
