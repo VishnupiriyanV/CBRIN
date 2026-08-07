@@ -23,7 +23,6 @@ CHUNKS_FILE = os.path.join(DATA_DIR, "chunks.json")
 EMBEDDINGS_FILE = os.path.join(DATA_DIR, "embeddings.npy")
 VISUAL_EMBEDDINGS_FILE = os.path.join(DATA_DIR, "visual_embeddings.npy")
 VIDEOS_FILE = os.path.join(DATA_DIR, "videos.json")
-HIGHLIGHTS_FILE = os.path.join(DATA_DIR, "highlights.json")
 INDEX_META_FILE = os.path.join(DATA_DIR, "index_meta.json")
 
 # ENGINE (Layer 3)
@@ -45,7 +44,7 @@ def use_root(root: str) -> None:
     """Repoint every path constant at `root`. Tests call this via the redirect_data fixture
     so nothing a test does can ever touch the real backend/data/ directory."""
     global DATA_DIR, MEDIA_DIR, KEYFRAMES_DIR, CHUNKS_FILE, EMBEDDINGS_FILE
-    global VISUAL_EMBEDDINGS_FILE, VIDEOS_FILE, HIGHLIGHTS_FILE, INDEX_META_FILE
+    global VISUAL_EMBEDDINGS_FILE, VIDEOS_FILE, INDEX_META_FILE
     global WORDS_DIR, CLIPS_DIR, CLIPS_FILE, BRAND_KIT_FILE, JOBS_FILE, CLIP_FEEDBACK_FILE
     global VOICE_PROFILE_FILE, PLATFORM_RULES_FILE, TOOL_RUNS_FILE, TOOL_USAGE_FILE
 
@@ -56,7 +55,6 @@ def use_root(root: str) -> None:
     EMBEDDINGS_FILE = os.path.join(DATA_DIR, "embeddings.npy")
     VISUAL_EMBEDDINGS_FILE = os.path.join(DATA_DIR, "visual_embeddings.npy")
     VIDEOS_FILE = os.path.join(DATA_DIR, "videos.json")
-    HIGHLIGHTS_FILE = os.path.join(DATA_DIR, "highlights.json")
     INDEX_META_FILE = os.path.join(DATA_DIR, "index_meta.json")
 
     WORDS_DIR = os.path.join(DATA_DIR, "words")

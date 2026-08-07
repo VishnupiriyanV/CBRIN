@@ -12,7 +12,7 @@ load_dotenv()
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse, Response
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 import io
@@ -43,7 +43,6 @@ import voice_profile
 import platform_rules
 import tool_runs
 import usage
-import agent_engine
 
 
 def _repair_stale_chunks(store: "VectorStore"):
@@ -225,15 +224,6 @@ class SearchQuery(BaseModel):
 
 class IngestRequest(BaseModel):
     youtube_url: str
-
-
-class HighlightRequest(BaseModel):
-    chunk_id: str
-    note: Optional[str] = ""
-
-
-class ImportRequest(BaseModel):
-    mode: Optional[str] = "merge"  # merge or replace
 
 
 class EngineAnalyzeRequest(BaseModel):
@@ -598,132 +588,6 @@ def get_ingest_job(job_id: str):
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found.")
     return job.to_dict()
-
-
-# --- Highlights / Bookmark Endpoints ---
-
-@app.post("/api/highlights")
-def add_highlight(payload: HighlightRequest):
-    """Bookmark a chunk result with an optional note."""
-    result = store.add_highlight(payload.chunk_id, payload.note or "")
-    if not result.get("success"):
-        raise HTTPException(status_code=404, detail=result.get("message", "Highlight failed"))
-    return result
-
-
-@app.get("/api/highlights")
-def get_highlights():
-    """Return all highlighted/bookmarked moments."""
-    return store.get_highlights()
-
-
-@app.delete("/api/highlights/{chunk_id}")
-def remove_highlight(chunk_id: str):
-    """Remove a highlight/bookmark."""
-    result = store.remove_highlight(chunk_id)
-    if not result.get("success"):
-        raise HTTPException(status_code=404, detail=result.get("message", "Highlight not found"))
-    return result
-
-
-# --- Export Endpoints ---
-
-@app.get("/api/export/library")
-def export_library(format: str = Query("json", description="Export format: 'json' or 'zip'")):
-    """Export the full library as JSON or ZIP."""
-    if format == "zip":
-        zip_bytes = store.export_library_zip()
-        return Response(
-            content=zip_bytes,
-            media_type="application/zip",
-            headers={"Content-Disposition": "attachment; filename=cbrin_library_export.zip"}
-        )
-    else:
-        data = store.export_library_json()
-        json_str = json.dumps(data, indent=2, ensure_ascii=False)
-        return Response(
-            content=json_str,
-            media_type="application/json",
-            headers={"Content-Disposition": "attachment; filename=cbrin_library_export.json"}
-        )
-
-
-@app.get("/api/export/search")
-def export_search_results(
-    query: str = Query(..., description="Search query"),
-    mode: str = Query("spoken", description="Search mode"),
-    format: str = Query("json", description="Export format: 'json' or 'csv'")
-):
-    """Export search results as JSON or CSV."""
-    search_result = store.search(query=query, top_k=20, search_mode=mode)
-    results = search_result.get("results", [])
-
-    if format == "csv":
-        csv_str = store.export_search_results_csv(results, query)
-        return Response(
-            content=csv_str,
-            media_type="text/csv",
-            headers={"Content-Disposition": f"attachment; filename=cbrin_search_{query[:30].replace(' ', '_')}.csv"}
-        )
-    else:
-        json_str = json.dumps(search_result, indent=2, ensure_ascii=False)
-        return Response(
-            content=json_str,
-            media_type="application/json",
-            headers={"Content-Disposition": f"attachment; filename=cbrin_search_{query[:30].replace(' ', '_')}.json"}
-        )
-
-
-@app.get("/api/export/highlights")
-def export_highlights():
-    """Export all highlighted moments as JSON."""
-    highlights = store.get_highlights()
-    data = {
-        "vault_export_version": "1.0",
-        "export_type": "highlights",
-        "total_highlights": len(highlights),
-        "highlights": highlights
-    }
-    json_str = json.dumps(data, indent=2, ensure_ascii=False)
-    return Response(
-        content=json_str,
-        media_type="application/json",
-        headers={"Content-Disposition": "attachment; filename=vault_highlights_export.json"}
-    )
-
-
-# --- Import Endpoint ---
-
-@app.post("/api/import/library")
-async def import_library(file: UploadFile = File(...), mode: str = Query("merge", description="Import mode: 'merge' or 'replace'")):
-    """Import a previously exported library JSON or ZIP file."""
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="No file provided")
-
-    try:
-        content = await file.read()
-
-        if file.filename.endswith('.zip'):
-            import zipfile
-            zip_buffer = io.BytesIO(content)
-            with zipfile.ZipFile(zip_buffer, 'r') as zf:
-                data = {}
-                if 'videos.json' in zf.namelist():
-                    data['videos'] = json.loads(zf.read('videos.json'))
-                if 'chunks.json' in zf.namelist():
-                    data['chunks'] = json.loads(zf.read('chunks.json'))
-                if 'highlights.json' in zf.namelist():
-                    data['highlights'] = json.loads(zf.read('highlights.json'))
-        else:
-            data = json.loads(content)
-
-        result = store.import_library(data, mode=mode)
-        return result
-
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="Invalid JSON file format")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Import failed: {str(e)}")
 
 
 # --- ENGINE (Layer 3): narrative-aware clip generation --------------------------------
@@ -1094,57 +958,6 @@ def studio_get_platform_rules():
 @app.put("/api/studio/platform_rules")
 def studio_update_platform_rules(patch: Dict[str, Dict[str, Any]]):
     return platform_rules.apply_edit(patch)
-
-
-class AgentChatRequest(BaseModel):
-    messages: List[Dict[str, Any]]
-    video_id: Optional[str] = None
-
-
-@app.post("/api/studio/agent/chat")
-def studio_agent_chat(req: AgentChatRequest):
-    """
-    Studio Copilot endpoint: executes natural language multi-turn agent turns,
-    calling Vault, ENGINE, Studio tools, and Voice Profile automatically.
-    """
-    try:
-        res = agent_engine.run_agent_turn(messages=req.messages, store=store, video_id=req.video_id)
-        if res.get("usage"):
-            usage.record("studio_copilot", res["usage"])
-        return res
-    except llm_client.LLMUnavailable as e:
-        raise HTTPException(status_code=503, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Agent copilot error: {str(e)}")
-
-
-@app.post("/api/studio/agent/chat/stream")
-def studio_agent_chat_stream(req: AgentChatRequest):
-    """
-    Streaming counterpart to /api/studio/agent/chat: emits Server-Sent Events as the agent
-    reasons, so the UI shows live tokens and tool activity instead of one blocking wait.
-    Each event is `data: {json}\\n\\n` with a "type" field (token/tool_start/tool_result/
-    step/usage/done/error) — see agent_engine.run_agent_turn_stream for the exact shapes.
-    """
-    if not llm_client.is_configured():
-        raise HTTPException(status_code=503, detail="VAULT_LLM_API_KEY is not configured in .env.")
-
-    def _event_stream():
-        try:
-            for event in agent_engine.run_agent_turn_stream(
-                messages=req.messages, store=store, video_id=req.video_id
-            ):
-                if event.get("type") == "usage" and event.get("usage"):
-                    usage.record("studio_copilot", event["usage"])
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-        except Exception as e:
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
-
-    return StreamingResponse(
-        _event_stream(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
 
 
 if __name__ == "__main__":

@@ -1,13 +1,12 @@
 import React, { useState } from 'react';
 import { ChunkResult } from '../types';
 import { resolveMediaUrl } from '../services/api';
-import { Play, Bookmark, Eye, FileText, Copy, Check } from 'lucide-react';
+import { Play, Eye, FileText, Copy, Check } from 'lucide-react';
 
 interface ResultCardProps {
   result: ChunkResult;
   searchQuery: string;
   onJumpToMoment: (result: ChunkResult) => void;
-  onToggleHighlight: (result: ChunkResult) => void;
   /** 'visual_scenes' (the "ON-SCREEN (CLIP)" mode) makes the frame the primary result — a
    * viewer is asking "what did this look like", so the photo leads and the transcript text
    * becomes supporting context, not the other way around like 'spoken' mode. */
@@ -36,7 +35,6 @@ export const ResultCard: React.FC<ResultCardProps> = ({
   result,
   searchQuery,
   onJumpToMoment,
-  onToggleHighlight,
   searchMode,
 }) => {
   const [copied, setCopied] = useState(false);
@@ -154,7 +152,7 @@ export const ResultCard: React.FC<ResultCardProps> = ({
   const displayThumbnail = resolveMediaUrl(result.keyframe_url) || resolveMediaUrl(result.thumbnail_url);
 
   return (
-    <div className={`bg-canvas-card border rounded-sm p-5 hover:border-hairline-bright transition-all group relative ${result.is_highlighted ? 'border-accent-sunset/50' : 'border-hairline'}`}>
+    <div className={`bg-canvas-card border rounded-sm p-5 hover:border-hairline-bright transition-all group relative border-hairline`}>
       <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
 
         {/* Thumbnail + Main Content */}
@@ -268,18 +266,6 @@ export const ResultCard: React.FC<ResultCardProps> = ({
         {/* Actions. Icons kept only where they are the affordance (play, copy, bookmark);
             the decorative ones that duplicated adjacent text are gone. */}
         <div className="sm:self-center flex sm:flex-col items-center justify-end gap-1.5 shrink-0 pt-2 sm:pt-0">
-          <button
-            onClick={() => onToggleHighlight(result)}
-            className={`p-2 rounded-sm border transition-colors duration-100 ${
-              result.is_highlighted
-                ? 'border-hairline-bright text-ink'
-                : 'border-transparent text-ink-faint hover:text-ink hover:border-hairline'
-            }`}
-            title={result.is_highlighted ? 'Remove highlight' : 'Highlight this moment'}
-          >
-            <Bookmark className={`w-4 h-4 ${result.is_highlighted ? 'fill-current' : ''}`} />
-          </button>
-
           <button
             onClick={handleCopyCitation}
             className={`p-2 rounded-sm border transition-colors duration-100 ${

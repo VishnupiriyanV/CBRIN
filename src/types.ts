@@ -336,25 +336,6 @@ export interface MomentsOutput {
   tool_id: string;
 }
 
-export interface Highlight {
-  chunk_id: string;
-  video_id: string;
-  video_title: string;
-  channel: string;
-  text: string;
-  start_sec: number;
-  end_sec: number;
-  start_timestamp: string;
-  end_timestamp: string;
-  thumbnail_url: string;
-  keyframe_url?: string | null;
-  youtube_id?: string;
-  is_local?: boolean;
-  section_topic?: string;
-  note: string;
-  highlighted_at: string;
-}
-
 // --- STUDIO COPILOT (Layer 4 Agent) ---
 
 export interface AgentToolStep {

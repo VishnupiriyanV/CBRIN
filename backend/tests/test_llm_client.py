@@ -170,47 +170,27 @@ class TestDynamicConfigAccessors:
 
 
 class TestResolve:
-    """is_configured(for_tools=False) used to return True whenever EITHER key was set, but
-    complete_json_with_usage built its client from get_api_key() only — so a tools-only
-    config passed is_configured() and then constructed openai.OpenAI(api_key=None), which
-    raises at construction, producing a 500 where a 503 was intended. resolve() must
-    implement the same fallback in both directions so the two can never disagree."""
+    """resolve() and is_configured() must never disagree about whether a call can be made.
 
-    def test_tools_only_key_does_not_construct_a_none_key_client(self):
-        with patch.object(lc, "get_api_key", return_value=None), \
-             patch.object(lc, "get_tools_api_key", return_value="tools-key-123"), \
-             patch.object(lc, "get_tools_base_url", return_value="https://api.groq.com/openai/v1"), \
-             patch.object(lc, "get_tools_model", return_value="llama-3.3-70b-versatile"):
-            resolved = lc.resolve(for_tools=False)
-        assert resolved.api_key == "tools-key-123"
-        assert resolved.model == "llama-3.3-70b-versatile"
+    The dual-provider fallback tests that used to live here were removed with the
+    VAULT_TOOLS_LLM_* pair (STRATEGY.md 4) - there is now exactly one provider, so the
+    "tools-only key constructs a None-key client" class of bug is gone by construction.
+    The invariants below are the part that still matters."""
 
-    def test_primary_only_key_used_for_tools_role_as_fallback(self):
-        with patch.object(lc, "get_tools_api_key", return_value=None), \
-             patch.object(lc, "get_api_key", return_value="primary-key"), \
-             patch.object(lc, "get_base_url", return_value="https://api.sambanova.ai/v1"), \
-             patch.object(lc, "get_model", return_value="Meta-Llama-3.3-70B-Instruct"):
-            resolved = lc.resolve(for_tools=True)
-        assert resolved.api_key == "primary-key"
-
-    def test_neither_key_raises_llm_unavailable(self):
-        with patch.object(lc, "get_api_key", return_value=None), \
-             patch.object(lc, "get_tools_api_key", return_value=None):
+    def test_no_key_raises_llm_unavailable(self):
+        with patch.object(lc, "get_api_key", return_value=None):
+            assert lc.is_configured() is False
             with pytest.raises(lc.LLMUnavailable):
-                lc.resolve(for_tools=False)
-            with pytest.raises(lc.LLMUnavailable):
-                lc.resolve(for_tools=True)
+                lc.resolve()
 
-    def test_bucket_shared_when_tools_and_primary_share_a_host(self):
-        with patch.object(lc, "get_api_key", return_value="k1"), \
+    def test_key_present_resolves_to_that_provider(self):
+        with patch.object(lc, "get_api_key", return_value="primary-key"), \
              patch.object(lc, "get_base_url", return_value="https://api.groq.com/openai/v1"), \
-             patch.object(lc, "get_model", return_value="model-a"), \
-             patch.object(lc, "get_tools_api_key", return_value="k2"), \
-             patch.object(lc, "get_tools_base_url", return_value="https://api.groq.com/openai/v1"), \
-             patch.object(lc, "get_tools_model", return_value="model-b"):
-            primary = lc.resolve(for_tools=False)
-            tools = lc.resolve(for_tools=True)
-        assert primary.bucket == tools.bucket
+             patch.object(lc, "get_model", return_value="llama-3.3-70b-versatile"):
+            assert lc.is_configured() is True
+            resolved = lc.resolve()
+        assert resolved.api_key == "primary-key"
+        assert resolved.model == "llama-3.3-70b-versatile"
 
 
 class TestErrorClassification:

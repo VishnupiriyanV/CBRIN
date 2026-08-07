@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { VideoItem } from '../types';
 import { X, Video, Plus, Check, ExternalLink, Upload, FolderUp, AlertCircle, Loader2, Trash2, RotateCcw, AlertTriangle, CheckCircle2, FileUp, Eye, FileText } from 'lucide-react';
-import { ingestVideoUrl, uploadLocalFile, deleteLibraryVideo, importLibrary, isIngestJobStart, pollJob } from '../services/api';
+import { ingestVideoUrl, uploadLocalFile, deleteLibraryVideo, isIngestJobStart, pollJob } from '../services/api';
 import { filterMediaFiles } from '../services/localMediaParser';
 import { relativeTime } from '../utils';
 
@@ -66,7 +66,7 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
   onVideoIngested,
   backendOnline,
 }) => {
-  const [ingestMode, setIngestMode] = useState<'url' | 'file' | 'folder' | 'import'>('url');
+  const [ingestMode, setIngestMode] = useState<'url' | 'file' | 'folder'>('url');
   const [youtubeUrl, setYoutubeUrl] = useState('');
   const [isIngesting, setIsIngesting] = useState(false);
   const [ingestStatusMsg, setIngestStatusMsg] = useState<string | null>(null);
@@ -78,14 +78,12 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
   // file's full transcribe/chunk/embed cycle before even starting the next upload.
   const [uploadQueue, setUploadQueue] = useState<QueueItem[]>([]);
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [importMode, setImportMode] = useState<'merge' | 'replace'>('merge');
   // Whisper accuracy/speed tier for local uploads (PRD §7.2) — 'base' mangles proper nouns
   // and technical vocabulary, so 'small' is the default rather than the old hardcoded 'base'.
   const [modelTier, setModelTier] = useState<WhisperModelTier>('small');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
-  const importInputRef = useRef<HTMLInputElement>(null);
 
   if (!isOpen) return null;
 
@@ -225,41 +223,6 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
     }, 8000);
   };
 
-  const handleImportFile = async (files: FileList | null) => {
-    if (!backendOnline || !files || files.length === 0) return;
-
-    const file = files[0];
-    if (!file.name.endsWith('.json') && !file.name.endsWith('.zip')) {
-      setIngestError('Please select a CBRIN export file (.json or .zip).');
-      setTimeout(() => setIngestError(null), 5000);
-      return;
-    }
-
-    setIsIngesting(true);
-    setIngestStatusMsg(null);
-    setIngestError(null);
-    setUploadProgress(`Importing ${file.name} (${importMode} mode)...`);
-
-    try {
-      const result = await importLibrary(file, importMode);
-      if (result.success) {
-        setIngestStatusMsg(result.message);
-        onVideoIngested();
-      } else {
-        setIngestError(result.message || 'Import failed.');
-      }
-    } catch (err: any) {
-      setIngestError(err.message || 'Failed to import library backup.');
-    } finally {
-      setUploadProgress(null);
-      setIsIngesting(false);
-      setTimeout(() => {
-        setIngestStatusMsg(null);
-        setIngestError(null);
-      }, 8000);
-    }
-  };
-
   const handleDelete = async (videoId: string, title: string) => {
     if (!confirm(`Delete '${title}' and its indexed transcript chunks from your library?`)) return;
 
@@ -341,12 +304,6 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
                 className={`px-3 py-1 rounded-sm transition-all ${ingestMode === 'folder' ? 'bg-canvas-card text-ink border border-hairline-bright' : 'text-ink-mute hover:text-ink'}`}
               >
                 UPLOAD FOLDER
-              </button>
-              <button
-                onClick={() => setIngestMode('import')}
-                className={`px-3 py-1 rounded-sm transition-all ${ingestMode === 'import' ? 'bg-canvas-card text-ink border border-hairline-bright' : 'text-ink-mute hover:text-ink'}`}
-              >
-                IMPORT BACKUP
               </button>
             </div>
           </div>
@@ -430,51 +387,6 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
             </div>
           )}
 
-          {/* Mode 4: Import Backup */}
-          {ingestMode === 'import' && (
-            <div className="space-y-3">
-              {/* Merge / Replace toggle */}
-              <div className="flex items-center gap-3">
-                <span className="text-[10px] font-mono text-ink-mute">Import mode:</span>
-                <div className="flex items-center gap-1 bg-canvas border border-hairline p-0.5 rounded-sm">
-                  <button
-                    onClick={() => setImportMode('merge')}
-                    className={`px-3 py-1 rounded-sm text-[10px] font-mono transition-all ${importMode === 'merge' ? 'bg-canvas-card text-ink border border-hairline-bright' : 'text-ink-mute hover:text-ink'}`}
-                  >
-                    MERGE (SKIP DUPLICATES)
-                  </button>
-                  <button
-                    onClick={() => setImportMode('replace')}
-                    className={`px-3 py-1 rounded-sm text-[10px] font-mono transition-all ${importMode === 'replace' ? 'bg-canvas-card/60 text-danger border border-danger/40' : 'text-ink-mute hover:text-ink'}`}
-                  >
-                    REPLACE (WIPE & RESTORE)
-                  </button>
-                </div>
-              </div>
-
-              <input
-                type="file"
-                ref={importInputRef}
-                accept=".json,.zip"
-                onChange={(e) => handleImportFile(e.target.files)}
-                className="hidden"
-              />
-              <button
-                onClick={() => importInputRef.current?.click()}
-                disabled={isIngesting || !backendOnline}
-                className="w-full py-6 border border-dashed border-hairline-bright hover:border-accent-sunset bg-canvas/60 rounded-sm flex flex-col items-center justify-center gap-2 group transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                <FileUp className="w-5 h-5 text-ink-mute group-hover:text-ink-body transition-colors" />
-                <span className="text-xs font-medium text-ink">
-                  Select a CBRIN library export (.json or .zip) to restore
-                </span>
-                <span className="text-[10px] font-mono text-ink-mute">
-                  {importMode === 'merge' ? 'NEW ITEMS ADDED, DUPLICATES SKIPPED' : 'WARNING: CURRENT LIBRARY WILL BE REPLACED'}
-                </span>
-              </button>
-            </div>
-          )}
-
           {/* Multi-file Upload Queue (file / folder modes) */}
           {uploadQueue.length > 0 && (
             <div className="border border-hairline-bright rounded-sm overflow-hidden animate-fade-in">
@@ -538,7 +450,7 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
         <div className="p-6 overflow-y-auto space-y-3 divide-y divide-hairline/40">
           {videos.length === 0 ? (
             <div className="text-center py-8 text-xs text-ink-mute font-mono">
-              No media files indexed yet. Choose YouTube URL, Upload Files, Upload Folder, or Import Backup above.
+              No media files indexed yet. Choose YouTube URL, Upload Files, or Upload Folder above.
             </div>
           ) : (
             videos.map((vid) => {
