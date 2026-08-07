@@ -83,7 +83,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div className="flex items-center gap-2.5 overflow-hidden">
           <CbrinLogo />
           {!collapsed && (
-            <span className="font-mono font-semibold tracking-wider text-ink text-sm">
+            <span className="font-mono font-semibold tracking-tight text-ink text-sm">
               CBRIN
             </span>
           )}
@@ -103,7 +103,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {/* Workspace Views */}
         <div className="space-y-0.5">
           {!collapsed && (
-            <div className="px-2.5 py-1 text-[10px] font-mono tracking-wider text-ink-mute/60">
+            <div className="px-2.5 py-1 text-[11px] text-ink-mute/60">
               Views
             </div>
           )}
@@ -140,7 +140,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {/* Library & Tools */}
         <div className="space-y-0.5 pt-3 border-t border-hairline/40">
           {!collapsed && (
-            <div className="px-2.5 py-1 text-[10px] font-mono tracking-wider text-ink-mute/60">
+            <div className="px-2.5 py-1 text-[11px] text-ink-mute/60">
               Library
             </div>
           )}

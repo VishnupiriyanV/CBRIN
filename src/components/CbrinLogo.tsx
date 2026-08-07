@@ -25,9 +25,12 @@ export const CbrinLogo: React.FC<CbrinLogoProps> = ({
         className="w-4 h-4 transition-transform duration-300 group-hover:scale-105"
       >
         <defs>
+          {/* Monochrome per STRATEGY.md §8 rule 1: no chromatic accent. The mark keeps a
+              gradient for depth, but between two neutral steps (ink → ink-mute) rather
+              than the old #ff7a17 → #ff3b00 sunset. */}
           <linearGradient id="cbrin-sunset-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stopColor="#ff7a17" />
-            <stop offset="100%" stopColor="#ff3b00" />
+            <stop offset="0%" stopColor="#ededed" />
+            <stop offset="100%" stopColor="#6b6b6b" />
           </linearGradient>
         </defs>
         <g fill={useGradient ? "url(#cbrin-sunset-grad)" : "currentColor"}>

@@ -279,7 +279,7 @@ export const App: React.FC = () => {
               <Video className="w-5 h-5" />
             </div>
             <div className="space-y-1">
-              <span className="eyebrow-mono text-[9px] block text-ink-mute">LIBRARY EMPTY</span>
+              <span className="eyebrow-mono text-[9px] block text-ink-mute">Library empty</span>
               <h3 className="text-base sm:text-lg font-medium text-ink">
                 No media files ingested yet
               </h3>
@@ -334,10 +334,10 @@ export const App: React.FC = () => {
             {/* Meta Header */}
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <span className="eyebrow-mono">SEARCH RESULTS</span>
+                <span className="eyebrow-mono">Search results</span>
                 {searchResponse && (
                   <span className="text-[10px] font-mono px-2.5 py-0.5 rounded-sm border border-hairline bg-canvas-soft text-ink-body">
-                    {filteredResults.length}{videoFilter !== 'all' ? ` / ${searchResponse.results.length}` : ''} MOMENTS FOUND
+                    {filteredResults.length}{videoFilter !== 'all' ? ` / ${searchResponse.results.length}` : ''} moments found
                   </span>
                 )}
               </div>
@@ -368,7 +368,7 @@ export const App: React.FC = () => {
                       className="px-3 py-1 rounded-sm border border-hairline bg-canvas-soft hover:border-hairline-bright text-[10px] font-mono text-ink-mute hover:text-ink transition-all flex items-center gap-1"
                     >
                       <FileDown className="w-3 h-3" />
-                      <span>EXPORT</span>
+                      <span>Export</span>
                       <ChevronDown className={`w-2.5 h-2.5 transition-transform ${exportResultsOpen ? 'rotate-180' : ''}`} />
                     </button>
                     {exportResultsOpen && (
@@ -395,7 +395,7 @@ export const App: React.FC = () => {
                   <div className="relative group/telemetry">
                     <button className="px-2.5 py-1 rounded-sm border border-hairline bg-canvas-soft hover:border-hairline-bright text-[10px] font-mono text-ink-mute hover:text-ink transition-all flex items-center gap-1">
                       <Info className="w-3 h-3 text-ink-body" />
-                      <span>TELEMETRY</span>
+                      <span>Telemetry</span>
                     </button>
                     <div className="absolute right-0 top-full mt-1.5 hidden group-hover/telemetry:block bg-canvas-card border border-hairline-bright px-3 py-1.5 rounded-sm text-[10px] font-mono text-ink-mute whitespace-nowrap z-50 animate-fade-in">
                       SCANNED {searchResponse.total_chunks_scanned} CHUNKS IN {searchResponse.execution_time_ms}ms // {searchResponse.search_mode?.toUpperCase()} MODE
@@ -442,19 +442,19 @@ export const App: React.FC = () => {
         {!hasSearched && videos.length > 0 && (
           <div className="space-y-4 pt-6 border-t border-hairline/60">
             <div className="flex items-center justify-between">
-              <span className="eyebrow-mono">INDEXED CONTENT IN YOUR CBRIN</span>
+              <span className="eyebrow-mono">Indexed content in your CBRIN</span>
               <div className="flex items-center gap-3">
                 <button
                   onClick={() => setIsProgressOpen(true)}
                   className="text-[11px] font-mono text-ink-mute hover:text-ink flex items-center gap-1"
                 >
-                  <span>TELEMETRY & PIPELINE</span> →
+                  <span>Telemetry & pipeline</span> →
                 </button>
                 <button
                   onClick={() => setIsLibraryOpen(true)}
                   className="text-[11px] font-mono text-ink-body hover:underline"
                 >
-                  VIEW ALL ({videos.length}) →
+                  View all ({videos.length}) →
                 </button>
               </div>
             </div>
@@ -478,9 +478,9 @@ export const App: React.FC = () => {
                   </div>
 
                   <div className="space-y-1">
-                    <div className="flex items-center justify-between text-[10px] font-mono text-ink-body">
-                      <span className="uppercase">{vid.channel}</span>
-                      <span className="text-ink-mute">{vid.chunk_count} CHUNKS</span>
+                    <div className="flex items-center justify-between text-[10px] text-ink-body">
+                      <span className="truncate">{vid.channel}</span>
+                      <span className="font-mono text-ink-mute shrink-0">{vid.chunk_count} chunks</span>
                     </div>
                     <h4 className="text-xs font-semibold text-ink line-clamp-1 group-hover:text-ink-body transition-colors">
                       {vid.title}

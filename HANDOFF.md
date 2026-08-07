@@ -69,8 +69,8 @@ Direction and rationale: `STRATEGY.md` §8. The problem was never the palette, i
 
 - `npx tsc --noEmit` → clean
 - `npx tailwindcss` → compiles, 44KB, zero `ff7a17` remaining, no pill radii in output
-- `npx vite build` → **could not run in this environment.** `@rollup/rollup-linux-x64-gnu` is missing because `node_modules` was installed on Windows. Not related to these changes; run the build on your machine to confirm.
-- **Not visually verified in a browser.** Nobody has looked at the running app since the change.
+- `npx vite build` → **now passes** (1516 modules, ~2.5s, 31KB CSS / 345KB JS). The previous `@rollup/rollup-linux-x64-gnu` failure was specific to that session's environment; it builds fine on this Windows box.
+- **Visually verified in a browser** against the live backend (436 chunks, 4 videos) — see §6.
 
 ### Deliberately not restyled
 
@@ -89,9 +89,62 @@ The agent workspace (`components/agent/`) and the four STUDIO tools slated for c
 
 ## 5. Next actions, in order
 
-1. **Rotate the Groq key.** Today.
-2. **Run `npx vite build` locally** and open the app. The design change has not been seen rendered.
+1. **Rotate the Groq key.** Today. *(Still open — the only item here that has not moved.)*
+2. ~~Run `npx vite build` locally and open the app.~~ **Done — see §6.**
 3. **Phase 0 — validate before building** (`STRATEGY.md` §5). ~2 weeks, near-zero code: post the boundary-solver before/after, 10 creator interviews, pre-sell $49 lifetime. Honour the kill criterion.
 4. **Only if Phase 0 clears:** Phase 1 — delete the CUT list, build the real 15-video library, hit the measurement bars in Appendix A. That is what earns the right to make the boundary claim publicly.
 
 Do not start Phase 2 (installer, licensing) before Phase 0 returns an answer.
+
+---
+
+# Session 2 — 2026-08-07 (later)
+
+Scope: finish and verify the §8 design pass. No new features, no scope growth.
+
+## 6. The design change is now verified rendered
+
+Build passes and the app was driven live against the backend (started from `backend/` — `main.py` uses `uvicorn.run("main:app")`, so it **must** be launched with `backend/` as cwd or it exits silently).
+
+`ResultCard` renders as §8 specifies: one quiet meta line, confidence encoded as the *length* of a monochrome rule, the transcript quote as the largest and brightest element, `.highlight-match` as an underline.
+
+## 7. One claim in §3 was wrong — the eyebrow fix did not work
+
+§8 rule 3 was recorded as satisfied because `.eyebrow-mono` was redefined with `text-transform: none`, "fixing all 30+ instances centrally instead of editing call sites."
+
+**It didn't.** The caps were *hardcoded into the JSX strings* (`>LIBRARY EMPTY<`, `>SEARCH RESULTS<`, …), not applied by CSS. Removing `text-transform` removed the tracking but left every label rendering in caps. The central fix was necessary but not sufficient, and nothing caught it because the change was never looked at in a browser.
+
+Lesson worth keeping: a CSS-level fix can only reach presentation. Caps baked into content need a content-level pass.
+
+### Fixed this session
+
+| File(s) | Change |
+|---|---|
+| 6 components (`App`, `Header`, `IndexingProgressModal`, `LibraryModal`, `SearchBar`, `VideoPlayerModal`) | 21 hardcoded-caps JSX text nodes → sentence case. Replacements anchored on `>TEXT<` so identifiers and enum values were untouchable — diff was exactly 21 insertions / 21 deletions. |
+| `App`, `HighlightsPanel`, `VideoPlayerModal` | 4 more caps strings the anchored pass correctly *couldn't* reach because they interpolate (`{n} MOMENTS FOUND`, `VIEW ALL ({n})`, `BOOKMARKED MOMENT{S}`, `JUMPED TO MOMENT //`). |
+| `SearchBar.tsx` | `SEARCH_MODES` labels → `Spoken` / `On-screen (CLIP)`. Only `label` changed; `id` drives all logic. |
+| `CbrinLogo.tsx` | **The last chromatic accent.** The mark still carried a `#ff7a17 → #ff3b00` gradient — violating §8 rule 1 in the single most prominent spot on screen. Now `#ededed → #6b6b6b`. |
+| `Sidebar.tsx` | Section labels ("Views", "Library") were decorative mono + `tracking-wider` — rule 3 reserves mono for timestamps/scores/IDs. Now sans. Wordmark tracking normalised. |
+| `App.tsx` | A channel name was force-`uppercase`, which also mangled real names ("Rick Astley" → "RICK ASTLEY"). Removed; count moved to mono, text to sans. |
+
+### Audit after (in `src/`, excluding `components/agent/` per §8's scope note)
+
+| Check | Count |
+|---|---|
+| `uppercase` class | 0 |
+| `tracking-wide*` | 0 |
+| `rounded-full` | 0 |
+| distinct radii | 1 (`rounded-sm`) |
+| semantic hue classes (emerald/amber/red/…) | 0 |
+| `#ff7a17` | 0 (one mention survives in a code comment) |
+| all-caps JSX text nodes | 0 |
+
+`npx tsc --noEmit` clean; `npx vite build` passes.
+
+`accent-sunset` still appears 58× and still resolves to white — left named for call-site continuity, as before. Do not reintroduce a hue behind it.
+
+## 8. Still open
+
+1. **Rotate the Groq key.** Untouched, and still the one item that shouldn't wait.
+2. **`components/agent/` was deliberately left unstyled** — it's on the §4 CUT list. It still contains caps labels and will look inconsistent if you open the Agent view. That's expected, not a regression.
+3. **Nothing in Phase 0 has started.** The design work above is polish on a product with zero validation — it does not substitute for the pre-sale, and the kill criterion still stands.

@@ -222,12 +222,12 @@ export const IndexingProgressModal: React.FC<IndexingProgressModalProps> = ({
                         {isFailed ? (
                           <span className="px-2.5 py-1 rounded-sm border border-danger/60 bg-canvas-card/60 text-[10px] font-mono text-danger flex items-center gap-1">
                             <AlertTriangle className="w-3 h-3 text-danger" />
-                            <span>FAILED</span>
+                            <span>Failed</span>
                           </span>
                         ) : isIndexing ? (
                           <span className="px-2.5 py-1 rounded-sm border border-hairline-bright/60 bg-canvas-card/60 text-[10px] font-mono text-ink-body flex items-center gap-1">
                             <Loader2 className="w-3 h-3 text-ink-body animate-spin" />
-                            <span>PROCESSING</span>
+                            <span>Processing</span>
                           </span>
                         ) : (
                           <span className="px-2.5 py-1 rounded-sm border border-canvas-card/60 bg-canvas-card/60 text-[10px] font-mono text-ink flex items-center gap-1">
