@@ -183,16 +183,27 @@ DEFAULT_PACK_PLATFORMS = ["linkedin", "x", "instagram"]
 
 
 def _format_search_hit(item: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalizes a VectorStore.search() result hit for tool output. `item` carries
+    video_title/start_sec/end_sec/start_timestamp/score (vector_store.py's real result shape,
+    e.g. lines 846-866) — NOT title/start_time/final_score, which don't exist on it and used
+    to make every field here None/0. agent_engine's system prompt tells the model to cite
+    using start_formatted/start_time, so those two output keys are kept even though the
+    source field is start_timestamp."""
+    start_sec = item.get("start_sec")
+    end_sec = item.get("end_sec")
+    start_timestamp = item.get("start_timestamp")
     return {
         "video_id": item.get("video_id"),
-        "title": item.get("title"),
-        "start_time": item.get("start_time"),
-        "end_time": item.get("end_time"),
-        "start_sec": item.get("start_time"),
-        "end_sec": item.get("end_time"),
-        "start_formatted": item.get("start_formatted"),
+        "title": item.get("video_title"),
+        "start_time": start_timestamp,
+        "end_time": item.get("end_timestamp"),
+        "start_sec": start_sec,
+        "end_sec": end_sec,
+        "start_formatted": start_timestamp,
         "text": item.get("text"),
-        "score": round(float(item.get("final_score", 0)), 3)
+        "score": round(float(item.get("score") or 0), 3),
+        "confidence": item.get("confidence"),
+        "match_reason": item.get("match_reason"),
     }
 
 
@@ -298,7 +309,10 @@ def _deep_research(args: Dict[str, Any], store: Any) -> Dict[str, Any]:
         except Exception:
             continue
         for rank, item in enumerate(res.get("results", []), start=1):
-            key = (item.get("video_id"), item.get("start_time"))
+            # Keyed on start_sec (a real field on `item`, vector_store.py's search() shape) —
+            # start_time doesn't exist on it and was always None, so every hit from the same
+            # video collapsed into one fused entry regardless of which passage it came from.
+            key = (item.get("video_id"), item.get("start_sec"))
             fused_scores[key] = fused_scores.get(key, 0.0) + 1.0 / (K + rank)
             if key not in hit_by_key:
                 hit_by_key[key] = _format_search_hit(item)
@@ -400,8 +414,12 @@ def execute_tool(name: str, args: Dict[str, Any], store: Any) -> Dict[str, Any]:
     """
     try:
         if name == "search_vault":
-            query = args.get("query", "")
+            query = args.get("query", "").strip()
             top_k = int(args.get("top_k", 5))
+
+            if not query:
+                return {"error": "Search query cannot be empty. Please specify a topic, keyword, or question."}
+
             if not store or not hasattr(store, "search"):
                 return {"error": "Vault vector store is not available"}
             
@@ -469,7 +487,7 @@ def execute_tool(name: str, args: Dict[str, Any], store: Any) -> Dict[str, Any]:
             count = int(args.get("count", 3))
             import narrative_engine
             import clip_scoring
-            from vector_store import get_cross_encoder
+            import studio_runner
 
             if not store:
                 return {"error": "Vault store unavailable"}
@@ -478,34 +496,44 @@ def execute_tool(name: str, args: Dict[str, Any], store: Any) -> Dict[str, Any]:
             if not video_id and getattr(store, "videos", None):
                 video_id = list(store.videos.keys())[0]
 
-            chunks = [c for c in getattr(store, "chunks", []) if c.get("video_id") == video_id]
+            # Filter to real sentence-indexed chunks only, matching _sentences_for_video (199)
+            # and main.py:747 — an unfiltered chunk with sentence_idx=None used to reach
+            # narrative_engine.extract_beats and KeyError there.
+            chunks = [
+                c for c in getattr(store, "chunks", [])
+                if c.get("video_id") == video_id and c.get("sentence_idx") is not None
+            ]
             if not chunks:
                 return {"error": f"No transcript chunks found for video_id '{video_id}'"}
-                
+
             video_meta = store.videos.get(video_id, {"title": video_id})
-            
+
             # Analyze video narrative and score clip candidates
             analysis = narrative_engine.analyze_video(chunks, max_clips=count)
             candidates = analysis.get("candidates", [])
 
             if not candidates:
-                # Fallback: create candidate blocks directly from sentence chunks
+                # Fallback: build candidates in the exact shape clip_scoring.rank() expects
+                # (start_sentence_idx/end_sentence_idx/start_sec/end_sec/beats/seed_beat/
+                # title/quotable_line — see narrative_engine._build_candidate_for_seed). The
+                # old start_idx/end_idx keys don't exist on that contract and guaranteed a
+                # KeyError at clip_scoring.py:237, silently swallowed into a generic tool error.
                 for i in range(0, min(len(chunks), count * 3), 3):
-                    chunk_slice = chunks[i:i+3]
-                    txt = " ".join([c.get("text", "") for c in chunk_slice])
+                    chunk_slice = chunks[i:i + 3]
+                    if not chunk_slice:
+                        continue
+                    txt = " ".join(c.get("text", "") for c in chunk_slice)
                     s_idx = chunk_slice[0].get("sentence_idx", i)
                     e_idx = chunk_slice[-1].get("sentence_idx", i + len(chunk_slice) - 1)
                     candidates.append({
-                        "id": f"clip_{i}",
-                        "title": f"Highlight {i//3 + 1}",
-                        "hook": chunk_slice[0].get("text", "") if chunk_slice else "",
-                        "start_time": chunk_slice[0].get("start_formatted", "00:00") if chunk_slice else "00:00",
-                        "end_time": chunk_slice[-1].get("end_formatted", "00:00") if chunk_slice else "00:00",
-                        "duration": float(chunk_slice[-1].get("end_sec", 0)) - float(chunk_slice[0].get("start_sec", 0)) if chunk_slice else 15.0,
-                        "transcript": txt,
-                        "sentences": chunk_slice,
-                        "start_idx": s_idx,
-                        "end_idx": e_idx
+                        "start_sentence_idx": s_idx,
+                        "end_sentence_idx": e_idx,
+                        "start_sec": chunk_slice[0].get("start_sec", 0.0),
+                        "end_sec": chunk_slice[-1].get("end_sec", 0.0),
+                        "beats": [],
+                        "seed_beat": {},
+                        "title": f"Highlight {i // 3 + 1}",
+                        "quotable_line": txt[:200],
                     })
 
             sentences_by_idx = {s.get("sentence_idx", idx): s for idx, s in enumerate(chunks)}
@@ -517,22 +545,30 @@ def execute_tool(name: str, args: Dict[str, Any], store: Any) -> Dict[str, Any]:
                 sentences_by_idx,
                 video_id,
                 corpus_texts,
-                get_cross_encoder,
                 max_clips=count,
                 taste_centroid=taste_centroid
             )
 
             clip_summaries = []
             for idx, c in enumerate(ranked_clips, 1):
+                start_sec = c.get("start_sec")
+                end_sec = c.get("end_sec")
+                s_idx = c.get("start_sentence_idx")
+                e_idx = c.get("end_sentence_idx")
+                transcript = " ".join(
+                    sentences_by_idx[i]["text"]
+                    for i in range(s_idx, e_idx + 1)
+                    if i in sentences_by_idx
+                ) if s_idx is not None and e_idx is not None else ""
                 clip_summaries.append({
                     "rank": idx,
                     "title": c.get("title", f"Clip {idx}"),
-                    "hook": c.get("hook", ""),
-                    "start_time": c.get("start_time"),
-                    "end_time": c.get("end_time"),
-                    "duration": c.get("duration"),
+                    "hook": c.get("quotable_line", ""),
+                    "start_time": studio_runner.format_timestamp(start_sec),
+                    "end_time": studio_runner.format_timestamp(end_sec),
+                    "duration": round(end_sec - start_sec, 1) if start_sec is not None and end_sec is not None else None,
                     "score": round(float(c.get("composite", 0)), 2),
-                    "transcript": c.get("transcript", "")[:250] + "..."
+                    "transcript": (transcript[:250] + "...") if len(transcript) > 250 else transcript
                 })
 
             return {
@@ -543,7 +579,18 @@ def execute_tool(name: str, args: Dict[str, Any], store: Any) -> Dict[str, Any]:
             }
 
         elif name == "run_studio_tool":
-            tool_id = args.get("tool_id", "repurposer")
+            valid_tools = {"repurposer", "show_notes", "titles", "replies", "captions", "moments"}
+            raw_tool_id = (args.get("tool_id") or "").strip().lower()
+            if raw_tool_id in ("", "tool"):
+                tool_id = "repurposer"
+            else:
+                tool_id = raw_tool_id
+
+            if tool_id not in valid_tools:
+                return {
+                    "error": f"Invalid tool_id '{args.get('tool_id')}'. Valid Studio tools: {', '.join(sorted(valid_tools))}"
+                }
+
             input_text = args.get("input_text", "")
             platform = args.get("platform", "")
             video_id = args.get("video_id", "") or ""
@@ -568,13 +615,24 @@ def execute_tool(name: str, args: Dict[str, Any], store: Any) -> Dict[str, Any]:
             prof = voice_profile.load()
             rules = platform_rules.load()
 
+            # voice_profile.DEFAULT_VOICE_PROFILE's real keys are niche/audience/tone/
+            # banned_words/sample_content/cta_style/default_platforms — bio/examples never
+            # existed on it, so those two were always empty and niche/audience/cta_style
+            # were never surfaced to the agent despite the system prompt telling it to
+            # "adhere strictly to the creator's Voice Profile". voice_profile_prompt reuses
+            # the exact renderer every Studio tool already formats its system prompt with,
+            # so the agent sees the same voice text the tools do.
             return {
                 "voice_profile": {
-                    "bio": prof.get("bio", ""),
-                    "tone": prof.get("tone", ""),
+                    "niche": prof.get("niche", ""),
+                    "audience": prof.get("audience", ""),
+                    "tone": prof.get("tone", []),
                     "banned_words": prof.get("banned_words", []),
-                    "examples": prof.get("examples", [])
+                    "sample_content": prof.get("sample_content", []),
+                    "cta_style": prof.get("cta_style", ""),
+                    "default_platforms": prof.get("default_platforms", []),
                 },
+                "voice_profile_prompt": voice_profile.to_prompt_block(prof),
                 "platform_rules": rules
             }
 
@@ -585,4 +643,6 @@ def execute_tool(name: str, args: Dict[str, Any], store: Any) -> Dict[str, Any]:
             return {"error": f"Unknown tool name '{name}'"}
 
     except Exception as exc:
+        import traceback
+        print(f"[agent_tools] Tool '{name}' raised {type(exc).__name__}: {exc}\n{traceback.format_exc()}")
         return {"error": f"Tool execution failed ({name}): {str(exc)}"}

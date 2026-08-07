@@ -18,7 +18,7 @@ from typing import Optional, List, Dict, Any
 import io
 
 import paths
-from vector_store import VectorStore, get_cross_encoder
+from vector_store import VectorStore
 from transcript_service import fetch_youtube_transcript, transcribe_file_with_whisper, fetch_youtube_metadata, preload_whisper_model, content_hash_id, get_youtube_video_id, WHISPER_MODEL_TIERS, WHISPER_MODEL_SIZE
 from multimodal_engine import preload_models
 
@@ -788,7 +788,7 @@ def _run_analyze_job(video_id: str, max_clips: int):
 
         ranked = clip_scoring.rank(
             analysis["candidates"], sentences_by_idx, video_id, corpus_texts,
-            get_cross_encoder, max_clips=max_clips, taste_centroid=taste_centroid,
+            max_clips=max_clips, taste_centroid=taste_centroid,
         )
 
         all_clips = _load_clips()
@@ -797,12 +797,20 @@ def _run_analyze_job(video_id: str, max_clips: int):
         for clip in ranked:
             clip["video_id"] = video_id
             clip["degraded"] = analysis["degraded"]
+            clip["degraded_reason"] = analysis.get("degraded_reason")
+            clip["analysis_mode"] = analysis.get("mode", "heuristic")
             clip["timing_precise"] = timing_precise
             all_clips[clip["id"]] = clip
         _save_clips(all_clips)
 
         report("done", 1.0, f"{len(ranked)} clip(s) ready")
-        return {"video_id": video_id, "clip_count": len(ranked), "degraded": analysis["degraded"]}
+        return {
+            "video_id": video_id,
+            "clip_count": len(ranked),
+            "degraded": analysis["degraded"],
+            "degraded_reason": analysis.get("degraded_reason"),
+            "analysis_mode": analysis.get("mode"),
+        }
 
     return _job
 

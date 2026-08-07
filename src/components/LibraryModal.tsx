@@ -3,6 +3,7 @@ import { VideoItem } from '../types';
 import { X, Video, Plus, Check, ExternalLink, Upload, FolderUp, AlertCircle, Loader2, Trash2, RotateCcw, AlertTriangle, CheckCircle2, FileUp, Eye, FileText } from 'lucide-react';
 import { ingestVideoUrl, uploadLocalFile, deleteLibraryVideo, importLibrary, isIngestJobStart, pollJob } from '../services/api';
 import { filterMediaFiles } from '../services/localMediaParser';
+import { relativeTime } from '../utils';
 
 const WHISPER_MODEL_TIERS = ['base', 'small', 'medium'] as const;
 type WhisperModelTier = typeof WHISPER_MODEL_TIERS[number];
@@ -56,23 +57,7 @@ interface LibraryModalProps {
   backendOnline: boolean;
 }
 
-/** Format an ISO datetime string into relative time like "2h ago" */
-function relativeTime(isoString: string): string {
-  if (!isoString) return '';
-  const date = new Date(isoString);
-  if (isNaN(date.getTime())) return isoString; // fallback to raw string if not valid ISO
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffSec = Math.floor(diffMs / 1000);
-  if (diffSec < 60) return 'just now';
-  const diffMin = Math.floor(diffSec / 60);
-  if (diffMin < 60) return `${diffMin}m ago`;
-  const diffHr = Math.floor(diffMin / 60);
-  if (diffHr < 24) return `${diffHr}h ago`;
-  const diffDay = Math.floor(diffHr / 24);
-  if (diffDay < 30) return `${diffDay}d ago`;
-  return date.toLocaleDateString();
-}
+
 
 export const LibraryModal: React.FC<LibraryModalProps> = ({
   isOpen,

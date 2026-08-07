@@ -24,7 +24,9 @@ get_model()/get_base_url()/get_api_key() instead of the bare names.
 import json
 import os
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, NamedTuple, Optional
+
+import llm_throttle
 
 def get_base_url() -> str:
     return os.getenv("VAULT_LLM_BASE_URL", "https://api.sambanova.ai/v1")
@@ -36,6 +38,18 @@ def get_api_key() -> Optional[str]:
 
 def get_model() -> str:
     return os.getenv("VAULT_LLM_MODEL", "Meta-Llama-3.3-70B-Instruct")
+
+
+def get_tools_base_url() -> str:
+    return os.getenv("VAULT_TOOLS_LLM_BASE_URL") or get_base_url()
+
+
+def get_tools_api_key() -> Optional[str]:
+    return os.getenv("VAULT_TOOLS_LLM_API_KEY") or get_api_key()
+
+
+def get_tools_model() -> str:
+    return os.getenv("VAULT_TOOLS_LLM_MODEL") or get_model()
 
 
 def __getattr__(name: str) -> Any:
@@ -51,14 +65,19 @@ def __getattr__(name: str) -> Any:
 _client = None
 _client_config = None
 
+_tools_client = None
+_tools_client_config = None
+
 
 class LLMUnavailable(Exception):
     """No key configured, provider unreachable, or the response never validated against the
     requested schema even after one retry. Callers should fall back to heuristic analysis."""
 
 
-def is_configured() -> bool:
-    return bool(get_api_key())
+def is_configured(for_tools: bool = False) -> bool:
+    if for_tools:
+        return bool(get_tools_api_key())
+    return bool(get_api_key() or get_tools_api_key())
 
 
 def _get_client():
@@ -71,12 +90,127 @@ def _get_client():
     return _client
 
 
+def _get_tools_client():
+    global _tools_client, _tools_client_config
+    current_config = (get_tools_base_url(), get_tools_api_key())
+    if _tools_client is None or _tools_client_config != current_config:
+        import openai
+        _tools_client = openai.OpenAI(base_url=current_config[0], api_key=current_config[1])
+        _tools_client_config = current_config
+    return _tools_client
+
+
+class Resolved(NamedTuple):
+    client: Any
+    model: str
+    base_url: str
+    api_key: Optional[str]
+    bucket: str
+
+
+def resolve(for_tools: bool = False) -> "Resolved":
+    """Single source of truth for which (client, model, base_url) a call actually uses.
+
+    Before this existed, is_configured(for_tools=False) returned True whenever EITHER key was
+    set (line ~78 below), but the caller (complete_json_with_usage) built its client from
+    get_api_key() only — so a tools-only config (VAULT_TOOLS_LLM_API_KEY set, VAULT_LLM_API_KEY
+    unset) passed is_configured() and then constructed `openai.OpenAI(api_key=None)`, which
+    raises at construction time outside agent_engine's try/except, producing a 500 where
+    main.py intends a 503. resolve() implements the fallback in both directions so the two
+    checks can never disagree, and raises LLMUnavailable itself when neither key exists.
+    """
+    if for_tools:
+        if get_tools_api_key():
+            return Resolved(_get_tools_client(), get_tools_model(), get_tools_base_url(), get_tools_api_key(),
+                             llm_throttle.bucket_key(get_tools_base_url(), get_tools_model()))
+        if get_api_key():
+            return Resolved(_get_client(), get_model(), get_base_url(), get_api_key(),
+                             llm_throttle.bucket_key(get_base_url(), get_model()))
+        raise LLMUnavailable("VAULT_TOOLS_LLM_API_KEY (or VAULT_LLM_API_KEY) is not set.")
+    else:
+        if get_api_key():
+            return Resolved(_get_client(), get_model(), get_base_url(), get_api_key(),
+                             llm_throttle.bucket_key(get_base_url(), get_model()))
+        if get_tools_api_key():
+            return Resolved(_get_tools_client(), get_tools_model(), get_tools_base_url(), get_tools_api_key(),
+                             llm_throttle.bucket_key(get_tools_base_url(), get_tools_model()))
+        raise LLMUnavailable("VAULT_LLM_API_KEY (or VAULT_TOOLS_LLM_API_KEY) is not set.")
+
+
+# Candidate fallback models per provider, tried in order if the primary model is rate limited.
+# Keyed on the base_url a call is ACTUALLY going to (see fallback_models below) — not on
+# get_base_url(), which used to pick the wrong ladder whenever the TOOLS client (potentially a
+# different provider) was the one making the call.
+_FALLBACK_MODELS = {
+    "groq.com": ["llama-3.1-8b-instant"],
+    "sambanova": ["Qwen2.5-72B-Instruct"],
+}
+
+
+def fallback_models(base_url: str, model: str) -> List[str]:
+    """Primary model first, then provider-appropriate cheaper models to retry a rate-limited
+    call against — resolved from the base_url the call is actually using."""
+    models = [model]
+    base_lower = (base_url or "").lower()
+    for host, fallbacks in _FALLBACK_MODELS.items():
+        if host in base_lower:
+            for fb in fallbacks:
+                if fb not in models:
+                    models.append(fb)
+            break
+    return models
+
+
+def is_rate_limit_error(msg: str) -> bool:
+    """429 / rate_limit / rate limit / resource_exhausted / quota / too many requests.
+
+    Deliberately does NOT match the bare substring 'limit' — the old check
+    (`"limit" in msg.lower()`) misclassified 'maximum context length exceeded' and 'token
+    limit exceeded' as rate limits, which made the client silently sleep-and-retry (then
+    swap models) a request that could never succeed no matter how long it waited."""
+    lowered = msg.lower()
+    return (
+        "429" in msg
+        or "rate_limit" in lowered
+        or "rate limit" in lowered
+        or "resource_exhausted" in lowered
+        or "quota" in lowered
+        or "too many requests" in lowered
+    )
+
+
+def is_context_length_error(msg: str) -> bool:
+    """Non-retryable against the SAME model at the SAME size: the request is too large for
+    either the model's context window or its per-minute token budget. No amount of backoff
+    fixes this — it needs a smaller request (a smaller window) or a different model.
+
+    Groq's TPM-budget rejections ("Request too large for model `X` ... on tokens per minute
+    (TPM): Limit 6000, Requested 10086, please reduce your message size") carry
+    `code: rate_limit_exceeded`, so without matching this exact phrasing they were
+    misclassified as a plain rate limit and given 2 pointless backoff-and-retry attempts
+    against a model that can never succeed at that request size no matter how long it waits —
+    confirmed against a real production failure on `llama-3.1-8b-instant`'s 6000 TPM cap
+    during narrative_engine beat extraction (a ~60-sentence window's prompt runs ~10k tokens)."""
+    lowered = msg.lower()
+    return (
+        "context_length_exceeded" in lowered
+        or "context length" in lowered
+        or "maximum context" in lowered
+        or "too many tokens" in lowered
+        or "reduce the length" in lowered
+        or "request too large" in lowered
+        or "reduce your message size" in lowered
+    )
+
+
+def is_model_not_found_error(msg: str) -> bool:
+    lowered = msg.lower()
+    return "model" in lowered and ("not found" in lowered or "404" in msg or "does not exist" in lowered)
+
+
 def _validate(parsed: Dict[str, Any], schema: Dict[str, Any]) -> Optional[str]:
     """
-    Minimal structural validation against a JSON-schema-like dict: checks the top-level
-    'type' (object/array) and, for arrays of objects, that each item has the 'required'
-    keys listed in schema['items']['required']. Not a full JSON Schema validator — just
-    enough to catch a malformed or truncated LLM response before it reaches narrative_engine.
+    Minimal structural validation against a JSON-schema-like dict.
     Returns an error message string, or None if valid.
     """
     expected_type = schema.get("type")
@@ -108,18 +242,10 @@ def complete_json(
     max_retries: int = 1,
     temperature: float = 0.2,
     max_tokens: Optional[int] = None,
+    for_tools: bool = False,
 ) -> Any:
-    """
-    Call the configured LLM with response_format=json_object, validate the parse against
-    `schema`, retry once with the validation error appended on failure, then raise
-    LLMUnavailable. Also retries on HTTP 429 (free-tier rate limits) with jittered backoff.
-
-    `temperature` defaults to the original 0.2 (narrative_engine's extraction use case).
-    STUDIO's idea-generation tools (repurposer, title generator) pass a higher value —
-    0.2 is too conservative for "give me 15 varied title ideas".
-    """
     parsed, _usage = complete_json_with_usage(
-        system, user, schema, max_retries=max_retries, temperature=temperature, max_tokens=max_tokens
+        system, user, schema, max_retries=max_retries, temperature=temperature, max_tokens=max_tokens, for_tools=for_tools
     )
     return parsed
 
@@ -131,47 +257,38 @@ def complete_json_with_usage(
     max_retries: int = 1,
     temperature: float = 0.2,
     max_tokens: Optional[int] = None,
+    for_tools: bool = False,
 ) -> "tuple[Any, Dict[str, Any]]":
-    """
-    Same contract as complete_json, but also returns a usage dict:
-    {"prompt_tokens": int, "completion_tokens": int, "model": str}. Introduced for
-    STUDIO's usage meter (backend/usage.py) — narrative_engine's existing call sites don't
-    need token counts, so complete_json stays the primary entry point and just discards
-    the second return value.
-    """
-    if not is_configured():
-        raise LLMUnavailable("VAULT_LLM_API_KEY is not set.")
+    resolved = resolve(for_tools=for_tools)
+    client, model_name = resolved.client, resolved.model
 
-    client = _get_client()
     attempt_user = user
     last_error = None
-    usage = {"prompt_tokens": 0, "completion_tokens": 0, "model": get_model()}
+    usage = {"prompt_tokens": 0, "completion_tokens": 0, "model": model_name}
 
     for attempt in range(max_retries + 1):
         try:
             response = _call_with_backoff(
-                client, system, attempt_user, temperature=temperature, max_tokens=max_tokens
+                client, model_name, system, attempt_user, resolved.base_url, resolved.bucket,
+                temperature=temperature, max_tokens=max_tokens,
             )
-            usage = _extract_usage(response)
+            usage = _extract_usage(response, model_name)
             raw = response.choices[0].message.content
             parsed = json.loads(raw)
-            # The model may wrap the array in {"items": [...]}, {"replies": [...]}, etc., since
-            # json_object mode requires a top-level object — unwrap the list if present.
+
+            # Robust unwrapping for JSON arrays wrapped in objects by LLMs
             if schema.get("type") == "array" and isinstance(parsed, dict):
                 unwrapped = None
-                # Check standard list wrapper keys first
-                for key in ("items", "comments", "replies", "flags", "results", "data", "list", "array"):
+                for key in ("items", "comments", "replies", "flags", "results", "data", "list", "array", "output", "response", "suggestions", "result", "reply", "beats", "queries"):
                     if key in parsed and isinstance(parsed[key], list):
                         unwrapped = parsed[key]
                         break
 
                 if unwrapped is None:
                     list_values = [v for v in parsed.values() if isinstance(v, list)]
-                    if len(list_values) == 1:
-                        unwrapped = list_values[0]
-                    elif len(list_values) > 1:
+                    if len(list_values) >= 1:
                         unwrapped = max(list_values, key=len)
-                    elif parsed and all(isinstance(v, dict) for v in parsed.values()):
+                    elif parsed and all(isinstance(v, (dict, list)) for v in parsed.values()):
                         unwrapped = list(parsed.values())
 
                 if unwrapped is not None:
@@ -181,10 +298,16 @@ def complete_json_with_usage(
             if error is None:
                 return parsed, usage
             last_error = error
-        except (json.JSONDecodeError, Exception) as e:  # noqa: BLE001 - narrowed by re-raise below
-            if isinstance(e, LLMUnavailable):
-                raise
-            last_error = str(e)
+        except LLMUnavailable:
+            raise
+        except json.JSONDecodeError as e:
+            last_error = f"Response was not valid JSON: {e}"
+        except Exception as e:
+            # Was `except (json.JSONDecodeError, Exception)` — a redundant tuple (JSONDecodeError
+            # IS an Exception) that quietly turned any programming error in the unwrap/validate
+            # block above into a generic "schema validation failed after retry" message,
+            # indistinguishable from an actual provider problem.
+            last_error = f"{type(e).__name__}: {e}"
 
         attempt_user = (
             f"{user}\n\nYour previous response was invalid: {last_error}. "
@@ -194,56 +317,85 @@ def complete_json_with_usage(
     raise LLMUnavailable(f"LLM response failed schema validation after retry: {last_error}")
 
 
-def _extract_usage(response) -> Dict[str, Any]:
-    """Defensive extraction — some OpenAI-wire-compatible providers omit `usage` entirely,
-    and test mocks never populate it. Never let a missing/malformed usage block fail a
-    successful generation."""
+def _extract_usage(response, model_name: str) -> Dict[str, Any]:
     try:
         raw_usage = response.usage
+        finish_reason = None
+        try:
+            finish_reason = response.choices[0].finish_reason
+        except Exception:
+            pass
         return {
             "prompt_tokens": int(getattr(raw_usage, "prompt_tokens", 0) or 0),
             "completion_tokens": int(getattr(raw_usage, "completion_tokens", 0) or 0),
-            "model": get_model(),
+            "model": model_name,
+            "finish_reason": finish_reason,
         }
     except Exception:
-        return {"prompt_tokens": 0, "completion_tokens": 0, "model": get_model()}
+        return {"prompt_tokens": 0, "completion_tokens": 0, "model": model_name, "finish_reason": None}
 
 
 def _call_with_backoff(
-    client, system: str, user: str, max_attempts: int = 3, temperature: float = 0.2,
-    max_tokens: Optional[int] = None,
+    client, model_name: str, system: str, user: str, base_url: str, bucket: str,
+    max_attempts: int = 2, temperature: float = 0.2, max_tokens: Optional[int] = None,
 ):
     delay = 1.0
-    last_exc = None
-    for attempt in range(max_attempts):
-        try:
-            kwargs: Dict[str, Any] = dict(
-                model=get_model(),
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-                response_format={"type": "json_object"},
-                temperature=temperature,
-            )
-            if max_tokens is not None:
-                kwargs["max_tokens"] = max_tokens
-            return client.chat.completions.create(**kwargs)
-        except Exception as e:
-            msg = str(e)
-            is_rate_limit = "429" in msg or "rate" in msg.lower()
-            is_model_error = "model" in msg.lower() and ("not found" in msg.lower() or "404" in msg)
-            if is_model_error:
-                # A typo'd/retired model ID deserves a clear diagnosis, not a silent
-                # degraded-mode fallback that hides a one-line config fix.
-                raise LLMUnavailable(
-                    f"LLM provider rejected model '{get_model()}': {msg}. Verify VAULT_LLM_MODEL "
-                    f"against the provider's current model list."
+
+    # Candidate fallback models if primary model is rate limited, resolved from the base_url
+    # this call is ACTUALLY using — not get_base_url(), which used to pick the wrong ladder
+    # whenever the TOOLS client (potentially a different provider) made the call.
+    models_to_try = fallback_models(base_url, model_name)
+
+    # One entry per model actually tried, so the final error (if every model fails) reports
+    # what happened at EACH of them — not just the last one. Before this, a primary model
+    # that failed for a real, actionable reason (e.g. a transient rate limit) had its error
+    # silently discarded once the ladder moved to the fallback model, so a "too large" error
+    # from a small fallback model was the ONLY thing ever surfaced to the user, hiding
+    # whatever actually happened with the model they configured.
+    attempts_summary: List[str] = []
+
+    for current_model in models_to_try:
+        last_exc_for_model: Optional[Exception] = None
+        for attempt in range(max_attempts):
+            try:
+                llm_throttle.acquire(bucket)
+                kwargs: Dict[str, Any] = dict(
+                    model=current_model,
+                    messages=[
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user},
+                    ],
+                    response_format={"type": "json_object"},
+                    temperature=temperature,
                 )
-            if is_rate_limit and attempt < max_attempts - 1:
-                time.sleep(delay + (0.1 * attempt))
-                delay *= 2
-                last_exc = e
-                continue
-            raise LLMUnavailable(f"LLM call failed: {msg}") from e
-    raise LLMUnavailable(f"LLM call failed after {max_attempts} attempts: {last_exc}")
+                if max_tokens is not None:
+                    kwargs["max_tokens"] = max_tokens
+                return client.chat.completions.create(**kwargs)
+            except Exception as e:
+                msg = str(e)
+                if is_model_not_found_error(msg):
+                    raise LLMUnavailable(
+                        f"LLM provider rejected model '{current_model}': {msg}. Verify model ID against provider list."
+                    )
+                if is_context_length_error(msg):
+                    # Non-retryable against THIS model at THIS size — no amount of backoff
+                    # fixes an oversized request. Record it and move on to the next model in
+                    # the ladder (if any) rather than burning the remaining attempts on a
+                    # request that can never succeed here no matter how long it waits — the
+                    # old bare-"limit" substring match used to treat this as a plain rate
+                    # limit and sleep-retry it pointlessly.
+                    last_exc_for_model = e
+                    break
+                if is_rate_limit_error(msg):
+                    last_exc_for_model = e
+                    if attempt < max_attempts - 1:
+                        time.sleep(delay)
+                        delay *= 1.5
+                        continue
+                    break
+                raise LLMUnavailable(f"LLM call failed: {msg}") from e
+        attempts_summary.append(f"{current_model}: {last_exc_for_model}")
+
+    raise LLMUnavailable(
+        "LLM call failed after attempts across models — " + "; ".join(attempts_summary)
+    )

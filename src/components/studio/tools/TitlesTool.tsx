@@ -52,11 +52,19 @@ export const TitlesTool: React.FC = () => {
         <div className="bg-red-950/40 border border-red-800/30 rounded-lg p-3 text-xs text-red-300 font-mono">{error}</div>
       )}
 
-      {output && (
+      {output && (() => {
+        // A partial LLM response can pass the loose _TITLES_SCHEMA (only top-level keys are
+        // required) and still be missing one of these arrays — .map on undefined used to
+        // crash the whole tool pane. Default to [] so a partial result renders the sections
+        // it does have instead of a blank error boundary.
+        const titles = output.titles ?? [];
+        const hooks = output.hooks ?? [];
+        const thumbnailText = output.thumbnail_text ?? [];
+        return (
         <div className="space-y-4 pt-4 border-t border-hairline">
-          <OutputBlock title="Titles" copyText={output.titles.map((t) => t.text).join('\n')}>
+          <OutputBlock title="Titles" copyText={titles.map((t) => t.text).join('\n')}>
             <div className="space-y-3">
-              {output.titles.map((t, i) => (
+              {titles.map((t, i) => (
                 <div key={i} className="space-y-1">
                   <div className="flex items-center gap-2 flex-wrap">
                     <p className="text-ink font-medium">{t.text}</p>
@@ -69,23 +77,29 @@ export const TitlesTool: React.FC = () => {
             </div>
           </OutputBlock>
 
-          <OutputBlock title="Hooks" copyText={output.hooks.map((h) => h.text).join('\n')}>
+          <OutputBlock title="Hooks" copyText={hooks.map((h) => h.text).join('\n')}>
             <div className="space-y-2">
-              {output.hooks.map((h, i) => (
-                <p key={i}><Tag>{h.style}</Tag> {h.text}</p>
+              {hooks.map((h, i) => (
+                <div key={i} className="flex items-start gap-2 text-sm">
+                  <span className="font-mono text-accent-sunset font-bold text-xs shrink-0 pt-0.5">{i + 1}.</span>
+                  <div>
+                    <Tag>{h.style}</Tag> <span className="text-ink font-medium leading-relaxed">{h.text}</span>
+                  </div>
+                </div>
               ))}
             </div>
           </OutputBlock>
 
-          <OutputBlock title="Thumbnail Text (text only — no image generation)" copyText={output.thumbnail_text.map((t) => t.text).join('\n')}>
+          <OutputBlock title="Thumbnail Text (text only — no image generation)" copyText={thumbnailText.map((t) => t.text).join('\n')}>
             <div className="flex flex-wrap gap-2">
-              {output.thumbnail_text.map((t, i) => (
+              {thumbnailText.map((t, i) => (
                 <Tag key={i} tone={t.over_word_limit ? 'warning' : 'default'}>{t.text}</Tag>
               ))}
             </div>
           </OutputBlock>
         </div>
-      )}
+        );
+      })()}
     </div>
   );
 };

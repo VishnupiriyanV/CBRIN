@@ -167,3 +167,136 @@ class TestDynamicConfigAccessors:
         access — that path IS covered by __getattr__, unlike bare names inside this file."""
         with patch.dict(os.environ, {"VAULT_LLM_MODEL": "gemini-2.5-flash"}):
             assert lc.MODEL == "gemini-2.5-flash"
+
+
+class TestResolve:
+    """is_configured(for_tools=False) used to return True whenever EITHER key was set, but
+    complete_json_with_usage built its client from get_api_key() only — so a tools-only
+    config passed is_configured() and then constructed openai.OpenAI(api_key=None), which
+    raises at construction, producing a 500 where a 503 was intended. resolve() must
+    implement the same fallback in both directions so the two can never disagree."""
+
+    def test_tools_only_key_does_not_construct_a_none_key_client(self):
+        with patch.object(lc, "get_api_key", return_value=None), \
+             patch.object(lc, "get_tools_api_key", return_value="tools-key-123"), \
+             patch.object(lc, "get_tools_base_url", return_value="https://api.groq.com/openai/v1"), \
+             patch.object(lc, "get_tools_model", return_value="llama-3.3-70b-versatile"):
+            resolved = lc.resolve(for_tools=False)
+        assert resolved.api_key == "tools-key-123"
+        assert resolved.model == "llama-3.3-70b-versatile"
+
+    def test_primary_only_key_used_for_tools_role_as_fallback(self):
+        with patch.object(lc, "get_tools_api_key", return_value=None), \
+             patch.object(lc, "get_api_key", return_value="primary-key"), \
+             patch.object(lc, "get_base_url", return_value="https://api.sambanova.ai/v1"), \
+             patch.object(lc, "get_model", return_value="Meta-Llama-3.3-70B-Instruct"):
+            resolved = lc.resolve(for_tools=True)
+        assert resolved.api_key == "primary-key"
+
+    def test_neither_key_raises_llm_unavailable(self):
+        with patch.object(lc, "get_api_key", return_value=None), \
+             patch.object(lc, "get_tools_api_key", return_value=None):
+            with pytest.raises(lc.LLMUnavailable):
+                lc.resolve(for_tools=False)
+            with pytest.raises(lc.LLMUnavailable):
+                lc.resolve(for_tools=True)
+
+    def test_bucket_shared_when_tools_and_primary_share_a_host(self):
+        with patch.object(lc, "get_api_key", return_value="k1"), \
+             patch.object(lc, "get_base_url", return_value="https://api.groq.com/openai/v1"), \
+             patch.object(lc, "get_model", return_value="model-a"), \
+             patch.object(lc, "get_tools_api_key", return_value="k2"), \
+             patch.object(lc, "get_tools_base_url", return_value="https://api.groq.com/openai/v1"), \
+             patch.object(lc, "get_tools_model", return_value="model-b"):
+            primary = lc.resolve(for_tools=False)
+            tools = lc.resolve(for_tools=True)
+        assert primary.bucket == tools.bucket
+
+
+class TestErrorClassification:
+    def test_context_length_message_is_not_a_rate_limit(self):
+        # The old check (`"limit" in msg.lower()`) misclassified this as a rate limit and
+        # silently slept-and-retried a request that could never succeed.
+        msg = "Error: This model's maximum context length is 8192 tokens. Please reduce the length of the messages."
+        assert lc.is_rate_limit_error(msg) is False
+        assert lc.is_context_length_error(msg) is True
+
+    def test_429_message_is_a_rate_limit_not_context_length(self):
+        msg = "Error code: 429 - {'error': {'message': 'Rate limit reached', 'code': 'rate_limit_exceeded'}}"
+        assert lc.is_rate_limit_error(msg) is True
+        assert lc.is_context_length_error(msg) is False
+
+    def test_model_not_found_message(self):
+        msg = "Error code: 404 - model 'bogus-model' not found"
+        assert lc.is_model_not_found_error(msg) is True
+        assert lc.is_rate_limit_error(msg) is False
+
+    def test_groq_tpm_too_large_message_is_context_length_not_plain_rate_limit(self):
+        # Real production message hit during narrative_engine beat extraction against
+        # llama-3.1-8b-instant's free-tier TPM cap. Groq's own `code` field is
+        # 'rate_limit_exceeded', so without matching this exact phrasing the message was
+        # classified as a plain (retryable) rate limit and given pointless backoff-and-retry
+        # attempts against a model that can never succeed at that request size.
+        msg = (
+            "Error code: 413 - {'error': {'message': \"Request too large for model "
+            "`llama-3.1-8b-instant` in organization `org_x` service tier `on_demand` on "
+            "tokens per minute (TPM): Limit 6000, Requested 10086, please reduce your "
+            "message size and try again.\", 'type': 'tokens', 'code': 'rate_limit_exceeded'}}"
+        )
+        assert lc.is_context_length_error(msg) is True
+
+
+class TestCallWithBackoffModelFallback:
+    """Real production failure: narrative_engine beat extraction hit Groq's
+    llama-3.1-8b-instant 6000 TPM cap on the fallback model. The old classification treated
+    this as a plain rate limit, wasting a full backoff-and-retry cycle against a model that
+    could never succeed at that request size, and the final exception only ever showed the
+    LAST model's error — silently discarding whatever the PRIMARY model actually failed
+    with, which is usually the more actionable diagnostic."""
+
+    def test_context_length_error_is_not_retried_and_moves_to_next_model(self):
+        too_large_error = Exception(
+            "Error code: 413 - {'error': {'message': 'Request too large for model `model-a` "
+            "on tokens per minute (TPM): Limit 6000, Requested 9000, please reduce your "
+            "message size and try again.', 'code': 'rate_limit_exceeded'}}"
+        )
+        rate_limited_error = Exception(
+            "Error code: 429 - {'error': {'message': 'Rate limit reached', 'code': 'rate_limit_exceeded'}}"
+        )
+
+        mock_client = MagicMock()
+        # model-a: ONE call only (too-large is non-retryable against the same model).
+        # model-b: two calls (a genuine rate limit gets its normal backoff-and-retry).
+        mock_client.chat.completions.create.side_effect = [too_large_error, rate_limited_error, rate_limited_error]
+
+        with patch.object(lc, "get_api_key", return_value="fake-key"), \
+             patch.object(lc, "_get_client", return_value=mock_client), \
+             patch.object(lc, "fallback_models", return_value=["model-a", "model-b"]):
+            with pytest.raises(lc.LLMUnavailable) as exc_info:
+                lc.complete_json("system", "user", {"type": "array", "items": {"required": []}})
+
+        assert mock_client.chat.completions.create.call_count == 3
+
+        err = str(exc_info.value)
+        # Both models' real failures survive into the final message — not just the last one.
+        assert "model-a" in err
+        assert "model-b" in err
+        assert "Request too large" in err
+
+
+class TestFallbackLadder:
+    def test_ladder_resolved_from_the_actual_base_url_not_get_base_url(self):
+        # _call_with_backoff used to pick its fallback ladder from get_base_url() even when
+        # the TOOLS client (potentially on a different provider than the primary) was the
+        # one making the call.
+        ladder = lc.fallback_models("https://api.groq.com/openai/v1", "llama-3.3-70b-versatile")
+        assert ladder[0] == "llama-3.3-70b-versatile"
+        assert "llama-3.1-8b-instant" in ladder
+
+    def test_sambanova_ladder(self):
+        ladder = lc.fallback_models("https://api.sambanova.ai/v1", "Meta-Llama-3.3-70B-Instruct")
+        assert "Qwen2.5-72B-Instruct" in ladder
+
+    def test_unknown_provider_has_no_fallback(self):
+        ladder = lc.fallback_models("https://api.example-unknown.com/v1", "some-model")
+        assert ladder == ["some-model"]

@@ -1,0 +1,71 @@
+# Hand-labeled hook/not-hook judgments over real sentences from backend/data/chunks.json
+# (436 sentences across 4 videos in this checkout), used by eval/hook_eval.py --labels to
+# measure ROC-AUC and class separation for clip_scoring.py's hook_strength signal.
+#
+# `text` is included for human review only — hook_eval.py always re-reads the sentence text
+# from chunks.json by (video_id, sentence_idx), so a stale copy here can't silently drift the
+# eval. If a video_id/sentence_idx no longer exists in chunks.json (a re-ingest changed the
+# library), hook_eval.py skips that row and prints a warning rather than failing the run.
+#
+# Labeled 2026-08-05 against a stratified sample (top/bottom/middle of the semantic-cosine
+# score) so the set isn't accidentally all-easy or all-hard — see
+# eval/README.md#hook-signal-calibration for the sampling method and how to extend this set.
+#
+# Judged as a HOOK: would this sentence, as the FIRST line of a clip, create a curiosity gap,
+# ask something the viewer wants answered, or otherwise earn the next 3 seconds of attention?
+# Plain factual statements, mid-narrative continuations ("And then...", "So anyways that other
+# thing..."), and answers-without-the-question are judged NOT a hook, even when they contain
+# superficially hook-shaped words.
+
+labels:
+  - {video_id: local-99ce947e13e5, sentence_idx: 118, is_hook: true}   # "Why has no one told me?"
+  - {video_id: local-99ce947e13e5, sentence_idx: 119, is_hook: true}   # "I'm telling you, man, I've been changed."
+  - {video_id: local-99ce947e13e5, sentence_idx: 147, is_hook: true}   # "Now check this out."
+  - {video_id: local-99ce947e13e5, sentence_idx: 142, is_hook: true}   # "Now check this out."
+  - {video_id: local-f718cb618763, sentence_idx: 15, is_hook: true}    # "So I thought this morning, you know what?"
+  - {video_id: local-99ce947e13e5, sentence_idx: 192, is_hook: true}   # "Will this work as a carry-on for my flight in September?"
+  - {video_id: local-99ce947e13e5, sentence_idx: 92, is_hook: true}    # "How can I get tickets?"
+  - {video_id: local-99ce947e13e5, sentence_idx: 84, is_hook: true}    # "Today, we're introducing an entirely new version of Siri..."
+  - {video_id: local-99ce947e13e5, sentence_idx: 226, is_hook: true}   # "...more approachable than ever by letting you simply describe a shortcut."
+  - {video_id: local-f718cb618763, sentence_idx: 30, is_hook: true}    # "...a little English lesson that isn't really an English lesson."
+
+  - {video_id: local-f718cb618763, sentence_idx: 12, is_hook: false}   # "And that was the other problem." (mid-narrative)
+  - {video_id: local-99ce947e13e5, sentence_idx: 234, is_hook: false}  # "Then describe the changes you want to make." (instructional)
+  - {video_id: local-99ce947e13e5, sentence_idx: 211, is_hook: false}  # "And later, when Safari detects the change..." (plain info, starts "And")
+  - {video_id: local-99ce947e13e5, sentence_idx: 168, is_hook: false}  # "And check this out." (dependent on prior context)
+  - {video_id: local-99ce947e13e5, sentence_idx: 256, is_hook: false}  # "As I toggle before and after." (demo narration)
+  - {video_id: local-f718cb618763, sentence_idx: 13, is_hook: false}   # "Things kept popping up." (vague, weak)
+  - {video_id: local-99ce947e13e5, sentence_idx: 125, is_hook: false}  # "Let me try this one out." (demo narration)
+  - {video_id: yt-pWH1TF1ZfKA, sentence_idx: 101, is_hook: false}      # rambling mid-conversation excerpt
+  - {video_id: local-99ce947e13e5, sentence_idx: 127, is_hook: false}  # "Here's another one." (plain transition)
+  - {video_id: yt-pWH1TF1ZfKA, sentence_idx: 22, is_hook: false}       # rambling mid-conversation excerpt
+  - {video_id: local-99ce947e13e5, sentence_idx: 68, is_hook: false}   # "Now, let's turn to intelligence." (transition)
+  - {video_id: local-99ce947e13e5, sentence_idx: 146, is_hook: false}  # "And here we go." (generic filler)
+  - {video_id: local-99ce947e13e5, sentence_idx: 60, is_hook: false}   # "It even works on live FaceTime calls." (feature statement)
+  - {video_id: local-99ce947e13e5, sentence_idx: 129, is_hook: false}  # "Now for some directions." (transition)
+  - {video_id: yt-pWH1TF1ZfKA, sentence_idx: 55, is_hook: false}       # rambling mid-conversation story
+  - {video_id: local-99ce947e13e5, sentence_idx: 263, is_hook: false}  # "Siri AI will not be available initially in the EU..."
+  - {video_id: local-99ce947e13e5, sentence_idx: 265, is_hook: false}  # "In China, Siri AI...will not be available..."
+  - {video_id: local-99ce947e13e5, sentence_idx: 138, is_hook: false}  # "On iOS, you can swipe down from the dynamic..."
+  - {video_id: local-99ce947e13e5, sentence_idx: 34, is_hook: false}   # "In photos, your iCloud shared albums..."
+  - {video_id: local-99ce947e13e5, sentence_idx: 171, is_hook: false}  # "Going to ask Siri draft a friendly email..."
+  - {video_id: yt-pWH1TF1ZfKA, sentence_idx: 78, is_hook: false}       # rambling revenue-split discussion
+  - {video_id: local-99ce947e13e5, sentence_idx: 19, is_hook: false}   # "And browsing files and transferring them..."
+  - {video_id: local-99ce947e13e5, sentence_idx: 91, is_hook: false}   # "Okay, looks like the concert is on July 26th." (answer, not question)
+  - {video_id: local-99ce947e13e5, sentence_idx: 233, is_hook: false}  # "You can start with a person from your photos library..."
+  - {video_id: local-99ce947e13e5, sentence_idx: 206, is_hook: false}  # "Siri AI will be available in English to start..."
+  - {video_id: local-99ce947e13e5, sentence_idx: 266, is_hook: false}  # "Our new OS releases will be available as developer betas today..."
+  - {video_id: local-99ce947e13e5, sentence_idx: 21, is_hook: false}   # "The CPU scheduler is a key system component..."
+  - {video_id: local-99ce947e13e5, sentence_idx: 194, is_hook: false}  # "Yes, the REI Flash 22 pack should easily work..." (answer, not question)
+  - {video_id: local-99ce947e13e5, sentence_idx: 200, is_hook: false}  # "You can also get feedback on your writing."
+  - {video_id: local-f718cb618763, sentence_idx: 27, is_hook: false}   # "You can see my umbrellas moving quite a bit."
+  - {video_id: local-99ce947e13e5, sentence_idx: 75, is_hook: false}   # "Next, we integrated our models deeply..."
+  - {video_id: local-99ce947e13e5, sentence_idx: 39, is_hook: false}   # "On Apple Vision Pro, you can now turn panoramas..."
+  - {video_id: local-99ce947e13e5, sentence_idx: 235, is_hook: false}  # "And since this is a mystery theme party..." (continuation)
+  - {video_id: local-99ce947e13e5, sentence_idx: 169, is_hook: false}  # "Gave me a great table to help visualize it..."
+  - {video_id: local-99ce947e13e5, sentence_idx: 108, is_hook: false}  # "Siri is searching through my photos..."
+  - {video_id: local-99ce947e13e5, sentence_idx: 175, is_hook: false}  # "The Siri app makes it easy to revisit..."
+  - {video_id: local-99ce947e13e5, sentence_idx: 220, is_hook: false}  # "Now, when you call a business, call context can..."
+  - {video_id: yt-pWH1TF1ZfKA, sentence_idx: 61, is_hook: false}       # rambling business-strategy excerpt
+  - {video_id: local-99ce947e13e5, sentence_idx: 214, is_hook: false}  # "Now, you can automatically update eligible accounts..."
+  - {video_id: yt-pWH1TF1ZfKA, sentence_idx: 49, is_hook: false}       # rambling hiring-process excerpt

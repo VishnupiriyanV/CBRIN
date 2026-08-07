@@ -8,7 +8,7 @@ Ties break deterministically on (composite, -start_sec, candidate id) so repeate
 the same input produce a stable order — backend/eval/clip_eval.py depends on that.
 """
 import re
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -23,8 +23,8 @@ WEIGHTS = {
     "boundary_cleanliness": 0.15,
 }
 
-# Bundled hook archetypes for cross-encoder scoring in both LLM and degraded mode — not
-# specific to any one creator's content, just generically "hook-shaped" openers.
+# Bundled hook archetypes for the semantic half of hook_strength — not specific to any one
+# creator's content, just generically "hook-shaped" openers.
 HOOK_ARCHETYPES = [
     "Here's a mistake almost everyone makes.",
     "I used to believe this until I found out the truth.",
@@ -39,35 +39,167 @@ _DEIXIS_PHRASES = ["as i said", "like i mentioned", "as we discussed", "going ba
 
 MIN_LABELS_FOR_TASTE = 10
 
+# --- Hook strength calibration ------------------------------------------------------------
+# hook_strength used to score the opening sentence by feeding (archetype, opening_text) pairs
+# to cross-encoder/ms-marco-MiniLM-L-6-v2 — a query->passage RELEVANCE model — and taking
+# sigmoid(max_logit). An ordinary sentence is not a relevant "search result" for the query
+# "You won't believe what happened next.", so the logit is strongly negative and the score
+# collapses to ~0. Measured on this library's real persisted clips (backend/data/clips.json):
+# every clip scored 0.0001-0.0005, i.e. a constant 0% in the UI, on the signal carrying the
+# LARGEST weight (0.25) of the five. vector_store.py:39-53 documents the identical
+# miscalibration for the same model on the same kind of short spoken-transcript text and
+# compensates with an eval-derived threshold; this signal never did.
+#
+# Replacement: bi-encoder archetype similarity (all-MiniLM-L6-v2 — the model vector_store
+# already loads for dense search) blended with explicit lexical hook cues, then mapped
+# through a range MEASURED on this library's real corpus, not a textbook (cos+1)/2 (which
+# would have compressed the entire real spread into roughly [0.48, 0.71]).
+#
+# Distribution calibrated 2026-08-05 against backend/data/chunks.json (436 real spoken
+# sentences across 4 videos) via `python eval/hook_eval.py --distribution`. Measured
+# max-archetype-cosine: p5=0.0615 p50=0.1585 p95=0.2738 p99=0.3514 max=0.4112. Measured
+# lexical-cue-blend (this corpus skews toward plain statements — median lexical score is 0.0,
+# i.e. most sentences trip no cue at all): p50=0.0 p75=0.20 p95=0.35 p99=0.50. Measured
+# correlation between the two raw halves: -0.075 — near-independent, which is a reason to
+# blend them (each carries non-redundant evidence).
+#
+# Weight split calibrated against backend/eval/hook_labels.yaml (50 hand-labeled sentences,
+# 10 hook / 40 not) via `python eval/hook_eval.py --labels --ablate {sem,lex}` and a
+# brute-force weight sweep checking BOTH acceptance criteria at once (a 0.5/0.5 split scored
+# well on AUC alone but had a visibly weaker median gap): sem-only AUC=0.70 delta=+0.04,
+# lex-only AUC=0.61 delta=+0.20, sem=0.5/lex=0.5 AUC=0.695 delta=+0.09. sem=0.20/lex=0.80
+# clears the median-delta bar (+0.22) while staying close to the best observed AUC (0.67 vs
+# 0.70) — the best joint result found, not a config chosen to hit AUC alone.
+#
+# Honest result, not a clean pass: at 50 labels, no weight split in the swept range (0.0-1.0
+# in steps of 0.02) cleared BOTH the 0.70 AUC and +0.20 median-delta bar simultaneously — the
+# label set is small and this checkout's corpus is narrow (4 videos, one of them song
+# lyrics). sem=0.20/lex=0.80 is the best-supported choice found, not a proven-sufficient one.
+# Expanding hook_labels.yaml (more videos, more labels per class, then re-running the sweep)
+# before trusting this further is real follow-up work, not a formality — see
+# eval/README.md#hook-signal-calibration.
+#
+# HOOK_RAW_FLOOR/CEIL are the measured p5/p99 of the sem=0.20/lex=0.80 blend over the FULL
+# unbiased 436-sentence corpus (p0=-0.004 p5=0.016 p25=0.033 p50=0.070 p75=0.190 p95=0.313
+# p99=0.431 p100=0.514) — deliberately NOT computed from hook_labels.yaml's own percentiles,
+# since that set is intentionally stratified (over-sampling score extremes for labeling
+# diversity) and its percentiles would not represent the true corpus distribution.
+#
+# Re-run eval/hook_eval.py after touching HOOK_ARCHETYPES or any weight below and confirm the
+# --distribution spread still spans roughly [0.0, 1.0] with a median near 0.2-0.3 and under
+# ~5% of the corpus saturated at 1.0, AND that --labels delta doesn't regress below ~0.20.
+# Don't move these on vibes.
+HOOK_SEM_WEIGHT = 0.20   # semantic half — see weight-sweep note above
+HOOK_LEX_WEIGHT = 0.80   # lexical half — the higher-precision evidence on this corpus
+HOOK_RAW_FLOOR = 0.0164  # measured p5 of the sem=0.20/lex=0.80 blend, over the full corpus
+HOOK_RAW_CEIL = 0.4314   # measured p99 of the same blend
+HOOK_BEAT_BONUS = 0.15   # applied post-calibration when the opening sentence falls inside a
+                         # beat the LLM typed as "hook"; capped by _clamp01 below.
+HOOK_LEX_ONLY_CEIL = 0.5  # degraded-mode (no dense model) ceiling — measured p99 of the raw
+                          # lexical-cue score alone, used when the semantic half is unavailable.
+
+HOOK_CUE_WEIGHTS = {
+    "question": 0.30,       # opener is a wh-/aux-word, or the sentence ends in '?'
+    "curiosity_gap": 0.30,  # "secret", "mistake", "truth", "turns out", "here's the/what/why"...
+    "second_person": 0.20,  # you / your / yourself
+    "superlative": 0.15,    # best/worst/only/never/nobody/always/first...
+    "negation": 0.10,       # not/never/don't/stop/avoid/wrong
+    "numeral": 0.10,        # any digit
+}
+HOOK_CUE_WINDOW_WORDS = 15  # cues are evaluated on the first 15 words only
+
+_HOOK_QUESTION_OPENERS = (
+    "what", "why", "how", "when", "where", "who", "which",
+    "did", "have", "is", "are", "can", "should", "will",
+)
+_HOOK_SUPERLATIVE_RE = re.compile(
+    r"\b(best|worst|biggest|only|never|nobody|no one|everyone|always|most|first|hardest|easiest|fastest)\b"
+)
+_HOOK_CURIOSITY_RE = re.compile(
+    r"\b(secret|mistake|truth|turns out|the thing is|little did|crazy part|actually|realized|surprising|here'?s (the|what|why))\b"
+)
+_HOOK_NEGATION_RE = re.compile(r"\b(not|never|don'?t|doesn'?t|didn'?t|can'?t|won'?t|stop|avoid|wrong)\b")
+_HOOK_SECOND_PERSON_RE = re.compile(r"\b(you|your|yourself|you're|you've|you'll)\b")
+_HOOK_NUMERAL_RE = re.compile(r"\d")
+
+# Lazily encoded once per process (not per candidate) — the archetypes never change at runtime.
+_ARCHETYPE_MATRIX: Optional[np.ndarray] = None
+
 
 def _clamp01(x: float) -> float:
     return max(0.0, min(1.0, x))
 
 
-def _hook_strength(candidate: Dict[str, Any], get_cross_encoder: Callable) -> float:
+def _archetype_matrix() -> Optional[np.ndarray]:
+    """The 6 HOOK_ARCHETYPES encoded once per process. Returns None if the dense embedding
+    model isn't available (mirrors _taste_match's HAS_DENSE_MODEL bail below)."""
+    global _ARCHETYPE_MATRIX
+    if _ARCHETYPE_MATRIX is None:
+        from vector_store import EMBEDDING_MODEL, HAS_DENSE_MODEL
+        if not HAS_DENSE_MODEL:
+            return None
+        _ARCHETYPE_MATRIX = EMBEDDING_MODEL.encode(
+            HOOK_ARCHETYPES, convert_to_numpy=True, normalize_embeddings=True
+        )
+    return _ARCHETYPE_MATRIX
+
+
+def _hook_lexical_cues(opening_text: str) -> Dict[str, float]:
+    """Explainable 0/1 cues over the first HOOK_CUE_WINDOW_WORDS words — the higher-precision
+    half of hook_strength on this corpus (see the calibration note above WEIGHTS)."""
+    lowered = opening_text.lower().strip()
+    words = re.findall(r"[a-z0-9']+", lowered)[:HOOK_CUE_WINDOW_WORDS]
+    window = " ".join(words)
+    is_question = lowered.endswith("?") or (bool(words) and words[0] in _HOOK_QUESTION_OPENERS)
+    return {
+        "question": 1.0 if is_question else 0.0,
+        "curiosity_gap": 1.0 if _HOOK_CURIOSITY_RE.search(window) else 0.0,
+        "second_person": 1.0 if _HOOK_SECOND_PERSON_RE.search(window) else 0.0,
+        "superlative": 1.0 if _HOOK_SUPERLATIVE_RE.search(window) else 0.0,
+        "negation": 1.0 if _HOOK_NEGATION_RE.search(window) else 0.0,
+        "numeral": 1.0 if _HOOK_NUMERAL_RE.search(window) else 0.0,
+    }
+
+
+def _hook_strength(candidate: Dict[str, Any]) -> Tuple[float, Dict[str, float]]:
+    """
+    Returns (score, cues). `cues` is an explainable per-cue breakdown for the UI/eval — it
+    goes on result["signal_details"]["hook_cues"], NOT into `signals`, where any key without
+    a matching WEIGHTS entry would KeyError score_candidate's composite sum.
+    """
     opening_text = candidate.get("_opening_text", "")
     if not opening_text:
-        return 0.5
+        return 0.5, {}
 
-    beat_bonus = 0.0
-    for b in candidate.get("beats", []):
-        if b.get("beat_type") == "hook":
-            beat_bonus = 0.3
-            break
+    cues = _hook_lexical_cues(opening_text)
+    lex_raw = min(1.0, sum(HOOK_CUE_WEIGHTS[k] * v for k, v in cues.items()))
 
-    reranker = get_cross_encoder()
-    if reranker is None:
-        return _clamp01(0.4 + beat_bonus)
+    sem_raw = None
+    matrix = _archetype_matrix()
+    if matrix is not None:
+        try:
+            from vector_store import EMBEDDING_MODEL
+            vec = EMBEDDING_MODEL.encode([opening_text], convert_to_numpy=True, normalize_embeddings=True)[0]
+            sem_raw = float(np.max(matrix @ vec))
+        except Exception:
+            sem_raw = None
 
-    try:
-        pairs = [(archetype, opening_text) for archetype in HOOK_ARCHETYPES]
-        scores = reranker.predict(pairs)
-        best = float(max(scores))
-        # sigmoid to map an unbounded cross-encoder logit into [0,1]
-        sigmoid = 1.0 / (1.0 + np.exp(-best))
-        return _clamp01(sigmoid + beat_bonus)
-    except Exception:
-        return _clamp01(0.4 + beat_bonus)
+    if sem_raw is None:
+        # No dense model available — lexical-only, still spread (unlike the old constant
+        # 0.4 + beat_bonus fallback, which collapsed every degraded-mode clip to one of two
+        # values regardless of how hook-shaped the opening actually was).
+        score = _clamp01(lex_raw / HOOK_LEX_ONLY_CEIL)
+    else:
+        raw = HOOK_SEM_WEIGHT * sem_raw + HOOK_LEX_WEIGHT * lex_raw
+        score = _clamp01((raw - HOOK_RAW_FLOOR) / (HOOK_RAW_CEIL - HOOK_RAW_FLOOR))
+
+    if candidate.get("opening_beat_type") == "hook":
+        score = _clamp01(score + HOOK_BEAT_BONUS)
+
+    cues_out = dict(cues)
+    cues_out["_semantic"] = round(sem_raw, 4) if sem_raw is not None else -1.0
+    cues_out["_lexical"] = round(lex_raw, 4)
+    return score, cues_out
 
 
 def _self_containedness(candidate: Dict[str, Any]) -> float:
@@ -113,6 +245,17 @@ def _emotional_delta(candidate: Dict[str, Any], video_id: str) -> float:
     return _clamp01(0.5 * arc_score + 0.5 * acoustic_score) if (arc_score or acoustic_score) else 0.3
 
 
+# idf_lookup values are log((n+1)/(df+1)) + 1.0, so >=1.0 always. The old (avg_idf - 1.0) / 3.0
+# ceiling was too low for a corpus this size — measured on backend/data/chunks.json's real
+# 436 sentences (2026-08-05, via eval/hook_eval.py --distribution, same run as the hook
+# calibration above), avg_idf over quotable lines spans p5=4.16 p50=5.04 p95=5.98 p99=6.33
+# p100=6.39, so the old ceiling of 4.0 (giving a max of 1.0 at avg_idf=4.0) saturated 96.5%
+# of real clips at exactly quotability=1.0 — a signal that was constant just as often as
+# hook_strength was, just in the other direction. FLOOR/CEIL below are that measured p5/p99.
+QUOTABILITY_IDF_FLOOR = 4.0
+QUOTABILITY_IDF_CEIL = 6.3
+
+
 def _quotability(candidate: Dict[str, Any], idf_lookup: Dict[str, float]) -> float:
     quote = candidate.get("quotable_line", "")
     if not quote:
@@ -125,9 +268,7 @@ def _quotability(candidate: Dict[str, Any], idf_lookup: Dict[str, float]) -> flo
 
     weights = [idf_lookup.get(w, 1.0) for w in words]
     avg_idf = sum(weights) / len(weights)
-    # idf_lookup values are log((n+1)/(df+1)) + 1.0, so >=1.0 always; normalize against a
-    # generous ceiling rather than an unbounded raw value.
-    return _clamp01((avg_idf - 1.0) / 3.0)
+    return _clamp01((avg_idf - QUOTABILITY_IDF_FLOOR) / (QUOTABILITY_IDF_CEIL - QUOTABILITY_IDF_FLOOR))
 
 
 def _boundary_cleanliness(candidate: Dict[str, Any], video_id: str) -> float:
@@ -158,16 +299,19 @@ def score_candidate(
     candidate: Dict[str, Any],
     video_id: str,
     idf_lookup: Dict[str, float],
-    get_cross_encoder: Callable,
     taste_centroid: Optional[np.ndarray] = None,
 ) -> Dict[str, Any]:
     """
     Compute all five (optionally six) signals for one candidate. Returns the candidate dict
     augmented with `signals` (name -> 0..1 score) and `composite` (weighted sum) — never a
     fabricated percentage, just named, inspectable numbers the UI renders as bars.
+
+    No longer takes get_cross_encoder — hook_strength stopped using the cross-encoder (see
+    the calibration note above WEIGHTS), and it was the only signal that ever needed one.
     """
+    hook_score, hook_cues = _hook_strength(candidate)
     signals = {
-        "hook_strength": _hook_strength(candidate, get_cross_encoder),
+        "hook_strength": hook_score,
         "self_containedness": _self_containedness(candidate),
         "emotional_delta": _emotional_delta(candidate, video_id),
         "quotability": _quotability(candidate, idf_lookup),
@@ -189,6 +333,7 @@ def score_candidate(
 
     result = dict(candidate)
     result["signals"] = signals
+    result["signal_details"] = {"hook_cues": hook_cues}
     result["composite"] = round(composite, 4)
     return result
 
@@ -218,7 +363,6 @@ def rank(
     sentences_by_idx: Dict[int, Dict[str, Any]],
     video_id: str,
     corpus_texts: List[str],
-    get_cross_encoder: Callable,
     max_clips: int = 6,
     taste_centroid: Optional[np.ndarray] = None,
 ) -> List[Dict[str, Any]]:
@@ -226,6 +370,8 @@ def rank(
     Score every candidate and return the top `max_clips`, sorted best-first with a stable,
     deterministic tie-break. Each result carries `signals`, `composite`, and a one-line
     `reason` string for the UI — never a percentage.
+
+    No longer takes get_cross_encoder — see score_candidate's docstring.
     """
     if not candidates:
         return []
@@ -248,7 +394,7 @@ def rank(
         enriched.append(cand_with_ctx)
 
     scored = [
-        score_candidate(c, video_id, idf_lookup, get_cross_encoder, taste_centroid)
+        score_candidate(c, video_id, idf_lookup, taste_centroid)
         for c in enriched
     ]
 
