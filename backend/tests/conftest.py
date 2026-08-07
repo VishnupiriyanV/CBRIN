@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest  # noqa: E402
 import paths  # noqa: E402
+import llm_throttle  # noqa: E402
 
 _REAL_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data")
 _REAL_DATA_DIR = os.path.normcase(os.path.normpath(os.path.abspath(_REAL_DATA_DIR)))
@@ -33,6 +34,19 @@ def redirect_data(tmp_path):
         yield
     finally:
         paths.use_root(original_root)
+
+
+@pytest.fixture(autouse=True)
+def reset_llm_throttle():
+    """llm_throttle's call history is a process-wide module global, shared across every test
+    in the suite (agent_engine, llm_client, and narrative_engine tests all default to the
+    same SambaNova bucket unless a test overrides the base_url). Without resetting it between
+    tests, enough tests hitting the default bucket within the same wall-clock 60s window would
+    make a later, unrelated test actually sleep for up to ~60s inside acquire() — a slow,
+    flaky failure mode with a root cause invisible from the failing test itself."""
+    llm_throttle.reset()
+    yield
+    llm_throttle.reset()
 
 
 def test_redirect_data_guard_is_active(tmp_path):

@@ -195,3 +195,102 @@ they don't trip any of the bundled markers. This is exactly `IMPROVEMENT-PLAN.md
 "quality without an LLM key is materially lower" (ENGINE-PLAN.md risk #6/#7), now with a
 number instead of a claim. `--compare-modes` against an LLM-backed run is the next
 measurement once a `VAULT_LLM_API_KEY` is available to test against.
+
+---
+
+## Hook signal calibration (`hook_eval.py`)
+
+`clip_scoring.py`'s `hook_strength` — one of the five signals in ENGINE's clip composite,
+carrying the largest single weight (0.25) — used to feed `(archetype, opening_text)` pairs
+to `cross-encoder/ms-marco-MiniLM-L-6-v2`, a query→passage *relevance* model, and take
+`sigmoid(max_logit)`. Every real clip opening in this library scored **0.0001–0.0005**, a
+constant 0% in the UI, regardless of content. The replacement blends bi-encoder archetype
+similarity (`all-MiniLM-L6-v2`, the model `vector_store.py` already loads) with explicit
+lexical hook cues (question opener, curiosity-gap phrasing, second-person address,
+superlative, negation, numeral), calibrated the same way `RERANK_RELEVANCE_THRESHOLD` above
+was: against measured percentiles and a hand-labeled set, not by eye.
+
+```bash
+cd backend
+python eval/hook_eval.py --distribution              # corpus percentiles + top/bottom 20
+python eval/hook_eval.py --labels                     # AUC / class separation vs hook_labels.yaml
+python eval/hook_eval.py --clips                      # re-score the openings in data/clips.json
+python eval/hook_eval.py --suggest                    # recommended FLOOR/CEIL from --labels
+python eval/hook_eval.py --ablate sem                  # AUC with the semantic half zeroed
+python eval/hook_eval.py --ablate lex                  # AUC with the lexical half zeroed
+```
+
+**Acceptance bar:** ROC-AUC ≥ 0.70 and hook-class median score at least 0.20 above
+non-hook-class median, measured against `hook_labels.yaml` (50 hand-labeled sentences drawn
+from this checkout's real `chunks.json`, stratified across the score range for labeling
+diversity — see that file's header for the sampling method).
+
+### v0 — cross-encoder relevance model (the bug)
+
+```
+backend/data/clips.json (8 real persisted clips): hook_strength 0.00001 – 0.00051
+```
+
+Every value rounds to 0% at `Math.round(v * 100)` in `ScoreBreakdown.tsx`. Root cause:
+ms-marco-MiniLM-L-6-v2 is trained to answer "is this passage a relevant search result for
+that query", not "is this sentence stylistically hook-shaped" — an ordinary opening sentence
+is not a relevant result for the "query" *"You won't believe what happened next."*, so the
+logit is strongly negative before the sigmoid ever runs.
+
+### v1 — bi-encoder + lexical blend, corpus-only calibration (2026-08-05)
+
+Measured over the 436 real sentences in `backend/data/chunks.json`:
+
+```
+max-archetype-cosine:  p5=0.0615  p50=0.1585  p95=0.2738  p99=0.3514  max=0.4112
+lexical-cue blend:     p50=0.0    p75=0.20    p95=0.35    p99=0.50
+correlation(sem, lex): -0.075   (near-independent)
+```
+
+`(cos + 1) / 2` — the textbook mapping `_taste_match` uses for cosine similarity — would have
+compressed the entire real archetype-cosine spread into roughly `[0.48, 0.71]`; `HOOK_RAW_FLOOR`/
+`HOOK_RAW_CEIL` map from the measured range instead. First guess at the weight split was
+0.45 semantic / 0.55 lexical, reasoned from the near-zero correlation alone — see v2, that
+reasoning doesn't actually hold up against labels.
+
+### v2 — weight split against hand labels
+
+`hook_labels.yaml` created: 50 real sentences (10 judged a hook, 40 not), stratified across
+the semantic-cosine score range so the set isn't accidentally all-easy or all-hard. Swept the
+semantic/lexical weight split from 0/1 to 1/0 in steps of 0.02, checking AUC *and* median
+delta together (checking AUC alone is what produced the 0.45/0.55 guess above, and it hid
+that 0.45/0.55 has a visibly weaker median gap than a more lexical-heavy split):
+
+```
+sem=1.00 lex=0.00   AUC=0.702   delta=+0.04
+sem=0.50 lex=0.50   AUC=0.695   delta=+0.09
+sem=0.45 lex=0.55   AUC=0.695   delta=+0.12
+sem=0.20 lex=0.80   AUC=0.668   delta=+0.22   <- selected
+sem=0.00 lex=1.00   AUC=0.605   delta=+0.20
+```
+
+`sem=0.20/lex=0.80` clears the median-delta bar (+0.22 ≥ +0.20) while staying close to the
+best observed AUC (0.67 vs 0.70) — the best *joint* result in the sweep, not the top AUC in
+isolation. **Honest result, not a clean pass:** no split in the swept range cleared both bars
+at once. `FLOOR`/`CEIL` were then re-measured for this specific split over the full,
+*unbiased* 436-sentence corpus (not `hook_labels.yaml`'s own percentiles — that set is
+deliberately stratified toward extremes for labeling diversity, so its percentiles would not
+represent the true corpus distribution):
+
+```
+python eval/hook_eval.py --labels --distribution
+
+Calibrated hook_strength percentiles (full corpus): p5=0.0001 p25=0.041 p50=0.130 p75=0.418
+  p95=0.715 p99=1.000 max=1.000   (1.1% saturated at 1.0 — was ~100% saturated at 0% before)
+Hook-class median: 0.3304   Non-hook-class median: 0.1069   Delta: +0.2235
+ROC-AUC: 0.6675
+```
+
+**This is not "done."** 50 labels on a 4-video corpus (one of which is song lyrics) is enough
+to catch the original bug and get a directionally-sound, spread signal — it is not enough to
+trust the exact weight split with confidence. Before relying on this further: label more
+sentences (aim for 100+, evenly across several more real creator videos so "hook" isn't
+dominated by one channel's style), re-run the sweep, and only move `HOOK_SEM_WEIGHT`/
+`HOOK_LEX_WEIGHT`/`HOOK_RAW_FLOOR`/`HOOK_RAW_CEIL` if the new sweep's joint-best point moves —
+update this section (and the calibration comment above `clip_scoring.WEIGHTS`) with the new
+numbers and date when it does. Don't move these on vibes.

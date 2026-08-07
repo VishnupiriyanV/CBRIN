@@ -67,7 +67,7 @@ def call_llm(system: str, user: str, schema: Dict[str, Any], temperature: float 
     provider seam in one place and translates LLMUnavailable into a StudioError."""
     try:
         return llm_client.complete_json_with_usage(
-            system, user, schema, temperature=temperature, max_tokens=max_tokens
+            system, user, schema, temperature=temperature, max_tokens=max_tokens, for_tools=True
         )
     except llm_client.LLMUnavailable as e:
         raise LLMNotConfigured(str(e)) from e

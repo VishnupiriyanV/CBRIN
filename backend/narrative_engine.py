@@ -32,6 +32,12 @@ WINDOW_SENTENCE_COUNT = 60
 WINDOW_OVERLAP = 10
 WORD_COUNT_WINDOW_THRESHOLD = 6000
 
+# 60 sentences can plausibly carry ~15 beats at ~120 tokens of JSON each, plus headroom —
+# without this, a long window's response could get silently truncated mid-JSON, which
+# surfaces as a JSONDecodeError indistinguishable from a real provider failure.
+BEAT_MAX_TOKENS = 4000
+BEAT_TEMPERATURE = 0.2
+
 _SYSTEM_PROMPT = """You are analyzing a spoken video transcript to find its narrative beats — \
 the structural moments that make a clip land: hooks, setups, punchlines, confessions, \
 turning points, lessons, payoffs, calls-to-action, and tangents to skip.
@@ -50,11 +56,14 @@ context, the [N] index where that required context begins. null if self-containe
 
 Respond with ONLY a JSON object of the form {"beats": [...]}. No prose, no markdown fences."""
 
+# Matches what _SYSTEM_PROMPT actually asks for — an object with a "beats" array. This used to
+# be {"type": "array", ...}, which only worked because llm_client.complete_json's object->array
+# unwrap heuristic happened to fall through to "pick the longest list value" and guess right.
+# Declaring the real shape means validation failure is diagnosable instead of a guess away from
+# silently misparsing.
 _BEAT_SCHEMA = {
-    "type": "array",
-    "items": {
-        "required": ["beat_type", "start_sentence_idx", "end_sentence_idx"],
-    },
+    "type": "object",
+    "required": ["beats"],
 }
 
 
@@ -125,37 +134,122 @@ def _validate_and_clean_beats(beats: List[Dict[str, Any]], sentences_by_idx: Dic
     return cleaned
 
 
-def extract_beats(sentences: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _windows_for(sentences: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
+    total_words = sum(len(s["text"].split()) for s in sentences)
+    if total_words <= WORD_COUNT_WINDOW_THRESHOLD or len(sentences) <= WINDOW_SENTENCE_COUNT:
+        return [sentences]
+
+    windows = []
+    step = WINDOW_SENTENCE_COUNT - WINDOW_OVERLAP
+    for start in range(0, len(sentences), step):
+        windows.append(sentences[start:start + WINDOW_SENTENCE_COUNT])
+        if start + WINDOW_SENTENCE_COUNT >= len(sentences):
+            break
+    return windows
+
+
+def _extract_beats_for_window(
+    window: List[Dict[str, Any]], allow_split: bool = True
+) -> "tuple[List[Dict[str, Any]], Dict[str, Any]]":
+    """Runs one window through the LLM. On a context-length failure — the one failure mode
+    that's deterministic rather than transient, so a plain retry on the same window would
+    fail identically — splits the window in half once and merges the two halves' beats and
+    usage. `allow_split=False` on the recursive calls caps this at a single split."""
+    transcript_text = _format_transcript_window(window)
+    try:
+        parsed, usage = llm_client.complete_json_with_usage(
+            _SYSTEM_PROMPT, transcript_text, _BEAT_SCHEMA,
+            max_tokens=BEAT_MAX_TOKENS, temperature=BEAT_TEMPERATURE,
+        )
+    except llm_client.LLMUnavailable as e:
+        if allow_split and llm_client.is_context_length_error(str(e)) and len(window) > 1:
+            mid = len(window) // 2
+            beats_a, usage_a = _extract_beats_for_window(window[:mid], allow_split=False)
+            beats_b, usage_b = _extract_beats_for_window(window[mid:], allow_split=False)
+            merged_usage = {
+                "prompt_tokens": usage_a.get("prompt_tokens", 0) + usage_b.get("prompt_tokens", 0),
+                "completion_tokens": usage_a.get("completion_tokens", 0) + usage_b.get("completion_tokens", 0),
+                "model": usage_b.get("model") or usage_a.get("model"),
+            }
+            return beats_a + beats_b, merged_usage
+        raise
+    beats = parsed.get("beats") if isinstance(parsed, dict) else parsed
+    return (beats if isinstance(beats, list) else []), usage
+
+
+def extract_beats_with_report(
+    sentences: List[Dict[str, Any]]
+) -> "tuple[List[Dict[str, Any]], Dict[str, Any]]":
     """
-    LLM-backed beat extraction. Raises llm_client.LLMUnavailable if no key is configured or
-    the provider fails even after retry — callers should fall back to heuristic_beats().
+    Windowed LLM beat extraction that tolerates per-window failure.
+
+    A single LLMUnavailable from one window used to discard every beat successfully
+    extracted from every OTHER window (6 good windows + 1 rate-limited window == full
+    heuristic fallback for the whole video) — each window is now wrapped individually, and
+    LLMUnavailable is raised only if EVERY window failed.
+
+    Returns (beats, report) where report carries windows_total/windows_ok/windows_failed/
+    errors/model/prompt_tokens/completion_tokens — the honest record analyze_video's
+    degraded/degraded_reason/mode fields are derived from, instead of the old approach of
+    inferring "did the LLM run" from key presence alone.
     """
+    empty_report = {
+        "windows_total": 0, "windows_ok": 0, "windows_failed": 0, "errors": [],
+        "model": llm_client.get_model(), "prompt_tokens": 0, "completion_tokens": 0,
+    }
     if not sentences:
-        return []
+        return [], empty_report
 
     sentences_by_idx = {s["sentence_idx"]: s for s in sentences}
-    total_words = sum(len(s["text"].split()) for s in sentences)
-
-    if total_words <= WORD_COUNT_WINDOW_THRESHOLD or len(sentences) <= WINDOW_SENTENCE_COUNT:
-        windows = [sentences]
-    else:
-        windows = []
-        step = WINDOW_SENTENCE_COUNT - WINDOW_OVERLAP
-        for start in range(0, len(sentences), step):
-            windows.append(sentences[start:start + WINDOW_SENTENCE_COUNT])
-            if start + WINDOW_SENTENCE_COUNT >= len(sentences):
-                break
+    windows = _windows_for(sentences)
 
     all_beats: List[Dict[str, Any]] = []
+    errors: List[str] = []
+    windows_ok = 0
+    report_model = llm_client.get_model()
+    prompt_tokens = 0
+    completion_tokens = 0
+
     for window in windows:
-        transcript_text = _format_transcript_window(window)
-        raw = llm_client.complete_json(_SYSTEM_PROMPT, transcript_text, _BEAT_SCHEMA)
-        if isinstance(raw, dict):
-            raw = raw.get("beats", [])
-        all_beats.extend(raw if isinstance(raw, list) else [])
+        try:
+            beats_for_window, usage = _extract_beats_for_window(window)
+            all_beats.extend(beats_for_window)
+            windows_ok += 1
+            report_model = usage.get("model") or report_model
+            prompt_tokens += usage.get("prompt_tokens", 0) or 0
+            completion_tokens += usage.get("completion_tokens", 0) or 0
+        except llm_client.LLMUnavailable as e:
+            errors.append(str(e))
+
+    report = {
+        "windows_total": len(windows),
+        "windows_ok": windows_ok,
+        "windows_failed": len(windows) - windows_ok,
+        "errors": errors,
+        "model": report_model,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+    }
+
+    if windows_ok == 0:
+        raise llm_client.LLMUnavailable(
+            f"LLM beat extraction failed for all {len(windows)} transcript window(s): "
+            + "; ".join(errors[:3])
+        )
 
     cleaned = _validate_and_clean_beats(all_beats, sentences_by_idx)
-    return _dedupe_beats(cleaned)
+    return _dedupe_beats(cleaned), report
+
+
+def extract_beats(sentences: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    LLM-backed beat extraction. Raises llm_client.LLMUnavailable if every transcript window
+    fails — callers should fall back to heuristic_beats(). Thin wrapper around
+    extract_beats_with_report() for callers (e.g. backend/eval/clip_eval.py) that only need
+    the beats, not the extraction report.
+    """
+    beats, _report = extract_beats_with_report(sentences)
+    return beats
 
 
 def _dedupe_beats(beats: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -270,6 +364,26 @@ def _covering_beat(all_beats: List[Dict[str, Any]], idx: int) -> Optional[Dict[s
     return None
 
 
+HOOK_PREFERRED_TYPES = ("hook", "confession", "turning_point")
+
+
+def _covering_beat_type(all_beats: List[Dict[str, Any]], idx: int) -> Optional[str]:
+    """Beat type covering `idx`, preferring 'hook' (then confession/turning_point) when
+    several beats overlap it — a clip's opening sentence is frequently inside both a setup
+    beat and a hook beat, and _covering_beat returns whichever comes first in list order
+    (usually the setup), which is the wrong one for clip_scoring's beat_bonus."""
+    covering_types = [
+        b["beat_type"] for b in all_beats
+        if b["start_sentence_idx"] <= idx <= b["end_sentence_idx"]
+    ]
+    if not covering_types:
+        return None
+    for t in HOOK_PREFERRED_TYPES:
+        if t in covering_types:
+            return t
+    return covering_types[0]
+
+
 def _build_candidate_for_seed(
     seed: Dict[str, Any],
     all_beats: List[Dict[str, Any]],
@@ -339,6 +453,15 @@ def _build_candidate_for_seed(
                 "seed_beat": seed,
                 "title": seed.get("title") or "Untitled clip",
                 "quotable_line": seed.get("quotable_line", ""),
+                # Computed against candidate_start — the exact sentence clip_scoring.rank()
+                # scores as the opening (clip_scoring.py's opening_idx = start_sentence_idx)
+                # — so clip_scoring's hook beat_bonus and the text it actually scores now
+                # refer to the same sentence. Before this existed, the bonus looked for a
+                # "hook"-typed beat inside `beats` (included_beats above), but that list can
+                # structurally never contain one: beats_to_candidates seeds candidates only
+                # on PAYOFF_BEAT_TYPES, and this function only ever adds the seed plus its
+                # own setup chain — so the bonus could essentially never fire.
+                "opening_beat_type": _covering_beat_type(all_beats, candidate_start),
             }
 
     # Neither the fully-satisfied nor the direct-only window fits within [MIN, MAX] — the
@@ -396,23 +519,68 @@ def beats_to_candidates(sentences: List[Dict[str, Any]], beats: List[Dict[str, A
 def analyze_video(sentences: List[Dict[str, Any]], max_clips: int = 6) -> Dict[str, Any]:
     """
     Top-level orchestration: try LLM beat extraction, fall back to heuristic mode on any
-    failure, then run the constraint solver. Returns beats/candidates/degraded — ranking
-    and truncation to max_clips happens in clip_scoring.rank(), called by the API layer.
+    failure, then run the constraint solver.
+
+    Returns {beats, candidates, degraded, mode, degraded_reason, extraction}:
+      mode: "llm" (every window succeeded) | "llm_partial" (some windows failed, but at
+            least one succeeded — real LLM beats plus a documented gap) | "heuristic"
+            (no key configured, or every window failed).
+      degraded: True unless mode == "llm" — computed from what ACTUALLY happened during
+                extraction, never from key presence alone. The old version set this once
+                from is_configured() before extraction even ran and never updated it when
+                extract_beats threw (the exception was just print()'d) — so heuristic beats
+                could be persisted with degraded=False and the UI never warned. Proof this
+                happened for real: backend/data/clips.json had 8 clips, all degraded=false,
+                yet 6 carried titles ("Question and answer", "Turning point") that only
+                heuristic_beats() ever produces.
+      degraded_reason: one honest sentence for the UI, or None when mode == "llm".
+      extraction: the report dict from extract_beats_with_report(), or None if the LLM was
+                  never attempted (no key configured).
     """
-    degraded = False
     beats: List[Dict[str, Any]] = []
+    mode = "heuristic"
+    degraded_reason = None
+    extraction = None
 
     if llm_client.is_configured():
         try:
-            beats = extract_beats(sentences)
-        except llm_client.LLMUnavailable:
-            degraded = True
+            beats, extraction = extract_beats_with_report(sentences)
+            if extraction["windows_failed"] == 0:
+                mode = "llm"
+            else:
+                mode = "llm_partial"
+                degraded_reason = (
+                    f"LLM analyzed {extraction['windows_ok']} of {extraction['windows_total']} "
+                    f"transcript window(s); {extraction['windows_failed']} failed. Beats from "
+                    f"part of the transcript may be missing."
+                )
+        except llm_client.LLMUnavailable as e:
+            print(f"[NarrativeEngine] LLM beat extraction failed for every window: {e}")
+            degraded_reason = (
+                f"LLM beat extraction failed for every transcript window ({e}) — "
+                f"beats came from heuristic detection instead."
+            )
     else:
-        degraded = True
+        degraded_reason = (
+            "No LLM key configured (VAULT_LLM_API_KEY) — beats came from heuristic detection."
+        )
 
     if not beats:
         beats = heuristic_beats(sentences)
-        degraded = True
+        mode = "heuristic"
+        if degraded_reason is None:
+            degraded_reason = "LLM returned no usable beats — beats came from heuristic detection."
+
+    print(f"[NarrativeEngine] beats mode={mode} "
+          f"windows={(extraction or {}).get('windows_ok', '-')}/{(extraction or {}).get('windows_total', '-')} "
+          f"model={(extraction or {}).get('model', llm_client.get_model())}")
 
     candidates = beats_to_candidates(sentences, beats)
-    return {"beats": beats, "candidates": candidates, "degraded": degraded}
+    return {
+        "beats": beats,
+        "candidates": candidates,
+        "degraded": mode != "llm",
+        "mode": mode,
+        "degraded_reason": degraded_reason,
+        "extraction": extraction,
+    }

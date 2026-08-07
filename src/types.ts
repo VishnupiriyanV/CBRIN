@@ -127,10 +127,22 @@ export interface ClipCandidate {
   title: string;
   quotable_line: string;
   beats: NarrativeBeat[];
+  // The beat type covering the clip's opening sentence, preferring "hook" — feeds
+  // clip_scoring's hook_strength beat_bonus. Not present on older persisted clips.
+  opening_beat_type?: string | null;
   signals: ClipSignals;
+  // Explainable cues behind derived signals (currently just hook_strength) — separate from
+  // `signals` because clip_scoring.score_candidate's composite is a weighted sum keyed by
+  // WEIGHTS, so anything added to `signals` without a matching weight throws server-side.
+  signal_details?: { hook_cues?: Record<string, number> };
   composite: number;
   reason: string;
   degraded: boolean;
+  // Present once analyze_video's mode/degraded_reason are populated (see narrative_engine.py
+  // analyze_video). Older persisted clips predate this contract and won't have it — render a
+  // sensible fallback rather than assuming it's always set.
+  degraded_reason?: string | null;
+  analysis_mode?: 'llm' | 'llm_partial' | 'heuristic';
   timing_precise: boolean;
 }
 

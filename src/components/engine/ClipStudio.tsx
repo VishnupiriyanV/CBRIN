@@ -65,7 +65,14 @@ export const ClipStudio: React.FC<ClipStudioProps> = ({ videos, backendOnline })
   };
 
   const isRunning = job && job.status !== 'done' && job.status !== 'failed';
-  const isDegraded = clips.length > 0 && clips.some((c) => c.degraded);
+  const degradedClip = clips.find((c) => c.degraded);
+  const isDegraded = clips.length > 0 && !!degradedClip;
+  // llm_partial means real LLM beats plus a documented gap, not a total fallback — it gets a
+  // softer tone than a full heuristic run so the two aren't visually indistinguishable (an
+  // identical alarm for both trains people to stop reading either one).
+  const isPartial = degradedClip?.analysis_mode === 'llm_partial';
+  const degradedReason = degradedClip?.degraded_reason
+    ?? 'No LLM key configured (or provider unavailable) — these clips use heuristic beat detection, a weaker but always-available fallback.';
 
   return (
     <div className="space-y-6">
@@ -142,11 +149,19 @@ export const ClipStudio: React.FC<ClipStudioProps> = ({ videos, backendOnline })
         {error && <p className="text-[10px] font-mono text-red-400">{error}</p>}
       </div>
 
-      {/* Degraded-mode notice — mirrors the search layer's amber banner treatment */}
+      {/* Degraded-mode notice — mirrors the search layer's amber banner treatment. Softer
+          tone for a partial LLM run (some transcript windows failed) than a full heuristic
+          fallback (no LLM ran at all). */}
       {isDegraded && (
-        <div className="bg-amber-950/30 border border-amber-800/30 rounded-xl p-3 text-xs text-amber-300 font-mono text-center flex items-center justify-center gap-2 animate-fade-in">
+        <div
+          className={
+            isPartial
+              ? 'bg-yellow-950/20 border border-yellow-800/20 rounded-xl p-3 text-xs text-yellow-300/90 font-mono text-center flex items-center justify-center gap-2 animate-fade-in'
+              : 'bg-amber-950/30 border border-amber-800/30 rounded-xl p-3 text-xs text-amber-300 font-mono text-center flex items-center justify-center gap-2 animate-fade-in'
+          }
+        >
           <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-          <span>No LLM key configured (or provider unavailable) — these clips use heuristic beat detection, a weaker but always-available fallback.</span>
+          <span>{degradedReason}</span>
         </div>
       )}
 

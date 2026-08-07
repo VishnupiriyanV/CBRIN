@@ -8,6 +8,9 @@ Run with: python -m pytest backend/tests/test_narrative_engine.py -v
 """
 import os
 import sys
+from unittest.mock import patch
+
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -114,6 +117,33 @@ class TestDurationBounds:
         assert candidates == []
 
 
+class TestOpeningBeatType:
+    def test_candidate_carries_opening_beat_type_preferring_hook(self):
+        # The opening sentence (idx 0) is covered by BOTH a "setup" beat and a "hook" beat —
+        # _covering_beat (used elsewhere for dependency resolution) returns whichever comes
+        # first in list order, which is usually the setup. clip_scoring's beat_bonus needs
+        # "hook" specifically, so _covering_beat_type must prefer it when both overlap.
+        sentences = _sentences(10, sec_per_sentence=3)
+        beats = [
+            _beat("setup", 0, 1, requires=None),
+            _beat("hook", 0, 0, requires=None),
+            _beat("punchline", 7, 7, requires=0, title="The punchline"),
+        ]
+        candidates = ne.beats_to_candidates(sentences, beats)
+        assert len(candidates) == 1
+        assert candidates[0]["opening_beat_type"] == "hook"
+
+    def test_opening_beat_type_falls_back_to_the_only_covering_beat(self):
+        # No dedicated hook beat here — the opening sentence is only covered by the seed
+        # (punchline) beat itself, so that's what opening_beat_type reports. Spans several
+        # sentences (not a single one) so the candidate clears MIN_CLIP_SEC=12s.
+        sentences = _sentences(10, sec_per_sentence=3)
+        beats = [_beat("punchline", 2, 6, requires=None)]
+        candidates = ne.beats_to_candidates(sentences, beats)
+        assert len(candidates) == 1
+        assert candidates[0]["opening_beat_type"] == "punchline"
+
+
 class TestMerging:
     def test_overlapping_candidates_are_merged(self):
         sentences = _sentences(15, sec_per_sentence=3)
@@ -139,6 +169,147 @@ class TestHeuristicBeatsDegradedMode:
 
     def test_heuristic_beats_empty_transcript(self):
         assert ne.heuristic_beats([]) == []
+
+
+class TestBeatSchemaObjectShape:
+    def test_beat_schema_is_object_not_array(self):
+        # _SYSTEM_PROMPT demands {"beats": [...]} — the schema used to declare
+        # {"type": "array", ...}, which only worked because llm_client's unwrap heuristic
+        # happened to fall through to "pick the longest list value" and guess right.
+        assert ne._BEAT_SCHEMA["type"] == "object"
+        assert "beats" in ne._BEAT_SCHEMA["required"]
+
+    def test_extract_beats_for_window_reads_beats_key_directly(self):
+        with patch.object(ne.llm_client, "complete_json_with_usage", return_value=(
+            {"beats": [{
+                "beat_type": "hook", "start_sentence_idx": 0, "end_sentence_idx": 0,
+                "requires_setup_from_idx": None, "title": "t", "why_it_lands": "",
+                "emotional_arc": {}, "self_contained": True, "quotable_line": "",
+            }]},
+            {"prompt_tokens": 1, "completion_tokens": 1, "model": "m"},
+        )):
+            beats, usage = ne._extract_beats_for_window([_sentence(0, "hello world", 0, 3)])
+        assert len(beats) == 1
+        assert beats[0]["beat_type"] == "hook"
+        assert usage["model"] == "m"
+
+
+class TestWindowedExtractionTolerance:
+    def test_one_failed_window_does_not_discard_the_others(self, monkeypatch):
+        # A single LLMUnavailable from one window used to discard every beat successfully
+        # extracted from every OTHER window — 6 good windows + 1 bad one meant a full
+        # heuristic fallback for the whole video. Force 3 tiny windows (2 sentences each) and
+        # fail only the middle one.
+        monkeypatch.setattr(ne, "WORD_COUNT_WINDOW_THRESHOLD", 0)
+        monkeypatch.setattr(ne, "WINDOW_SENTENCE_COUNT", 2)
+        monkeypatch.setattr(ne, "WINDOW_OVERLAP", 0)
+        sentences = _sentences(6)  # -> 3 windows of 2 sentences: [0,1] [2,3] [4,5]
+
+        call_count = {"n": 0}
+
+        def fake_complete(system, user, schema, max_retries=1, temperature=0.2, max_tokens=None, for_tools=False):
+            call_count["n"] += 1
+            if call_count["n"] == 2:
+                raise ne.llm_client.LLMUnavailable("simulated rate limit on window 2")
+            start = 0 if call_count["n"] == 1 else 4
+            return (
+                {"beats": [{
+                    "beat_type": "punchline", "start_sentence_idx": start, "end_sentence_idx": start + 1,
+                    "requires_setup_from_idx": None, "title": "t", "why_it_lands": "",
+                    "emotional_arc": {}, "self_contained": True, "quotable_line": "",
+                }]},
+                {"prompt_tokens": 10, "completion_tokens": 5, "model": "test-model"},
+            )
+
+        with patch.object(ne.llm_client, "complete_json_with_usage", side_effect=fake_complete):
+            beats, report = ne.extract_beats_with_report(sentences)
+
+        assert report["windows_total"] == 3
+        assert report["windows_ok"] == 2
+        assert report["windows_failed"] == 1
+        assert len(report["errors"]) == 1
+        start_indices = {b["start_sentence_idx"] for b in beats}
+        assert start_indices == {0, 4}
+
+    def test_all_windows_failing_raises_llm_unavailable(self, monkeypatch):
+        monkeypatch.setattr(ne, "WORD_COUNT_WINDOW_THRESHOLD", 0)
+        monkeypatch.setattr(ne, "WINDOW_SENTENCE_COUNT", 2)
+        monkeypatch.setattr(ne, "WINDOW_OVERLAP", 0)
+        sentences = _sentences(4)
+
+        def always_fail(*a, **kw):
+            raise ne.llm_client.LLMUnavailable("simulated total failure")
+
+        with patch.object(ne.llm_client, "complete_json_with_usage", side_effect=always_fail):
+            with pytest.raises(ne.llm_client.LLMUnavailable):
+                ne.extract_beats_with_report(sentences)
+
+
+class TestAnalyzeVideoHonestDegradation:
+    """analyze_video's `degraded` flag used to be computed once from is_configured() before
+    extraction even ran, and never updated when extract_beats threw (the exception was only
+    print()'d) — so heuristic beats could be persisted with degraded=False. Proof this
+    happened for real: backend/data/clips.json had 8 clips, all degraded=false, yet 6 carried
+    titles ("Question and answer", "Turning point") that only heuristic_beats() produces."""
+
+    def test_partial_window_failure_reports_llm_partial_with_honest_reason(self, monkeypatch):
+        monkeypatch.setattr(ne, "WORD_COUNT_WINDOW_THRESHOLD", 0)
+        monkeypatch.setattr(ne, "WINDOW_SENTENCE_COUNT", 2)
+        monkeypatch.setattr(ne, "WINDOW_OVERLAP", 0)
+        sentences = _sentences(4)  # -> 2 windows
+
+        call_count = {"n": 0}
+
+        def fake_complete(system, user, schema, max_retries=1, temperature=0.2, max_tokens=None, for_tools=False):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return (
+                    {"beats": [{
+                        "beat_type": "punchline", "start_sentence_idx": 0, "end_sentence_idx": 1,
+                        "requires_setup_from_idx": None, "title": "t", "why_it_lands": "",
+                        "emotional_arc": {}, "self_contained": True, "quotable_line": "",
+                    }]},
+                    {"prompt_tokens": 5, "completion_tokens": 5, "model": "m"},
+                )
+            raise ne.llm_client.LLMUnavailable("simulated failure")
+
+        with patch.object(ne.llm_client, "complete_json_with_usage", side_effect=fake_complete), \
+             patch.object(ne.llm_client, "is_configured", return_value=True):
+            result = ne.analyze_video(sentences)
+
+        assert result["mode"] == "llm_partial"
+        assert result["degraded"] is True
+        assert result["degraded_reason"] is not None
+        assert "1" in result["degraded_reason"]
+
+    def test_all_windows_failing_falls_back_to_heuristic_and_says_so(self, monkeypatch):
+        monkeypatch.setattr(ne, "WORD_COUNT_WINDOW_THRESHOLD", 0)
+        monkeypatch.setattr(ne, "WINDOW_SENTENCE_COUNT", 2)
+        monkeypatch.setattr(ne, "WINDOW_OVERLAP", 0)
+        sentences = _sentences(4)
+
+        def always_fail(*a, **kw):
+            raise ne.llm_client.LLMUnavailable("simulated total failure")
+
+        with patch.object(ne.llm_client, "complete_json_with_usage", side_effect=always_fail), \
+             patch.object(ne.llm_client, "is_configured", return_value=True):
+            result = ne.analyze_video(sentences)
+
+        assert result["mode"] == "heuristic"
+        assert result["degraded"] is True
+        assert result["degraded_reason"] is not None
+        assert "heuristic" in result["degraded_reason"].lower()
+        # Beat titles are the retroactive discriminator: heuristic_beats() only ever emits
+        # these three literals — any other title means an LLM wrote it.
+        assert all(b["title"] in ("Opening line", "Question and answer", "Turning point") for b in result["beats"])
+
+    def test_no_key_configured_is_heuristic_with_honest_reason(self, monkeypatch):
+        sentences = _sentences(4)
+        with patch.object(ne.llm_client, "is_configured", return_value=False):
+            result = ne.analyze_video(sentences)
+        assert result["mode"] == "heuristic"
+        assert result["degraded"] is True
+        assert "no llm key" in result["degraded_reason"].lower() or "not configured" in result["degraded_reason"].lower()
 
 
 class TestBeatValidation:
