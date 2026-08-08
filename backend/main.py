@@ -43,6 +43,10 @@ import voice_profile
 import tool_runs
 import usage
 
+# One short grounded answer above search results — same llm_client/usage plumbing, but
+# strictly optional: see POST /api/answer for why it never blocks or fails a search.
+import answer_prompts
+
 
 def _repair_stale_chunks(store: "VectorStore"):
     """
@@ -221,6 +225,14 @@ class SearchQuery(BaseModel):
     search_mode: Optional[str] = "spoken"  # spoken, visual_scenes
 
 
+class AnswerRequest(BaseModel):
+    query: str
+    # The already-retrieved results, passed back from the client rather than re-searched
+    # here: search has already been paid for, and answering the exact result set the user is
+    # looking at is what makes the citation markers line up with the cards on screen.
+    results: List[Dict[str, Any]]
+
+
 class IngestRequest(BaseModel):
     youtube_url: str
 
@@ -379,6 +391,56 @@ def search_vault(payload: SearchQuery):
         top_k=payload.top_k or 5,
         search_mode=payload.search_mode or "spoken"
     )
+
+
+@app.post("/api/answer")
+def synthesize_answer(payload: AnswerRequest):
+    """One short, cited answer grounded in the results the user is already looking at.
+
+    Separate from /api/search on purpose. Search is retrieval-only and must stay fast and
+    LLM-free: results render immediately, and if this route is slow, rate-limited, or has no
+    provider configured, the user still has a complete set of moments. Every failure here is
+    therefore a soft one — `{"answer": null}` with a reason, never an error that a caller
+    could mistake for the search itself having failed.
+    """
+    if not payload.query.strip() or not payload.results:
+        return {"answer": None, "citations": [], "reason": "nothing to answer from"}
+
+    if not llm_client.is_configured():
+        return {"answer": None, "citations": [], "reason": "no LLM API key configured"}
+
+    try:
+        usage.check_rate_limit()
+    except usage.RateLimitExceeded as e:
+        return {"answer": None, "citations": [], "reason": str(e)}
+
+    try:
+        answer, call_usage = answer_prompts.generate_answer(payload.query, payload.results)
+    except llm_client.LLMUnavailable as e:
+        return {"answer": None, "citations": [], "reason": str(e)}
+
+    # Recorded against the same meter STUDIO uses so this route's spend is visible in
+    # GET /api/studio/usage rather than being invisible cost on the same API key.
+    #
+    # Never fatal: the call has already been made and paid for, so discarding a good answer
+    # because a bookkeeping write failed is strictly worse than losing one log line. Seen in
+    # practice as a PermissionError from atomic_io's rename on Windows when another process
+    # held tool_usage.json — which took the whole endpoint down with a 500.
+    try:
+        usage.record("search_answer", call_usage)
+    except Exception as e:
+        print(f"[Cbrin] Failed to record answer usage (answer still returned): {e}")
+
+    if answer is None:
+        # The model was asked and declined (or failed validation) — a real outcome, and the
+        # honest one when retrieval found topical moments that don't actually answer.
+        return {"answer": None, "citations": [], "reason": "quotes do not answer the question"}
+
+    return {
+        "answer": answer["answer"],
+        "citations": answer["citations"],
+        "truncated": answer["truncated"],
+    }
 
 
 def _run_youtube_ingest_job(youtube_url: str):

@@ -125,6 +125,163 @@ class TestRerankerUnavailableFallback:
         assert "per-moment visual data" in resp.get("message", "")
 
 
+class TestDisplayGates:
+    """The second, stricter pass that decides what's worth SHOWING among what's plausible.
+
+    Covers the failure this was written for: a query whose signal is spread across one video
+    returned every above-threshold moment from it (six results, all one video, ~100+ words
+    each), which reads as six answers to one question.
+    """
+
+    @staticmethod
+    def _cands(*scores_and_vids):
+        return [
+            {"score": s, "video_id": v, "id": f"c{i}", "start_sec": i * 100.0, "end_sec": i * 100.0 + 10.0}
+            for i, (s, v) in enumerate(scores_and_vids)
+        ]
+
+    def test_per_video_cap_limits_one_video_from_filling_every_slot(self):
+        cands = self._cands((0.99, "vid-a"), (0.98, "vid-a"), (0.97, "vid-a"), (0.96, "vid-a"))
+        kept = vs.VectorStore._apply_display_gates(cands, absolute_floor=0.10)
+        assert len(kept) == vs.MAX_RESULTS_PER_VIDEO
+        assert [c["score"] for c in kept] == [0.99, 0.98], "must keep the highest-scoring ones"
+
+    def test_per_video_cap_is_per_video_not_global(self):
+        cands = self._cands((0.99, "vid-a"), (0.98, "vid-a"), (0.97, "vid-a"), (0.96, "vid-b"))
+        kept = vs.VectorStore._apply_display_gates(cands, absolute_floor=0.10)
+        assert len(kept) == 3
+        assert {c["video_id"] for c in kept} == {"vid-a", "vid-b"}
+
+    def test_relative_floor_drops_the_weak_tail(self):
+        # Real shape from the "weather" query: a clear top hit and a distant second that only
+        # qualified because it happened to clear the permissive recall floor.
+        cands = self._cands((0.518, "vid-a"), (0.123, "vid-a"))
+        kept = vs.VectorStore._apply_display_gates(cands, absolute_floor=0.10)
+        assert [c["score"] for c in kept] == [0.518]
+
+    def test_relative_floor_keeps_genuinely_close_scores(self):
+        cands = self._cands((0.90, "vid-a"), (0.85, "vid-b"))
+        kept = vs.VectorStore._apply_display_gates(cands, absolute_floor=0.10)
+        assert len(kept) == 2, "results of comparable quality must all survive"
+
+    def test_absolute_floor_can_be_skipped_for_visual_mode(self):
+        # visual_scenes passes absolute_floor=None because VISUAL_RELEVANCE_THRESHOLD (a
+        # different, CLIP-scale number) has already gated it upstream.
+        cands = self._cands((0.05, "vid-a"),)
+        assert vs.VectorStore._apply_display_gates(cands, absolute_floor=0.10) == []
+        assert len(vs.VectorStore._apply_display_gates(cands, absolute_floor=None)) == 1
+
+    def test_empty_input_returns_empty(self):
+        assert vs.VectorStore._apply_display_gates([], absolute_floor=0.10) == []
+
+    def test_candidates_below_display_bar_become_near_misses_not_empty(self):
+        """"Nothing confident enough to lead with" must not collapse into "nothing matched"."""
+        store = _build_store_with_chunks()
+        if vs.get_cross_encoder() is None:
+            import pytest
+            pytest.skip("CrossEncoder model unavailable in this environment")
+
+        # Floor above any achievable score: everything clears the recall gate, nothing
+        # clears the display gate.
+        with patch.object(vs, "RERANK_DISPLAY_THRESHOLD", 1.1):
+            resp = store.search(query="kubernetes container orchestration", top_k=5, search_mode="spoken")
+
+        assert resp["results"] == []
+        assert len(resp["near_misses"]) > 0, (
+            "candidates that cleared the relevance bar but not the display bar must be "
+            "demoted to near_misses, not silently dropped into the empty state"
+        )
+        assert all(nm["confidence"] == "weak" for nm in resp["near_misses"])
+
+    def test_degraded_path_ignores_display_gates(self):
+        """Degraded scores are on an entirely different scale — these gates are meaningless
+        there and must not be applied, or the degraded fallback returns nothing."""
+        store = _build_store_with_chunks()
+        with patch.object(vs, "get_cross_encoder", return_value=None), \
+             patch.object(vs, "RERANK_DISPLAY_THRESHOLD", 1.1), \
+             patch.object(vs, "MAX_RESULTS_PER_VIDEO", 0):
+            resp = store.search(query="kubernetes container orchestration", top_k=5, search_mode="spoken")
+
+        assert resp["degraded"] is True
+        assert len(resp["results"]) > 0
+
+
+class TestFocusQuote:
+    """Trimming the displayed quote to the sentences that actually matched."""
+
+    def test_short_windows_are_left_alone(self):
+        store = _build_store_with_chunks()
+        if vs.get_cross_encoder() is None:
+            import pytest
+            pytest.skip("CrossEncoder model unavailable in this environment")
+
+        resp = store.search(query="kubernetes container orchestration", top_k=5, search_mode="spoken")
+        for r in resp["results"]:
+            if len(r["text"].split()) <= vs.FOCUS_MAX_WORDS:
+                assert "full_text" not in r, (
+                    "full_text is the signal that trimming happened — it must be absent when "
+                    "the quote was already short, or the UI offers an expand that does nothing"
+                )
+
+    def test_long_window_is_trimmed_and_full_text_preserved(self):
+        store = _build_store_with_chunks()
+        long_sentences = [
+            _make_chunk("vid-long", i, f"Sentence number {i} about kubernetes " + "padding word " * 20, i * 10, i * 10 + 10)
+            for i in range(8)
+        ]
+        store.chunks = store.chunks + long_sentences
+        store.reindex()
+
+        video_map = {"vid-long": long_sentences}
+        cand = {
+            "video_id": "vid-long",
+            "sentence_range": (0, 7),
+            "is_legacy_window": False,
+            "text": " ".join(s["text"] for s in long_sentences),
+            "matched_sentence": long_sentences[3]["text"],
+        }
+        original = cand["text"]
+        store._focus_quote("kubernetes", cand, video_map)
+
+        assert cand["full_text"] == original
+        assert len(cand["text"].split()) < len(original.split())
+        assert len(cand["text"].split()) <= vs.FOCUS_MAX_WORDS
+        assert cand["text"] in original, "the trimmed quote must be a verbatim span of the window"
+        assert "focus_start_sec" in cand and "focus_end_sec" in cand
+
+    def test_focus_does_not_move_playback_range(self):
+        """start_sec/end_sec drive Jump and the copied citation — trimming must not touch them."""
+        store = _build_store_with_chunks()
+        long_sentences = [
+            _make_chunk("vid-long", i, f"Sentence {i} about kubernetes " + "filler " * 20, i * 10, i * 10 + 10)
+            for i in range(8)
+        ]
+        video_map = {"vid-long": long_sentences}
+        cand = {
+            "video_id": "vid-long",
+            "sentence_range": (0, 7),
+            "is_legacy_window": False,
+            "text": " ".join(s["text"] for s in long_sentences),
+            "matched_sentence": long_sentences[3]["text"],
+            "start_sec": 0.0,
+            "end_sec": 80.0,
+        }
+        store._focus_quote("kubernetes", cand, video_map)
+        assert cand["start_sec"] == 0.0
+        assert cand["end_sec"] == 80.0
+
+    def test_legacy_windows_are_skipped(self):
+        store = _build_store_with_chunks()
+        cand = {
+            "video_id": "vid-x",
+            "sentence_range": (0, 0),
+            "is_legacy_window": True,
+            "text": "word " * 200,
+        }
+        store._focus_quote("anything", cand, {})
+        assert "full_text" not in cand, "legacy chunks have no sentence index to trim against"
+
+
 class TestDeleteVideoCleansUpKeyframes:
     def test_delete_video_removes_keyframe_files(self, tmp_path, monkeypatch):
         monkeypatch.setattr(paths, "KEYFRAMES_DIR", str(tmp_path))

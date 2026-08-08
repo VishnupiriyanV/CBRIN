@@ -33,7 +33,16 @@ export interface ChunkResult {
   end_sec: number;
   start_timestamp: string;
   end_timestamp: string;
+  // `text` is the quote to display: trimmed server-side to the sentences that actually
+  // matched. `full_text` is the untrimmed merged window, present only when trimming
+  // actually happened — the UI offers it back behind "Show full passage" so the shorter
+  // default never costs the user context they wanted.
   text: string;
+  full_text?: string;
+  // Time span of the trimmed quote. Distinct from start_sec/end_sec, which still describe
+  // the full window and are what "Jump" and the copied citation use.
+  focus_start_sec?: number;
+  focus_end_sec?: number;
   score: number;
   confidence?: MatchConfidence;
   matched_concepts: string[];
@@ -61,6 +70,19 @@ export interface SearchResponse {
   // True when 'results' are unranked best-effort matches because the relevance reranker
   // was unavailable, not confidence-scored ones (see MatchConfidence 'unranked').
   degraded?: boolean;
+}
+
+// POST /api/answer. `answer` is null whenever there is nothing trustworthy to show — the
+// quotes didn't answer the question, no LLM is configured, the rate limit was hit, or the
+// call failed. All of those are the same thing to the UI: render results only. `reason` is
+// for debugging, not for display.
+export interface AnswerResponse {
+  answer: string | null;
+  // 1-based indices into the results array that was sent, already validated server-side to
+  // be in range.
+  citations: number[];
+  truncated?: boolean;
+  reason?: string;
 }
 
 export interface LibraryStats {

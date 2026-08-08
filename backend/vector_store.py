@@ -61,6 +61,47 @@ VISUAL_STRONG_THRESHOLD = 0.28
 # its use site in search() for why this exists.
 MAX_MERGED_WINDOW_SECONDS = 90
 
+# --- Display gating -----------------------------------------------------------------------
+# RERANK_RELEVANCE_THRESHOLD above answers "is this a candidate at all", and is deliberately
+# permissive so recall stays high. The three constants below answer a different question:
+# "of the things that cleared that bar, which are worth actually SHOWING?" Splitting the two
+# is the point — a query with one excellent match used to return that match plus every weak
+# thing above 0.08 beneath it, which is what made results feel padded with irrelevant hits.
+#
+# Measured on the current library (5 videos / 439 chunks) with the reranker loaded:
+#   - a clearly-answered query tops out ~0.92-0.999
+#   - a marginal-but-legitimate one-word query ("teaching", "camera") lands ~0.10-0.11
+#   - genuinely unrelated negatives cluster at ~0.000-0.001 (see the block above)
+#
+# So the absolute floor is only a small bump over the recall floor: pushing it to 0.20 would
+# demote real lone answers like those 0.10 hits to "closest match", which is a worse answer,
+# not a more accurate one. The pruning work is done by the RELATIVE floor instead, which is
+# scale-free and therefore survives the recalibration the absolute numbers will need as the
+# library grows.
+RERANK_DISPLAY_THRESHOLD = 0.10
+
+# Drop any result scoring below this fraction of the top result's score. This is what removes
+# the weak tail: for "weather" the top hit scores 0.518 and the second 0.123, i.e. the second
+# is a quarter as relevant and only looked like a result because 0.123 > 0.08. Relative, not
+# absolute, because cross-encoder scores are not comparable ACROSS queries (2.3) — but within
+# a single query's result set they rank consistently, which is exactly what this uses them for.
+RELATIVE_SCORE_FLOOR = 0.35
+
+# At most this many results from any one video. Without it a single video that happens to be
+# about the query topic fills every slot — "english lesson" returned six results, all six from
+# the same video, which reads as six answers when it's one video restated six times. The
+# time-overlap NMS in _suppress_overlapping can't catch this: these are genuinely distinct,
+# non-overlapping moments that just happen to share a source.
+MAX_RESULTS_PER_VIDEO = 2
+
+# --- Displayed quote length ---------------------------------------------------------------
+# Bounds on the trimmed quote produced by _focus_quote(). ~55 words is roughly three spoken
+# sentences — enough for a claim plus the setup that makes it parse, and short enough to read
+# without scanning. 25s is the matching time bound for windows made of long rambling sentences
+# that are few but huge. Windows already under the word cap are left alone entirely.
+FOCUS_MAX_WORDS = 55
+FOCUS_MAX_SECONDS = 25.0
+
 
 def get_cross_encoder():
     global CROSS_ENCODER_MODEL, HAS_CROSS_ENCODER
@@ -747,6 +788,114 @@ class VectorStore:
         return kept
 
     @staticmethod
+    def _apply_display_gates(candidates: List[Dict[str, Any]], absolute_floor: Optional[float]) -> List[Dict[str, Any]]:
+        """
+        Prune an already-scored, already-sorted, already-NMS'd candidate list down to what is
+        worth showing: absolute floor -> relative-to-best floor -> per-video cap.
+
+        Deliberately separate from the relevance gate in search(). The relevance gate decides
+        whether a candidate is plausible at all (and therefore whether the empty state is
+        reachable); this decides how much of the plausible set is signal. Callers must handle
+        an empty return by demoting to near_misses, NOT by falling through to the empty state
+        — "nothing was confident enough to lead with" and "nothing matched" are different
+        answers and the UI says different things for them.
+        """
+        if not candidates:
+            return []
+
+        gated = candidates
+        if absolute_floor is not None:
+            gated = [c for c in gated if c['score'] >= absolute_floor]
+        if not gated:
+            return []
+
+        top_score = gated[0]['score']
+        if top_score > 0:
+            gated = [c for c in gated if c['score'] >= top_score * RELATIVE_SCORE_FLOOR]
+
+        per_video: Dict[str, int] = {}
+        capped: List[Dict[str, Any]] = []
+        for cand in gated:
+            vid = cand.get('video_id', '')
+            if per_video.get(vid, 0) >= MAX_RESULTS_PER_VIDEO:
+                continue
+            per_video[vid] = per_video.get(vid, 0) + 1
+            capped.append(cand)
+        return capped
+
+    def _focus_quote(self, query: str, candidate: Dict[str, Any], video_chunks_map: Dict[str, List[Dict[str, Any]]]) -> None:
+        """
+        Shrink the *displayed* quote to the sentences that actually matched, in place.
+
+        The merged window (search() step 3) is the right unit to SCORE — the cross-encoder
+        needs surrounding context to judge relevance, and the merge cap lets it reach 90s. It
+        is the wrong unit to READ: it is rendered verbatim as the result card's quote, so a
+        merged window routinely put 90-140 words in front of someone who asked one question.
+
+        Keeps `start_sec`/`end_sec` untouched — those drive "Jump" and the copied citation,
+        and moving them would silently relocate playback. The trimmed span is exposed as
+        `focus_start_sec`/`focus_end_sec`, and the untrimmed window is preserved as
+        `full_text` so the UI can offer it back rather than losing context outright.
+        """
+        if candidate.get('is_legacy_window'):
+            return
+
+        full_text = candidate.get('text', '')
+        if len(full_text.split()) <= FOCUS_MAX_WORDS:
+            return
+
+        start_s, end_s = candidate['sentence_range']
+        sentences = [
+            s for s in video_chunks_map.get(candidate['video_id'], [])
+            if s.get('sentence_idx') is not None and start_s <= s['sentence_idx'] <= end_s
+        ]
+        if len(sentences) < 2:
+            return
+
+        # Pick the anchor sentence. Prefer asking the cross-encoder which sentence in the
+        # window actually answers the query (it is already loaded — this is one extra predict
+        # on <=5 results, not on the 30-candidate pool). If it is unavailable, fall back to
+        # the sentence the retriever originally matched, which is always in this window.
+        anchor = 0
+        reranker = get_cross_encoder()
+        if reranker is not None:
+            try:
+                sent_scores = reranker.predict([(query, s['text']) for s in sentences])
+                anchor = int(np.argmax(sent_scores))
+            except Exception as e:
+                print(f"[Vault] Focus-quote rerank failed, using matched sentence: {e}")
+                reranker = None
+        if reranker is None:
+            matched = candidate.get('matched_sentence', '')
+            anchor = next((i for i, s in enumerate(sentences) if s['text'] == matched), len(sentences) // 2)
+
+        # Grow outward from the anchor while the span stays readable. Expands backwards first
+        # on ties: spoken language sets up a point before making it, so the sentence before
+        # the anchor is more often the one that makes it parse than the one after.
+        lo = hi = anchor
+        words = len(sentences[anchor]['text'].split())
+        while True:
+            grew = False
+            for nxt in (lo - 1, hi + 1):
+                if not (0 <= nxt < len(sentences)) or (lo <= nxt <= hi):
+                    continue
+                cand_words = words + len(sentences[nxt]['text'].split())
+                new_lo, new_hi = min(lo, nxt), max(hi, nxt)
+                span = sentences[new_hi]['end_sec'] - sentences[new_lo]['start_sec']
+                if cand_words > FOCUS_MAX_WORDS or span > FOCUS_MAX_SECONDS:
+                    continue
+                lo, hi, words = new_lo, new_hi, cand_words
+                grew = True
+            if not grew:
+                break
+
+        focused = sentences[lo:hi + 1]
+        candidate['full_text'] = full_text
+        candidate['text'] = " ".join(s['text'] for s in focused).strip()
+        candidate['focus_start_sec'] = focused[0]['start_sec']
+        candidate['focus_end_sec'] = focused[-1]['end_sec']
+
+    @staticmethod
     def _reciprocal_rank_fusion(score_arrays: List[np.ndarray], k: int = 60) -> np.ndarray:
         """
         Fuse multiple rankers (dense cosine, BM25) into one candidate-selection score via
@@ -1065,10 +1214,26 @@ class VectorStore:
         else:
             qualifying = [c for c in merged_candidates if c['score'] >= relevance_cutoff]
             qualifying = self._suppress_overlapping(qualifying)
-            if qualifying:
-                for item in qualifying[:top_k]:
+            # Second, stricter pass: of what's plausible, what's actually worth showing?
+            # 'visual_scenes' keeps VISUAL_RELEVANCE_THRESHOLD as its own absolute floor
+            # (CLIP scale, calibrated separately) and takes only the scale-free relative
+            # floor and per-video cap on top of it.
+            displayable = self._apply_display_gates(
+                qualifying,
+                absolute_floor=None if search_mode == 'visual_scenes' else RERANK_DISPLAY_THRESHOLD,
+            )
+            if displayable:
+                for item in displayable[:top_k]:
                     item['confidence'] = 'strong' if item['score'] >= strong_cutoff else 'possible'
                     results.append(_attach_match_reason(item))
+            elif qualifying:
+                # Candidates cleared the relevance bar but none cleared the display bar. That
+                # is NOT the empty state ("nothing matched") — it's "nothing here is confident
+                # enough to lead with", so surface the best of them as closest-matches rather
+                # than throwing away real, if weak, hits.
+                for item in qualifying[:3]:
+                    item['confidence'] = 'weak'
+                    near_misses.append(_attach_match_reason(item))
             elif merged_candidates:
                 # Nothing cleared the relevance bar — this is deliberately an empty result
                 # set, not a best-effort guess (2.2). Surface the closest few candidates
@@ -1076,6 +1241,14 @@ class VectorStore:
                 for item in self._suppress_overlapping(merged_candidates)[:3]:
                     item['confidence'] = 'weak'
                     near_misses.append(_attach_match_reason(item))
+
+        # Trim displayed quotes last, on the final short lists only. Order matters: every
+        # scoring, NMS, gating and merge step above reads `text` as the full merged window,
+        # and _focus_quote deliberately leaves start_sec/end_sec alone so nothing downstream
+        # of playback or citation shifts underneath them.
+        if search_mode != 'visual_scenes':
+            for item in results + near_misses:
+                self._focus_quote(query, item, video_chunks_map)
 
         resp = {
             "query": query,
