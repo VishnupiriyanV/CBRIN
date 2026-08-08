@@ -462,7 +462,7 @@ def ingest_youtube(payload: IngestRequest):
     except ValueError:
         vid_id = None
 
-    if vid_id and vid_id in {c['video_id'] for c in store.chunks}:
+    if vid_id and store.is_indexed(vid_id):
         existing = store.videos.get(vid_id, {})
         return {
             "success": False,
@@ -560,7 +560,7 @@ async def upload_and_transcribe_file(file: UploadFile = File(...), model_tier: s
     # hash only), so it stays synchronous; only the expensive Whisper/chunk/embed work moves
     # onto the background job below.
     content_id = content_hash_id(temp_file_path)
-    if content_id in store.videos:
+    if store.is_indexed(content_id):
         os.remove(temp_file_path)
         existing = store.videos[content_id]
         return {

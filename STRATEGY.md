@@ -319,6 +319,8 @@ These survive the cut because they apply to the clip and show-notes paths that r
 - **`generate_content_pack` has never completed a live run.** Cut.
 - ~~**`tool_runs.py` / `usage.py` do whole-file JSON read-modify-write with no locking.**~~ **Fixed 2026-08-07** — all persisted stores now write through `backend/atomic_io.py` (temp file → fsync → `os.replace`), so a torn write can no longer be observed. Note the same exposure existed on `chunks.json`, which is the entire library and was never flagged here; it is covered by the same fix. See §10.
 - **The Groq key in `.env` is plaintext in the working tree.** Flagged in two prior audits, still present. Rotate it.
+- ~~**Ingest could append duplicate chunks under identical IDs.**~~ **Fixed 2026-08-07.** The YouTube and local-upload paths deduped against different sources (`store.chunks` vs `store.videos`), so a video missing its `videos.json` record but retaining chunks would be re-ingested as a full duplicate set. Both paths now use `VectorStore.is_indexed()`, which checks both. The live index was corrupted this way (709 chunks / 439 unique IDs) and has been repaired — see `HANDOFF.md` §12. **How `videos.json` lost records in the first place was never established.**
+- **`UsageBadge.tsx` calls `/api/studio/usage`, a route that does not exist** and never has. Fails silently. Implement or remove.
 
 ## D. Architectural invariants — carried forward unchanged
 
