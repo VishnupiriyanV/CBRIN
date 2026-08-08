@@ -7,10 +7,11 @@ import { VideoPlayerModal } from './components/VideoPlayerModal';
 import { LibraryModal } from './components/LibraryModal';
 import { IndexingProgressModal } from './components/IndexingProgressModal';
 import { EmptyState } from './components/EmptyState';
+import { AnswerCard } from './components/AnswerCard';
 import { ClipStudio } from './components/engine/ClipStudio';
 import { StudioView } from './components/studio/StudioView';
-import { ChunkResult, VideoItem, SearchResponse, LibraryStats } from './types';
-import { performSearch, fetchLibraryVideos, fetchLibraryStats, checkBackendHealth, fetchSuggestedQueries } from './services/api';
+import { ChunkResult, VideoItem, SearchResponse, LibraryStats, AnswerResponse } from './types';
+import { performSearch, fetchAnswer, fetchLibraryVideos, fetchLibraryStats, checkBackendHealth, fetchSuggestedQueries } from './services/api';
 import { getQueryHistory, addToQueryHistory } from './services/queryHistory';
 import { Plus, Video, WifiOff, FileDown, ChevronDown, Info, Filter } from 'lucide-react';
 
@@ -32,8 +33,13 @@ export const App: React.FC = () => {
   const [queryHistory, setQueryHistory] = useState<string[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(-1);
   const [videoFilter, setVideoFilter] = useState<string>('all');
+  const [answer, setAnswer] = useState<AnswerResponse | null>(null);
+  const [isAnswering, setIsAnswering] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const resultCardRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  // Guards against a slow answer for an earlier query landing after a newer search — the
+  // answer request is intentionally not awaited by handleSearch, so responses can race.
+  const answerRequestId = useRef(0);
 
   useEffect(() => {
     setQueryHistory(getQueryHistory());
@@ -64,11 +70,37 @@ export const App: React.FC = () => {
     refreshData();
   }, [refreshData]);
 
+  /**
+   * Fire-and-forget answer synthesis. Deliberately not awaited by the caller: results are a
+   * complete response on their own and must paint immediately, so the answer fills in above
+   * them a moment later rather than holding them back. Never throws — fetchAnswer swallows
+   * transport errors, and a null answer just means nothing is rendered.
+   */
+  const requestAnswer = useCallback((searchQuery: string, response: SearchResponse) => {
+    // Skip when there's nothing to ground an answer in, and in degraded mode, where results
+    // are unranked best-effort matches — synthesizing confident prose from those would
+    // present the one state the backend explicitly flags as unreliable as if it were solid.
+    if (!response.results?.length || response.degraded) return;
+    if (response.search_mode === 'visual_scenes') return;
+
+    const requestId = ++answerRequestId.current;
+    setIsAnswering(true);
+    fetchAnswer(searchQuery, response.results)
+      .then((res) => {
+        if (requestId !== answerRequestId.current) return; // superseded by a newer search
+        setAnswer(res.answer ? res : null);
+      })
+      .finally(() => {
+        if (requestId === answerRequestId.current) setIsAnswering(false);
+      });
+  }, []);
+
   const handleSearch = async (searchQuery: string, mode: string = searchMode) => {
     if (!searchQuery || !searchQuery.trim()) {
       setSearchResponse(null);
       setHasSearched(false);
       setSearchError(null);
+      setAnswer(null);
       return;
     }
 
@@ -77,15 +109,22 @@ export const App: React.FC = () => {
     setSearchError(null);
     setSelectedIndex(-1);
     setVideoFilter('all');
+    setAnswer(null);
 
     try {
       const response = await performSearch(searchQuery, mode);
       setSearchResponse(response);
       setQueryHistory(addToQueryHistory(searchQuery));
+      requestAnswer(searchQuery, response);
     } catch (err: any) {
       console.error("Search error:", err);
       setSearchError(err.message || 'Search failed. Is the Python backend server running?');
       setSearchResponse(null);
+      // Invalidate any in-flight answer from a previous query so it can't land next to a
+      // failed search and look like it describes it.
+      answerRequestId.current++;
+      setAnswer(null);
+      setIsAnswering(false);
     } finally {
       setIsSearching(false);
     }
@@ -97,6 +136,10 @@ export const App: React.FC = () => {
       try {
         const response = await performSearch(query, searchMode);
         setSearchResponse(response);
+        // Newly-ingested video can change which moments rank, so the previous answer was
+        // grounded in a result set that no longer exists — re-derive rather than leave it.
+        setAnswer(null);
+        requestAnswer(query, response);
       } catch (err) {
         console.error("Re-search error:", err);
       }
@@ -315,6 +358,24 @@ export const App: React.FC = () => {
                 )}
               </div>
             </div>
+
+            {/* Synthesized answer. Rendered only when the backend returned a validated,
+                cited one — no "couldn't answer" state, because the moments below already
+                are the answer and saying otherwise would be noise. Suppressed while a video
+                filter is active, since the answer was grounded in the unfiltered set. */}
+            {videoFilter === 'all' && (isAnswering || answer?.answer) && (
+              <AnswerCard
+                answer={answer?.answer || ''}
+                citations={answer?.citations || []}
+                isLoading={isAnswering && !answer?.answer}
+                onCitationClick={(idx) => {
+                  const target = filteredResults[idx];
+                  if (!target) return;
+                  setSelectedIndex(idx);
+                  resultCardRefs.current[target.id]?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+                }}
+              />
+            )}
 
             {/* Results List */}
             {searchResponse && searchResponse.results.length > 0 ? (

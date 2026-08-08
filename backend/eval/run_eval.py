@@ -15,6 +15,12 @@ Metrics:
     Mean seek error (sec) — for queries with a correct result found, how far off is that
         result's start_sec from the expected window (0 if inside it)? This is the number
         that maps directly to "jump to moment lands in the wrong place."
+    Mean results returned / mean+max quote words — how much material a query ships, and how
+        long each shown quote is. Recall and MRR say nothing about either: a run can hold
+        Recall@1 at 100% while padding every query with weak extra hits and 140-word quotes.
+        These are the metrics the display gates (RERANK_DISPLAY_THRESHOLD, RELATIVE_SCORE_FLOOR,
+        MAX_RESULTS_PER_VIDEO) and _focus_quote are tuned against — the target is both falling
+        while recall and false-positive rate hold.
     False positive rate — fraction of NEGATIVE queries (about topics NOT in the library)
         that returned anything at all. This is the one metric that actually decides whether
         the empty state means something: a negative query returning *any* result is the
@@ -62,6 +68,13 @@ def run_eval(store: VectorStore, queries_path: str, search_mode: str = None, top
     reciprocal_ranks = []
     seek_errors = []
     per_query_rows = []
+    # Volume metrics. Recall and MRR only measure whether the RIGHT answer is present and
+    # high — they are completely blind to how much wrong material is shipped alongside it,
+    # which is what makes a result list feel padded. These two are the counterweight, and
+    # they're what the display gates in vector_store.py are tuned against: a change that
+    # holds recall steady while dropping both is strictly an improvement.
+    result_counts = []
+    quote_word_counts = []
 
     for q in positives:
         mode = search_mode or q.get('search_mode', 'spoken')
@@ -83,6 +96,8 @@ def run_eval(store: VectorStore, queries_path: str, search_mode: str = None, top
         else:
             reciprocal_ranks.append(0.0)
 
+        result_counts.append(len(results))
+        quote_word_counts.extend(len((r.get('text') or '').split()) for r in results)
         per_query_rows.append((q['query'], rank, len(results)))
 
     n_pos = len(positives)
@@ -105,6 +120,9 @@ def run_eval(store: VectorStore, queries_path: str, search_mode: str = None, top
         "mrr": sum(reciprocal_ranks) / n_pos if n_pos else None,
         "mean_seek_error_sec": sum(seek_errors) / len(seek_errors) if seek_errors else None,
         "false_positive_rate": false_positives / n_neg if n_neg else None,
+        "mean_results_returned": sum(result_counts) / len(result_counts) if result_counts else None,
+        "mean_quote_words": sum(quote_word_counts) / len(quote_word_counts) if quote_word_counts else None,
+        "max_quote_words": max(quote_word_counts) if quote_word_counts else None,
     }
     return metrics, per_query_rows
 
@@ -124,6 +142,8 @@ def _print_report(label: str, metrics: dict, rows, verbose: bool):
     print(f"  MRR: {_fmt(metrics['mrr'])}")
     print(f"  Mean seek error: {_fmt(metrics['mean_seek_error_sec'])}s (among queries with a correct result found)")
     print(f"  False positive rate on negatives: {_fmt_pct(metrics['false_positive_rate'])}")
+    print(f"  Mean results returned: {_fmt(metrics['mean_results_returned'])}   "
+          f"Mean quote words: {_fmt(metrics['mean_quote_words'])} (max {metrics['max_quote_words'] or 0})")
     if verbose:
         print("\n  Per-query:")
         for query, rank, n_results in rows:

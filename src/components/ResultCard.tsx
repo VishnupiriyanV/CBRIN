@@ -38,12 +38,20 @@ export const ResultCard: React.FC<ResultCardProps> = ({
   searchMode,
 }) => {
   const [copied, setCopied] = useState(false);
+  const [showFullPassage, setShowFullPassage] = useState(false);
   const isVisualMode = searchMode === 'visual_scenes';
+
+  // `full_text` is only sent when the backend actually trimmed the quote, so its presence
+  // is the signal that there is more to show — no length comparison needed here.
+  const hasFullPassage = Boolean(result.full_text);
+  const displayText = showFullPassage && result.full_text ? result.full_text : result.text;
 
   const handleCopyCitation = async () => {
     // The actual repurposing workflow this product exists for (IMPROVEMENT-PLAN.md 3.6):
     // grab a quote with enough citation to drop straight into a script or show notes.
-    const citation = `"${result.text}" — ${result.video_title} @ ${result.start_timestamp}`;
+    // Copies whatever is currently on screen — if the reader expanded to the full passage,
+    // that's the quote they mean, not the trimmed one.
+    const citation = `"${displayText}" — ${result.video_title} @ ${result.start_timestamp}`;
     try {
       await navigator.clipboard.writeText(citation);
       setCopied(true);
@@ -242,7 +250,17 @@ export const ResultCard: React.FC<ResultCardProps> = ({
               // No box. A left rule is enough to mark a quotation, and it lets the text
               // itself be the largest, brightest thing in the card.
               <blockquote className="border-l border-hairline-bright pl-3.5 text-[15px] text-ink leading-relaxed max-w-[68ch]">
-                {renderHighlightedSnippet(result.text, searchQuery, result.implicit_concepts)}
+                {renderHighlightedSnippet(displayText, searchQuery, result.implicit_concepts)}
+                {hasFullPassage && (
+                  // Plain inline text button, no capsule — same reasoning as the meta line
+                  // above: this is a minor affordance and shouldn't compete with the quote.
+                  <button
+                    onClick={() => setShowFullPassage((v) => !v)}
+                    className="ml-2 align-baseline text-[11px] text-ink-mute hover:text-ink underline underline-offset-2 decoration-hairline-bright transition-colors duration-100"
+                  >
+                    {showFullPassage ? 'Show less' : 'Show full passage'}
+                  </button>
+                )}
               </blockquote>
             )}
 

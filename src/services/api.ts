@@ -2,6 +2,7 @@ import {
   SearchResponse, VideoItem, LibraryStats, EngineJob, ClipCandidate, BrandKit,
   StudioToolInfo, VoiceProfile, StudioUsageSummary, ToolRun,
   ParsedTranscriptInfo, TranscriptSourceSentence, AgentChatResponse, AgentStreamEvent,
+  ChunkResult, AnswerResponse,
 } from '../types';
 
 // Configurable via VITE_API_URL so changing the backend's port/host doesn't require a code
@@ -40,13 +41,38 @@ export async function checkBackendHealth(): Promise<{ healthy: boolean; details?
 }
 
 /**
+ * One short, cited answer grounded in results already on screen.
+ *
+ * Never throws and never rejects: this is strictly additive to search, so a backend that is
+ * slow, rate-limited, or has no LLM key configured must degrade to "no answer shown" rather
+ * than surfacing an error next to a perfectly good set of results.
+ */
+export async function fetchAnswer(query: string, results: ChunkResult[]): Promise<AnswerResponse> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/answer`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, results })
+    });
+    if (!response.ok) return { answer: null, citations: [] };
+    return await response.json();
+  } catch (err) {
+    console.error('Answer synthesis failed (results are unaffected):', err);
+    return { answer: null, citations: [] };
+  }
+}
+
+/**
  * Multimodal semantic search via backend with search mode selection.
  */
 export async function performSearch(query: string, searchMode: string = 'spoken'): Promise<SearchResponse> {
   const response = await fetch(`${API_BASE_URL}/search`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query, top_k: 10, search_mode: searchMode })
+    // 5, matching the backend default. 10 was padding the list with weak matches below the
+    // one the user actually wanted; the backend's display gates now cut most of that tail
+    // anyway, and this stops the frontend from silently overriding a tuned default.
+    body: JSON.stringify({ query, top_k: 5, search_mode: searchMode })
   });
 
   if (!response.ok) {
