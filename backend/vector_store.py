@@ -526,6 +526,19 @@ class VectorStore:
             return f"{hours:02d}:{minutes:02d}:{secs:02d}"
         return f"{minutes:02d}:{secs:02d}"
 
+    def is_indexed(self, video_id: str) -> bool:
+        """True if this video has EITHER a metadata record or chunks on the index.
+
+        Both halves matter. The upload path used to dedup on self.videos alone while the
+        YouTube path deduped on self.chunks, so a video whose videos.json record was missing
+        but whose chunks survived would pass the upload check and append a second full set of
+        chunks under identical ids. That happened on 2026-08-07: local-99ce947e13e5 gained
+        270 duplicate chunks. Checking both sources makes the two ingest paths agree.
+        """
+        if video_id in self.videos:
+            return True
+        return any(c.get('video_id') == video_id for c in self.chunks)
+
     def add_video(self, video_meta: Dict[str, Any]):
         """Store or update video metadata with status."""
         vid_id = video_meta.get('id', '')

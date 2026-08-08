@@ -237,7 +237,46 @@ Migrating records to SQLite. It is the right eventual target — stdlib, so zero
 
 **Do not add a vector database** (FAISS/Chroma/LanceDB/sqlite-vec). Brute force over 40k × 384 is single-digit milliseconds; ANN buys nothing until ~100× the target scale and costs installer weight plus approximate results in a product selling precision. The current brute-force search is the correct call, not a shortcut.
 
-## 13. Still open
+## 13. Index corruption found and repaired — duplicate-ingest bug
+
+Found in a running backend's log, not by the test suite. The live index had **709 chunks but only 439 unique IDs** (270 exact duplicates), and chunks for **5 video_ids while `videos.json` held 2**.
+
+### Root cause
+
+The two ingest paths deduped against **different sources of truth**:
+
+- YouTube (`main.py:465`) checked `store.chunks`
+- Local upload (`main.py:563`) checked `store.videos`
+
+A video whose `videos.json` record was missing but whose chunks survived therefore passed the upload dedup check and appended a second full set of chunks under **identical IDs**. The two copies of `chunk-local-99ce947e13e5-1` carry `indexed_at` `2026-08-05T01:25` and `2026-08-07T12:41`.
+
+**Fix:** `VectorStore.is_indexed()` checks metadata *and* chunks; both ingest paths call it.
+
+**Not established:** how `videos.json` lost three records in the first place — a partially-failed delete, or backend restarts racing with live ingest. Duplication is blocked either way, but that precondition remains unexplained.
+
+### Why duplicate IDs are worse than they look
+
+`reindex_visual_embeddings` builds `existing_by_id = {c['id']: vec}`. A dict silently collapses duplicate keys, so both copies receive whichever vector was written last — visual embeddings cross-assigned between them. Nothing crashed (alignment held at 709/709/709), which is what made it invisible.
+
+### Repair
+
+Deduped keeping the earliest `indexed_at` per ID, slicing `chunks`, `embeddings.npy` and `visual_embeddings.npy` with the **same index list** to preserve the positional invariant; then rebuilt the three missing video records from surviving chunk metadata.
+
+| | Before | After |
+|---|---|---|
+| Chunks / unique IDs | 709 / 439 | **439 / 439** |
+| Video records | 2 | **5** |
+| Orphaned video_ids | 3 | **0** |
+| Records with no chunks | — | **0** |
+| Alignment | 709/709/709 | **439/439/439** |
+
+All 439 chunks are `visual_status: ok`. Pre-repair state is in the session scratchpad (`chunks.709.bak.json` and matching arrays).
+
+### Separately: `/api/studio/usage` 404s
+
+`UsageBadge.tsx` calls `/studio/usage`, which **has never existed** in `main.py` — verified against the pre-session commit, so it is not fallout from the cuts. It fails silently via `.catch(() => setUsage(null))`. Implement the route or drop the badge.
+
+## 14. Still open
 
 1. **Rotate the Groq key.** Untouched, and still the one item that shouldn't wait.
 2. **`components/agent/` was deliberately left unstyled** — it's on the §4 CUT list. It still contains caps labels and will look inconsistent if you open the Agent view. That's expected, not a regression.
