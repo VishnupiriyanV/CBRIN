@@ -271,14 +271,65 @@ def _quotability(candidate: Dict[str, Any], idf_lookup: Dict[str, float]) -> flo
     return _clamp01((avg_idf - QUOTABILITY_IDF_FLOOR) / (QUOTABILITY_IDF_CEIL - QUOTABILITY_IDF_FLOOR))
 
 
+# A pause at or above this length reads as a real phrase boundary. Below it, the clip is
+# opening or closing mid-thought no matter how precisely the cut is placed.
+#
+# Calibrated 2026-08-11 against the real corpus (426 sentence starts across the 5 videos that
+# have word timing), measured with phrase_gap_before at every sentence boundary:
+#   p5=0.000 p25=0.000 p50=0.120 p75=0.620 p90=0.920 p95=1.220 p99=5.400 max=7.240
+#
+# Two things that reading matters for:
+#
+# 1. A recorded gap of 0.0 means Whisper emitted contiguous words, and it does that for the
+#    large majority of transitions (5-12% of inter-word gaps are non-zero, per video). So a
+#    non-zero gap is strong evidence of a real pause; a zero gap is weaker evidence of the
+#    absence of one. This signal is more trustworthy when high than when low.
+# 2. 49% of sentence boundaries have NO pause at all. Sentence segmentation in
+#    multimodal_engine is text-driven (punctuation and length), so half of the boundaries the
+#    solver can choose from simply do not coincide with an acoustic pause. That is a property
+#    of the candidate set, not of this metric — and it is the ceiling on what boundary
+#    snapping can deliver. Raising it means teaching the solver to PREFER pause-aligned
+#    sentence boundaries, which is a narrative_engine change, not a scoring one.
+#
+# Consequence: this signal is bimodal by nature — at a 0.6s target, ~26% of boundaries
+# saturate at 1.0, ~49% sit at 0.0, and ~25% spread between. Lowering the target does not fix
+# that (a 0.3s target moves 47% to 1.0 and saturates worse); the floor is not a calibration
+# error, it is half the corpus honestly reporting mid-phrase boundaries. Do not "fix" the
+# spread by flattening the map.
+BOUNDARY_PAUSE_TARGET_SEC = 0.6
+
+
+def _pause_score(gap: Optional[float]) -> float:
+    """None means there is no adjacent speech at all (clip opens or closes the recording) —
+    nothing to cut into, so the boundary is perfect by construction, not zero."""
+    if gap is None:
+        return 1.0
+    return _clamp01(gap / BOUNDARY_PAUSE_TARGET_SEC)
+
+
 def _boundary_cleanliness(candidate: Dict[str, Any], video_id: str) -> float:
-    gap_before = word_timing.silence_gap_before(video_id, candidate["start_sec"])
-    gap_after = word_timing.silence_gap_after(video_id, candidate["end_sec"])
-    # Reward a modest breathing gap (~0.2-0.6s); reward tapers off past ~1s since a very
-    # long gap usually means the boundary landed in an unrelated silence, not a clean pause.
-    score_before = _clamp01(gap_before / 0.6) if gap_before <= 1.0 else _clamp01(1.5 - gap_before)
-    score_after = _clamp01(gap_after / 0.6) if gap_after <= 1.0 else _clamp01(1.5 - gap_after)
-    return _clamp01((score_before + score_after) / 2.0)
+    """
+    Measured on the PAUSE AROUND THE CLIP'S FIRST/LAST WORD, not on dead air adjacent to the
+    cut timestamp.
+
+    This used to call silence_gap_before/after on start_sec/end_sec, which asks "how much
+    silence sits next to my cut" — a question whose best answer is "cut in the middle of a
+    long pause". That is the defect, scored as a virtue: measured over the 14 real persisted
+    clips, introducing boundary snapping moved this signal from 0.342 to 0.113 mean and made
+    12 of 14 clips score WORSE, purely because tightening onto speech removed the dead air the
+    old formula was rewarding. The signal was inverted with respect to its own name.
+
+    phrase_gap_* asks instead whether the clip's first word actually followed a pause — a
+    property of the speech that snapping cannot game and lead-in/tail cannot shift.
+
+    The old >1s taper is gone with it. It existed because a large silence_gap meant the cut
+    had landed in an unrelated silence; a large phrase_gap means the opposite — an
+    unambiguous phrase boundary — so tapering it would penalise the best cut points available.
+    """
+    return _clamp01((
+        _pause_score(word_timing.phrase_gap_before(video_id, candidate["start_sec"]))
+        + _pause_score(word_timing.phrase_gap_after(video_id, candidate["end_sec"]))
+    ) / 2.0)
 
 
 def _taste_match(candidate: Dict[str, Any], taste_centroid: Optional[np.ndarray]) -> Optional[float]:
@@ -388,6 +439,21 @@ def rank(
             if i in sentences_by_idx
         )
         cand_with_ctx = dict(cand)
+
+        # Snap the boundary BEFORE scoring, not after. _boundary_cleanliness used to measure
+        # the raw sentence bounds — which are quantised to whole seconds by MultimodalEngine
+        # — so a candidate with a clean pause available 200ms away was marked down for a
+        # boundary nothing ever tried to fix. Scoring the pre-snap value also meant the
+        # number shown in the UI described a cut we didn't ship. Snapping here (rather than
+        # in narrative_engine) keeps the solver pure — it has no video_id and its tests pass
+        # sentences alone — and gets backend/eval/clip_eval.py the same treatment for free.
+        snapped_start, snapped_end, snap_info = word_timing.snap_clip_bounds(
+            video_id, cand["start_sec"], cand["end_sec"],
+        )
+        cand_with_ctx["start_sec"] = snapped_start
+        cand_with_ctx["end_sec"] = snapped_end
+        cand_with_ctx["boundary_snap"] = snap_info
+
         cand_with_ctx["_opening_text"] = opening_sentence
         cand_with_ctx["_full_text"] = full_text
         cand_with_ctx["id"] = f"{video_id}-clip-{i}"
