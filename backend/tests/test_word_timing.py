@@ -37,27 +37,87 @@ class TestSnapToWords:
         _write_words("vid-1", SAMPLE_WORDS)
         # Requested window [10.2, 11.3] should snap start to word "So" (10.0) and end to
         # "in." (11.4), then apply lead-in/tail.
-        start, end = wt.snap_to_words("vid-1", 10.2, 11.3, lead_in=0.12, tail=0.25)
+        start, end, info = wt.snap_to_words("vid-1", 10.2, 11.3, lead_in=0.12, tail=0.25)
         assert start == 10.0 - 0.12
         assert end == 11.4 + 0.25
+        assert info["snapped"] is True
+        assert info["start_moved_by"] < 0        # in-point pulled earlier onto "So"
+        assert info["end_moved_by"] > 0          # out-point pushed later onto "in."
+        assert info["reason"] == "snapped to nearest word start; snapped to nearest word end"
 
     def test_exact_boundary_input_stays_stable(self):
         _write_words("vid-1", SAMPLE_WORDS)
-        start, end = wt.snap_to_words("vid-1", 10.0, 13.2, lead_in=0.0, tail=0.0)
+        start, end, info = wt.snap_to_words("vid-1", 10.0, 13.2, lead_in=0.0, tail=0.0)
         assert start == 10.0
         assert end == 13.2
+        # Both edges were searched and matched; they simply had nowhere to move.
+        assert info["snapped"] is False
+        assert "snapped to nearest word start" in info["reason"]
 
     def test_missing_words_file_falls_back_to_input_unchanged(self):
         # No words file written for this video_id.
-        start, end = wt.snap_to_words("vid-does-not-exist", 5.0, 9.0)
+        start, end, info = wt.snap_to_words("vid-does-not-exist", 5.0, 9.0)
         assert (start, end) == (5.0, 9.0)
+        assert info["snapped"] is False
+        assert info["reason"] == "no word timing for this video"
 
-    def test_never_crosses_into_adjacent_word_beyond_requested_range(self):
+    def test_picks_the_nearest_edge_of_the_enclosing_word(self):
+        # Previously named test_never_crosses_into_adjacent_word_beyond_requested_range, which
+        # asserted no range bound at all — the bound is covered by the window tests below.
+        # What this actually pins is edge selection: within one clause, each boundary lands on
+        # the enclosing word's own start/end rather than a neighbour's.
         _write_words("vid-1", SAMPLE_WORDS)
         # Request tightly inside the first clause only.
-        start, end = wt.snap_to_words("vid-1", 10.05, 10.35, lead_in=0.0, tail=0.0)
+        start, end, _info = wt.snap_to_words("vid-1", 10.05, 10.35, lead_in=0.0, tail=0.0)
         assert start == 10.0   # "So"
         assert end == 10.3     # "So"'s end, not "I"'s
+
+    def test_refuses_to_drag_a_boundary_across_a_long_silence(self):
+        _write_words("vid-1", SAMPLE_WORDS)
+        # A handle dropped at 3.0s — 7 seconds of silence before any speech. The nearest word
+        # edge is at 10.0, far outside the window, so the in-point must be left alone rather
+        # than yanked across the gap. The out-point is in range and still snaps.
+        start, end, info = wt.snap_to_words("vid-1", 3.0, 13.1, lead_in=0.12, tail=0.25)
+        assert start == 3.0
+        assert end == 13.2 + 0.25
+        # The refusal is reported per-edge, so the client can explain the untouched in-point
+        # while the out-point legitimately moved.
+        assert info["snapped"] is True
+        assert info["start_moved_by"] == 0.0
+        assert info["reason"] == "no word start within snap window; snapped to nearest word end"
+
+    def test_both_edges_in_silence_leave_the_range_untouched(self):
+        _write_words("vid-1", SAMPLE_WORDS)
+        # Entirely inside the dead air after the last word (ends 13.2): nothing to snap to.
+        start, end, info = wt.snap_to_words("vid-1", 30.0, 35.0)
+        assert (start, end) == (30.0, 35.0)
+        assert info["snapped"] is False
+        assert info["reason"] == (
+            "no word start within snap window; no word end within snap window"
+        )
+
+    def test_out_point_in_silence_keeps_its_place_while_start_snaps(self):
+        _write_words("vid-1", SAMPLE_WORDS)
+        start, end, info = wt.snap_to_words("vid-1", 10.2, 40.0, lead_in=0.12, tail=0.25)
+        assert start == 10.0 - 0.12   # in-point still snaps to "So"
+        assert end == 40.0            # out-point left where the user put it, no tail applied
+        assert info["end_moved_by"] == 0.0
+        assert info["reason"] == "snapped to nearest word start; no word end within snap window"
+
+    def test_window_is_configurable(self):
+        _write_words("vid-1", SAMPLE_WORDS)
+        # 3.0 is 7s from the onset at 10.0: outside the default window, inside a widened one.
+        assert wt.snap_to_words("vid-1", 3.0, 13.2, lead_in=0.0, tail=0.0)[0] == 3.0
+        widened = wt.snap_to_words("vid-1", 3.0, 13.2, lead_in=0.0, tail=0.0, window=8.0)
+        assert widened[0] == 10.0
+
+    def test_window_limit_separates_just_inside_from_just_outside(self):
+        _write_words("vid-1", SAMPLE_WORDS)
+        # Onset at 10.0. A request 1.1s earlier is inside the 1.2s window; 1.5s earlier is not.
+        inside = wt.snap_to_words("vid-1", 8.9, 13.2, lead_in=0.0, tail=0.0)[0]
+        outside = wt.snap_to_words("vid-1", 8.5, 13.2, lead_in=0.0, tail=0.0)[0]
+        assert inside == 10.0
+        assert outside == 8.5
 
 
 class TestSilenceGaps:

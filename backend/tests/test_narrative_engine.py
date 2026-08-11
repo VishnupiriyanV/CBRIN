@@ -22,8 +22,12 @@ def _sentence(idx, text, start, end):
 
 
 def _sentences(n, sec_per_sentence=3):
+    # Deliberately NOT "This is sentence number N..." — a demonstrative opener makes every
+    # generated sentence referentially dependent (reference_resolver), which would drag every
+    # candidate in these structural tests back to sentence 0 for reasons unrelated to what
+    # they are checking. Referential expansion has its own tests in TestReferentialDependencies.
     return [
-        _sentence(i, f"This is sentence number {i} with some words in it.", i * sec_per_sentence, (i + 1) * sec_per_sentence)
+        _sentence(i, f"Sentence number {i} carries some ordinary words in it.", i * sec_per_sentence, (i + 1) * sec_per_sentence)
         for i in range(n)
     ]
 
@@ -115,6 +119,209 @@ class TestDurationBounds:
         beats = [_beat("punchline", 59, 59, requires=0)]
         candidates = ne.beats_to_candidates(sentences, beats)
         assert candidates == []
+
+
+class TestReferentialDependencies:
+    """The second dependency type: a clip must not open on a pronoun whose antecedent it
+    excluded. Soft where the narrative constraint is hard — see _extend_for_references."""
+
+    @staticmethod
+    def _texts(*texts, sec_per_sentence=4):
+        return [
+            {"sentence_idx": i, "text": t,
+             "start_sec": i * sec_per_sentence, "end_sec": (i + 1) * sec_per_sentence}
+            for i, t in enumerate(texts)
+        ]
+
+    def test_clip_expands_back_to_cover_a_dangling_pronoun(self):
+        sentences = self._texts(
+            "Most founders underprice their very first product.",   # 0
+            "My first client paid me fifty dollars an hour.",       # 1
+            "He told me that was generous for a beginner.",         # 2  <- anaphor
+            "I raised my rates the following Monday morning.",      # 3
+            "Revenue tripled inside of a single quarter.",          # 4
+        )
+        beats = [_beat("payoff", 2, 4, requires=None)]
+        candidates = ne.beats_to_candidates(sentences, beats)
+        assert len(candidates) == 1
+        # Sentence 2 opens with "He", so sentence 1 must be pulled in.
+        assert candidates[0]["start_sentence_idx"] <= 1
+        assert candidates[0]["dangling_reference_indices"] == []
+        assert candidates[0]["references_expanded_by"] >= 1
+
+    def test_self_contained_opening_is_not_expanded(self):
+        sentences = self._texts(
+            "Most founders underprice their very first product.",
+            "The hardest part is learning to say no to work.",
+            "Nobody tells you that before you quit your job.",
+            "I learned it the expensive way over two years.",
+        )
+        beats = [_beat("payoff", 1, 3, requires=None)]
+        candidates = ne.beats_to_candidates(sentences, beats)
+        assert candidates[0]["start_sentence_idx"] == 1
+        assert candidates[0]["references_expanded_by"] == 0
+        assert candidates[0]["dangling_reference_indices"] == []
+
+    def test_narrative_constraint_still_wins(self):
+        # Referential expansion may only ADD context, so it can never move the in-point past
+        # a required setup. The hard guarantee is unaffected by anything in this class.
+        sentences = self._texts(
+            "Opening line that sets everything up here.",
+            "He said the deadline had already passed.",
+            "A neutral sentence with no references at all.",
+            "The punchline that depends on the setup above.",
+        )
+        beats = [_beat("punchline", 3, 3, requires=1)]
+        candidates = ne.beats_to_candidates(sentences, beats)
+        assert candidates[0]["start_sentence_idx"] <= 1
+
+    def test_expansion_is_relaxed_rather_than_dropping_the_candidate(self):
+        # 30 sentences x 4s: reaching sentence 0 would blow past MAX_CLIP_SEC=75. The clip must
+        # still be emitted, with the unresolved reference REPORTED rather than hidden.
+        texts = ["He said it never actually worked out." for _ in range(30)]
+        sentences = self._texts(*texts)
+        beats = [_beat("payoff", 25, 29, requires=None)]
+        candidates = ne.beats_to_candidates(sentences, beats)
+        assert len(candidates) == 1
+        cand = candidates[0]
+        assert (cand["end_sec"] - cand["start_sec"]) <= ne.MAX_CLIP_SEC
+        # Every sentence here opens with "He", so the one at the in-point still dangles.
+        assert cand["dangling_reference_indices"] != []
+
+    def test_resolve_references_false_restores_the_old_behaviour(self):
+        sentences = self._texts(
+            "Most founders underprice their very first product.",
+            "My first client paid me fifty dollars an hour.",
+            "He told me that was generous for a beginner.",
+            "I raised my rates the following Monday morning.",
+            "Revenue tripled inside of a single quarter.",
+        )
+        beats = [_beat("payoff", 2, 4, requires=None)]
+        off = ne.beats_to_candidates(sentences, beats, resolve_references=False)
+        assert off[0]["start_sentence_idx"] == 2
+        assert off[0]["references_expanded_by"] == 0
+        # None, not [] — an empty list would claim we checked and found nothing.
+        assert off[0]["dangling_reference_indices"] is None
+
+    def test_chained_anaphora_walks_back_until_it_resolves(self):
+        sentences = self._texts(
+            "The investor meeting was scheduled for that Friday.",  # 0
+            "She had flown in from Chicago the night before.",      # 1 <- anaphor
+            "That was when the numbers finally made sense.",        # 2 <- anaphor
+            "I closed the round the following week.",               # 3
+        )
+        beats = [_beat("payoff", 2, 3, requires=None)]
+        candidates = ne.beats_to_candidates(sentences, beats)
+        # 2 needs 1; 1 is itself anaphoric and needs 0. Expansion iterates to a fixpoint.
+        assert candidates[0]["start_sentence_idx"] == 0
+        assert candidates[0]["dangling_reference_indices"] == []
+
+
+class TestPauseAlignedBoundaries:
+    """The solver may prefer a different sentence boundary when one lands on a real pause —
+    but only by EXPANDING, so the dependency guarantee is untouched. See _select_bounds."""
+
+    @staticmethod
+    def _scorer(good_starts=(), good_ends=()):
+        """Boundary scorer that rates the listed start/end seconds as clean and all else as
+        mid-phrase, so a test can place a pause at an exact sentence boundary."""
+        def score(start_sec, end_sec):
+            return 0.5 * (1.0 if start_sec in good_starts else 0.0) + \
+                   0.5 * (1.0 if end_sec in good_ends else 0.0)
+        return score
+
+    def test_without_a_scorer_behaviour_is_unchanged(self):
+        sentences = _sentences(10, sec_per_sentence=3)
+        beats = [_beat("punchline", 7, 7, requires=3)]
+        plain = ne.beats_to_candidates(sentences, beats)
+        explicit_none = ne.beats_to_candidates(sentences, beats, boundary_scorer=None)
+        assert plain == explicit_none
+        assert plain[0]["start_sentence_idx"] == 3
+        assert plain[0]["boundary_selection"]["pause_aligned"] is False
+
+    def test_in_point_moves_earlier_to_reach_a_pause(self):
+        sentences = _sentences(12, sec_per_sentence=3)
+        beats = [_beat("punchline", 7, 7, requires=3)]
+        # Sentence 3 starts at 9s (mid-phrase); sentence 1 starts at 3s and has a pause.
+        scorer = self._scorer(good_starts=(3,), good_ends=())
+        candidates = ne.beats_to_candidates(sentences, beats, boundary_scorer=scorer)
+        assert len(candidates) == 1
+        assert candidates[0]["start_sentence_idx"] == 1
+        assert candidates[0]["boundary_selection"]["pause_aligned"] is True
+        assert candidates[0]["boundary_selection"]["sentences_added"] == 2
+
+    def test_alignment_never_starts_after_the_required_setup(self):
+        # The pause sits at sentence 5's start — AFTER the required setup at 3. Honouring it
+        # would drop the setup, so it must be ignored entirely.
+        sentences = _sentences(12, sec_per_sentence=3)
+        beats = [_beat("punchline", 7, 7, requires=3)]
+        scorer = self._scorer(good_starts=(15,), good_ends=())  # sentence 5 starts at 15s
+        candidates = ne.beats_to_candidates(sentences, beats, boundary_scorer=scorer)
+        assert len(candidates) == 1
+        assert candidates[0]["start_sentence_idx"] <= 3
+        assert candidates[0]["boundary_selection"]["pause_aligned"] is False
+
+    def test_out_point_moves_later_to_reach_a_pause(self):
+        # 3s sentences, so a clip needs a 4-sentence span to clear MIN_CLIP_SEC=12.
+        sentences = _sentences(12, sec_per_sentence=3)
+        beats = [_beat("punchline", 4, 7, requires=None)]
+        # Sentence 7 ends at 24s (mid-phrase); sentence 9 ends at 30s with a pause after it.
+        scorer = self._scorer(good_starts=(), good_ends=(30,))
+        candidates = ne.beats_to_candidates(sentences, beats, boundary_scorer=scorer)
+        assert len(candidates) == 1
+        assert candidates[0]["end_sentence_idx"] == 9
+
+    def test_expansion_is_capped(self):
+        sentences = _sentences(30, sec_per_sentence=2)
+        beats = [_beat("punchline", 20, 25, requires=None)]
+        # The only clean start is sentence 16 (32s) — one sentence beyond the search limit of
+        # PAUSE_SEARCH_START_SENTENCES=3, so it must not be reached however good it scores.
+        scorer = self._scorer(good_starts=(32,), good_ends=())
+        candidates = ne.beats_to_candidates(sentences, beats, boundary_scorer=scorer)
+        assert len(candidates) == 1
+        assert candidates[0]["start_sentence_idx"] == 20
+        assert candidates[0]["boundary_selection"]["pause_aligned"] is False
+
+    def test_marginal_gain_does_not_widen_the_clip(self):
+        sentences = _sentences(12, sec_per_sentence=3)
+        beats = [_beat("punchline", 7, 7, requires=3)]
+        # Every alternative scores only half of MIN_BOUNDARY_GAIN better than the tight
+        # window — adding a whole sentence of material for that buys nothing.
+        def barely_better(start_sec, end_sec):
+            base = 0.50
+            return base if start_sec == 9 else base + ne.MIN_BOUNDARY_GAIN / 2.0
+        candidates = ne.beats_to_candidates(sentences, beats, boundary_scorer=barely_better)
+        assert candidates[0]["start_sentence_idx"] == 3
+        assert candidates[0]["boundary_selection"]["pause_aligned"] is False
+
+    def test_alignment_never_breaches_max_clip_sec(self):
+        sentences = _sentences(40, sec_per_sentence=3)
+        beats = [_beat("punchline", 10, 30, requires=None)]  # already 63s of the 75s budget
+        scorer = self._scorer(good_starts=(21,), good_ends=(99,))
+        candidates = ne.beats_to_candidates(sentences, beats, boundary_scorer=scorer)
+        for cand in candidates:
+            assert (cand["end_sec"] - cand["start_sec"]) <= ne.MAX_CLIP_SEC
+
+    def test_alignment_never_pads_a_short_candidate_to_reach_minimum(self):
+        # 5 sentences x 1s: far under MIN_CLIP_SEC. A scorer that loves the widest possible
+        # window must not be able to pad this into existence — it stays rejected.
+        sentences = _sentences(5, sec_per_sentence=1)
+        beats = [_beat("punchline", 2, 2, requires=None)]
+        scorer = self._scorer(good_starts=(0,), good_ends=(5,))
+        assert ne.beats_to_candidates(sentences, beats, boundary_scorer=scorer) == []
+
+    def test_opening_beat_type_follows_the_aligned_start(self):
+        sentences = _sentences(12, sec_per_sentence=3)
+        beats = [
+            _beat("hook", 1, 1, requires=None),
+            _beat("setup", 3, 3, requires=None),
+            _beat("punchline", 7, 7, requires=3),
+        ]
+        scorer = self._scorer(good_starts=(3,), good_ends=())  # sentence 1 starts at 3s
+        candidates = ne.beats_to_candidates(sentences, beats, boundary_scorer=scorer)
+        assert candidates[0]["start_sentence_idx"] == 1
+        # Read off the ALIGNED start (the hook at 1), not the pre-alignment start (setup at 3).
+        assert candidates[0]["opening_beat_type"] == "hook"
 
 
 class TestOpeningBeatType:

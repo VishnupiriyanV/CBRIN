@@ -165,6 +165,101 @@ class TestHookStrength:
         assert archetype_encode_calls["n"] == 1
 
 
+class TestSelfContainedness:
+    """Driven by the solver's computed referential dependencies, not the LLM's self-assessment."""
+
+    def test_dangling_references_are_penalised(self):
+        clean = _candidate(0, 3, 0.0, 20.0)
+        clean["_opening_text"] = "Most founders underprice their first product."
+        clean["dangling_reference_indices"] = []
+
+        broken = dict(clean)
+        broken["dangling_reference_indices"] = [1]
+
+        assert cs._self_containedness(clean) > cs._self_containedness(broken)
+        assert cs._self_containedness(clean) - cs._self_containedness(broken) == \
+            pytest.approx(cs.DANGLING_REFERENCE_PENALTY)
+
+    def test_more_dangling_references_score_worse(self):
+        cand = _candidate(0, 3, 0.0, 20.0)
+        cand["_opening_text"] = "Most founders underprice their first product."
+        cand["dangling_reference_indices"] = [1]
+        one = cs._self_containedness(cand)
+        cand["dangling_reference_indices"] = [1, 2, 3]
+        assert cs._self_containedness(cand) < one
+
+    def test_llm_self_contained_flag_is_ignored(self):
+        # It was the only input to this signal that nothing could verify. A model claiming
+        # self_contained=True must not be able to move the score.
+        base = _candidate(0, 3, 0.0, 20.0, seed_beat={"self_contained": True})
+        base["_opening_text"] = "Most founders underprice their first product."
+        base["dangling_reference_indices"] = []
+
+        lying = dict(base)
+        lying["seed_beat"] = {"self_contained": False}
+
+        assert cs._self_containedness(base) == cs._self_containedness(lying)
+
+    def test_unresolved_references_do_not_silently_score_as_clean(self):
+        # dangling_reference_indices is None when resolution never ran — that must not be
+        # treated the same as "checked and found nothing".
+        checked = _candidate(0, 3, 0.0, 20.0)
+        checked["_opening_text"] = "So he told me the whole story."
+        checked["dangling_reference_indices"] = [0]
+
+        unchecked = dict(checked)
+        unchecked["dangling_reference_indices"] = None
+
+        assert cs._self_containedness(unchecked) > cs._self_containedness(checked)
+
+
+class TestBoundaryCleanliness:
+    """Measured on the pause around the clip's first/last WORD, not on dead air beside the cut
+    timestamp — the old formula rewarded exactly the dead air that snapping removes."""
+
+    @staticmethod
+    def _words(video_id, words):
+        import json
+        import paths
+        os.makedirs(paths.WORDS_DIR, exist_ok=True)
+        with open(os.path.join(paths.WORDS_DIR, f"{video_id}.json"), 'w', encoding='utf-8') as f:
+            json.dump(words, f)
+
+    def test_missing_word_timing_scores_unknown_not_perfect_or_worst(self):
+        # phrase_gap_* answers None both for "clip opens the recording" and "no timing data".
+        # Scoring the second as 1.0 would rank an un-timed video above measured ones; the old
+        # silence_gap_* formula had the mirror bug and scored it 0.0.
+        score = cs._boundary_score_for("vid-with-no-timing", 10.0, 30.0)
+        assert score == cs.BOUNDARY_UNKNOWN_SCORE
+        assert 0.0 < score < 1.0
+
+    def test_pause_before_first_word_scores_higher_than_none(self):
+        self._words("vid-pause", [
+            {"word": "before", "start": 8.0, "end": 8.5},
+            {"word": "clip", "start": 9.5, "end": 10.0},   # 1.0s pause ahead of it
+            {"word": "ends", "start": 10.1, "end": 10.6},
+        ])
+        self._words("vid-nopause", [
+            {"word": "before", "start": 8.0, "end": 9.5},
+            {"word": "clip", "start": 9.5, "end": 10.0},   # butted straight up against it
+            {"word": "ends", "start": 10.1, "end": 10.6},
+        ])
+        clean = cs._boundary_score_for("vid-pause", 9.4, 10.6)
+        abrupt = cs._boundary_score_for("vid-nopause", 9.4, 10.6)
+        assert clean > abrupt
+
+    def test_score_is_invariant_to_where_the_cut_sits_inside_the_pause(self):
+        # The whole point of measuring the speech rather than the timestamp: moving the cut
+        # around within the silence must not change the reported boundary quality.
+        self._words("vid-inv", [
+            {"word": "before", "start": 8.0, "end": 8.5},
+            {"word": "clip", "start": 9.5, "end": 10.0},
+            {"word": "ends", "start": 10.1, "end": 10.6},
+        ])
+        assert cs._boundary_score_for("vid-inv", 8.6, 10.6) == \
+               cs._boundary_score_for("vid-inv", 9.4, 10.6)
+
+
 class TestCalibrationConstants:
     """Cheap guard against a bad edit to the measured constants — see the calibration note
     above clip_scoring.WEIGHTS for how these were actually derived (eval/hook_eval.py against

@@ -139,6 +139,20 @@ export interface NarrativeBeat {
   quotable_line: string;
 }
 
+// What word-boundary snapping did to a clip's bounds — set by the analysis run
+// (word_timing.snap_clip_bounds) and overwritten by POST /engine/clips/{id}/adjust
+// (word_timing.snap_to_words), so it always describes the CURRENT start_sec/end_sec.
+// `snapped: false` with a reason naming the snap window is a deliberate refusal, not a
+// failure: the boundary sat in silence with no word edge in range, and leaving it alone
+// beats dragging it seconds across the gap. That's the case worth telling the user about,
+// since the handle they dragged comes back looking untouched either way.
+export interface BoundarySnap {
+  snapped: boolean;
+  start_moved_by: number; // seconds, signed (positive = start moved later)
+  end_moved_by: number;   // seconds, signed (positive = end moved later)
+  reason: string;         // per-edge outcomes, start first, joined by "; "
+}
+
 export interface ClipCandidate {
   id: string;
   video_id: string;
@@ -166,6 +180,8 @@ export interface ClipCandidate {
   degraded_reason?: string | null;
   analysis_mode?: 'llm' | 'llm_partial' | 'heuristic';
   timing_precise: boolean;
+  // Absent on clips persisted before boundary snapping existed.
+  boundary_snap?: BoundarySnap;
 }
 
 export interface BrandKit {
