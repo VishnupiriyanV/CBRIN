@@ -54,20 +54,45 @@ Priority is payoff-per-unit-effort, with dependencies respected. Each gap states
 
 **Effort: S. Payoff: high, immediately visible.**
 
-**Now:** `clip_scoring._boundary_cleanliness` (line 274) reads `word_timing.silence_gap_before/after` and rewards a 0.2–0.6s breathing gap, tapering past ~1s. But nothing ever snaps the cut. `narrative_engine._build_candidate_for_seed` (line 445) takes `sentences_by_idx[candidate_start]["start_sec"]` verbatim, and Whisper sentence boundaries drift ±200–300ms.
+**Now:** `clip_scoring._boundary_cleanliness` (line 274) reads `word_timing.silence_gap_before/after` and rewards a 0.2–0.6s breathing gap, tapering past ~1s. But nothing ever snaps the cut. `narrative_engine._build_candidate_for_seed` (line 445) takes `sentences_by_idx[candidate_start]["start_sec"]` verbatim.
 
-Net effect: a clip with a genuinely clean pause available 180ms away is *marked down* for a boundary we could have fixed. We measure the defect and ship it.
+The drift is worse than the ASR literature's ±200–300ms would suggest, because it isn't ASR drift. `multimodal_engine.py:362` stores `math.floor(sentence_start_sec)` / `math.ceil(sentence_end_sec)` — **whole-second quantisation**, confirmed against the corpus, where every `start_sec`/`end_sec` in `data/chunks.json` is an integer. So candidates are wrong by up to **1.0s on each side**, in two distinguishable ways:
+
+- `floor()` moves the in-point earlier → up to a second of dead air before the first word. Fatal for a short-form hook, where the first second is the whole pitch.
+- When the *previous* sentence's last word ends after that floored second, the same cut opens on the tail of a foreign word. This is the "starts mid-sentence" complaint, and it is why a plain silence-trim pass is not sufficient.
+
+Net effect: a clip with a genuinely clean pause available is *marked down* for a boundary we could have fixed. We measure the defect and ship it.
 
 **Research:** prosodic boundaries are marked by pre-boundary lengthening plus phrase-initial acceleration, not by amplitude alone (Kalimuthu et al., PLOS One). Onset detection is an explicit precision/recall trade: tight windows clip real speech onsets, loose windows land in silence or catch mouth clicks. Guard bands are the standard mitigation.
 
 **Change:** a snapping pass between candidate construction and scoring.
 
-- Search ±400ms around each nominal cut for the silence trough, using word-level timings we already have.
+- Search ±1.2s around each nominal cut (whole-second quantisation plus Whisper's own segment slop) for the true speech onset/offset, using word-level timings we already have.
 - Snap to it; if no trough is found in the window, leave the boundary untouched.
 - Apply ~120ms pre-roll on the in-point so the first phoneme survives, and a short tail on the out-point.
 - Re-score `_boundary_cleanliness` *after* snapping, so the signal measures the boundary we actually cut.
 
-This is the most visible defect class in every autoclipper on the market — the "it cut off my first 0.3 seconds" complaint is exactly this. It is also the cheapest item on this list: `word_timing.py` already has the gap functions.
+This is the most visible defect class in every autoclipper on the market — the "it cut off my first 0.3 seconds" complaint is exactly this.
+
+#### Implemented 2026-08-11 — and what it turned up
+
+`word_timing.snap_clip_bounds()` plus a rewritten `clip_scoring._boundary_cleanliness`. Two findings that were not visible before measuring:
+
+**The metric was inverted.** `_boundary_cleanliness` called `silence_gap_before/after` on the cut timestamp — "how much dead air sits next to my cut" — which is *maximised by cutting in the middle of a pause*, the exact defect. Measured over the 14 real persisted clips, adding a correct snapper moved the old signal from 0.342 to 0.113 mean and made **12 of 14 clips score worse**, purely because tightening onto speech removed the dead air the formula was rewarding. A signal that punishes the fix is worse than no signal.
+
+The replacement (`phrase_gap_before/after`) measures the pause around the clip's first and last *word* — a property of the speech, not of cut placement. It is snap-invariant by construction, which the same 14 clips confirm (before == after on every one).
+
+**Sentence boundaries are not acoustic boundaries.** Measuring `phrase_gap_before` at all 426 sentence starts in the corpus:
+
+| p5 | p25 | p50 | p75 | p90 | p95 |
+|---|---|---|---|---|---|
+| 0.000 | 0.000 | 0.120 | 0.620 | 0.920 | 1.220 |
+
+**49% have no recorded pause at all.** Sentence segmentation in `multimodal_engine` is text-driven (punctuation and length), so half the boundaries the solver can choose from don't coincide with a pause. Snapping fixes *placement within* a boundary; it cannot make a mid-phrase boundary into a phrase boundary.
+
+That is the ceiling on this gap, and raising it is a `narrative_engine` change, not a scoring one: **the solver should prefer sentence boundaries that coincide with pauses** when its duration bounds leave a choice. Cheap to add to `_build_candidate_for_seed`, and it converts a signal that currently floors on half the corpus into one the solver can actually optimise against. Logged here rather than done, to keep this change reviewable.
+
+Context for reading those percentiles: faster-whisper emits contiguous word timings — only 5–12% of inter-word transitions carry any gap — so a non-zero gap is strong evidence of a real pause, while a zero gap is weaker evidence of its absence. The signal is more trustworthy high than low.
 
 ---
 
@@ -178,7 +203,7 @@ A. Structure   embeddings → divisive clustering → topic tree      (no LLM)  
 B. Beats       LLM over coherent segments + cross-segment links   (LLM)         [have]
 C. Solve       narrative deps + referential deps → candidates     (determ.)     [have + Gap 2]
 D. Rank        text + acoustic signals, then MMR                  (no LLM)      [have + Gaps 3,4]
-E. Snap        waveform search ±400ms, guard band                 (determ.)     [Gap 1]
+E. Snap        onset/offset search ±1.2s, guard band              (determ.)     [Gap 1 — done]
 ```
 
 Note the shape: **one LLM stage, everything else deterministic or embedding-based.** That matches TF-SELECTOR's result, and it keeps stages A, D, and E entirely offline — no network call, which preserves the local-first positioning rather than fighting it.

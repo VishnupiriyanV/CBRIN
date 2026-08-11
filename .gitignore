@@ -71,3 +71,5 @@ backend/data/
 .vite/
 .turbo/
 .pytest_cache/
+
+humanizer/
