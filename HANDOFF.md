@@ -8,8 +8,9 @@ Session covered two things: a strategic review of the whole project, and the fir
 |---|---|
 | `STRATEGY.md` | **Single source of direction.** Verdict, pivot, feature cuts, phased plan, pricing, §8 design spec, and an appendix salvaged from the deleted docs. |
 | `prd.md` | Product and technical truth — user stories, requirements, known defects, roadmap. Unchanged this session. |
+| `RESEARCH.md` | **Technical reference, not direction.** Literature review of clip extraction — which design decisions the research validates, five gaps mapped to file:line, and a prioritized plan. Read before touching `narrative_engine.py`, `clip_scoring.py`, or `word_timing.py`. |
 
-Nothing else at root. If a third planning doc appears, something has gone wrong.
+No *planning* docs beyond `STRATEGY.md` at root — it remains the single source of direction. `RESEARCH.md` is engineering reference and sets no scope or sequencing of its own. If a second doc starts claiming direction, something has gone wrong.
 
 ---
 
@@ -252,7 +253,9 @@ A video whose `videos.json` record was missing but whose chunks survived therefo
 
 **Fix:** `VectorStore.is_indexed()` checks metadata *and* chunks; both ingest paths call it.
 
-**Not established:** how `videos.json` lost three records in the first place — a partially-failed delete, or backend restarts racing with live ingest. Duplication is blocked either way, but that precondition remains unexplained.
+**Established 2026-08-09 (correction).** The earlier "never established" note was wrong. It was the `paths.py` `global` regression introduced during the §11 cuts: a line-wise regex removing `HIGHLIGHTS_FILE` also deleted `VISUAL_EMBEDDINGS_FILE, VIDEOS_FILE, INDEX_META_FILE` from the `global` declaration in `use_root()`. For that window `use_root()` stopped redirecting `VIDEOS_FILE` while `CHUNKS_FILE` (in the intact first `global` line) kept redirecting — so a test run wrote fixtures over the **real** `videos.json` and left chunks untouched. That is precisely the asymmetry observed: chunks for 5 videos, `videos.json` with 2.
+
+Separate and older: the `vid-b` pytest-fixture chunk found in `chunks.json` is *not* explained by this — `CHUNKS_FILE` stayed redirected throughout. That is the earlier clobber documented in `backend/scripts/repair_index.py` (`test_vector_store.py` monkeypatching only `KEYFRAMES_DIR`/`MEDIA_DIR`). Two distinct bugs.
 
 ### Why duplicate IDs are worse than they look
 
@@ -276,7 +279,49 @@ All 439 chunks are `visual_status: ok`. Pre-repair state is in the session scrat
 
 `UsageBadge.tsx` calls `/studio/usage`, which **has never existed** in `main.py` — verified against the pre-session commit, so it is not fallout from the cuts. It fails silently via `.catch(() => setUsage(null))`. Implement the route or drop the badge.
 
-## 14. Still open
+## 14. Phase 0 started — waitlist landing page
+
+Lives **outside this repo** at `C:\Helm\cbrin-site` (own git repo, first commit `0b0f088`). Static, buildless: `index.html` + `thanks.html`, ~19 KB total, no npm. Deploys to Netlify; Netlify Forms captures submissions by parsing the static HTML at deploy time.
+
+Separate repo because this repo's root is already a Vite app, and the marketing page should deploy publicly on its own cadence while the boundary solver stays private. Design tokens are copied verbatim from `tailwind.config.js` so the two don't drift.
+
+**Two things it does NOT do, deliberately:**
+
+1. ~~It does not satisfy §5's kill criterion.~~ **Pre-sale checkout added 2026-08-09.** The page is now primarily a **pre-order** at $49 (founding, first 50), with the waitlist demoted to a secondary path. It therefore tests willingness to pay — what the gate is actually written in.
+
+   **The checkout is inert until configured.** `index.html` ends with `var CHECKOUT_URL = ""`; while empty, every pre-order control stays hidden and the page renders exactly as the waitlist-only version. Set it to a hosted Gumroad / Lemon Squeezy / Polar URL (no backend needed) and the buy buttons wire themselves up. Creating that product is a manual step — the page only consumes the URL.
+
+   **Counting rule, so the gate can't drift:** the 10 are *pre-orders from the checkout dashboard*. Waitlist signups are the interview pool for §5 item 2 and **do not count**.
+
+   **Terms are stated in the box, per §5:** lifetime licence, 8-week ship date, full refund if it slips, full refund if it never ships.
+2. **It carries no performance numbers.** Appendix A forbids unmeasured claims, and the 2026-08-08 eval makes that concrete: mean seek error **8.50s against a ≤5s bar (fails)**, and Recall@5 of 100% that is degenerate because only ~1 result is returned per query. The page claims only the structural boundary property, Opus Clip's public pricing, and its own price. Audited: every number in the rendered copy is a form option, a step label, a competitor's public price, or ours.
+
+### The hero shows an illustration, not footage
+
+The hero carries a **diagram** of the cutting rule — the same sentence cut two ways, built in markup rather than an image. It is labelled as an illustration, not a screenshot. Real footage would be better, but the obvious candidate (`clips/local-99ce947e13e5-clip-0/tiktok.mp4`) was rejected twice over:
+
+- **It ends mid-phrase** — the last caption reads `"REMIND ME TO SIGN"`. On a page whose one claim is that clips don't get cut off mid-thought, that demo argues the opposite.
+- **Rights.** It derives from third-party Apple WWDC keynote footage. Appendix A already requires the library be *rights-clear*; a commercial sales page is exactly where that bites. Every other rendered clip shares that source or has similarly unclear provenance.
+
+A re-encode recipe is in the site README (13s 1080×1920 → 540×960/30fps/no-audio landed at **338 KB**). Drop in footage you own and add a `<video autoplay muted loop playsinline>`.
+
+### Two bugs the verification pass caught
+
+**`[hidden]` did not hide.** `.btn-buy{display:inline-block}` is an author rule and outranks the UA stylesheet's `[hidden]{display:none}`, so a dead "Reserve a copy — $49" button pointing at `#` still rendered in the unset state — exactly the failure the checkout guard exists to prevent. Fixed with an explicit `[hidden]{display:none !important}`. Worth remembering generally: setting `display` on anything that also uses the `hidden` attribute silently breaks it.
+
+**Both CTAs were filled white**, leaving primary-vs-secondary to size and position alone. The waitlist button now demotes to outlined whenever a real primary action is present.
+
+### A layout bug worth remembering
+
+`.hero{padding:88px 0 72px}` sat after `.wrap{padding:0 24px}` at equal specificity, so the shorthand **zeroed the hero's horizontal padding** — the `h1` rendered at `left:0`, flush to the viewport edge, while every `h2` sat at 24px. It survived the first round of checks because `body{overflow-x:hidden}` suppressed the horizontal scrollbar that would have revealed it. Both are fixed: `padding-block` only, and the overflow guard is gone so future overflow is visible instead of masked. Verified aligned at 24px (375px) and 116px (1280px).
+
+### Verified
+
+Form markup correct (`data-netlify`, hidden `form-name`, hidden honeypot, `action="/thanks.html"`, `type=email required`), no horizontal scroll at 1280 or 375, all five section headings aligned, `thanks.html` renders standalone, zero console errors.
+
+**Not verifiable locally:** Netlify Forms only captures on a real deploy. After deploying, submit one test entry and confirm it lands under Forms → waitlist.
+
+## 15. Still open
 
 1. **Rotate the Groq key.** Untouched, and still the one item that shouldn't wait.
 2. **`components/agent/` was deliberately left unstyled** — it's on the §4 CUT list. It still contains caps labels and will look inconsistent if you open the Agent view. That's expected, not a regression.
