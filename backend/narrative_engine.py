@@ -13,9 +13,15 @@ sentence_idx/start_sec/end_sec) — never re-derived, because reusing the same u
 makes the mid-sentence-start guarantee structural rather than heuristic.
 """
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import llm_client
+import reference_resolver
+
+# (start_sec, end_sec) -> [0, 1] rating of how cleanly a window's edges land on real pauses.
+# Injected rather than imported so this module stays free of video_id and the filesystem —
+# build one with clip_scoring.make_boundary_scorer(video_id).
+BoundaryScorer = Callable[[float, float], float]
 
 BEAT_TYPES = {
     "hook", "setup", "punchline", "confession", "turning_point",
@@ -388,11 +394,20 @@ def _build_candidate_for_seed(
     seed: Dict[str, Any],
     all_beats: List[Dict[str, Any]],
     sentences_by_idx: Dict[int, Dict[str, Any]],
+    boundary_scorer: Optional[BoundaryScorer] = None,
+    referential_deps: Optional[Dict[int, int]] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Expand `seed` (a payoff-class beat) backward to satisfy its dependency chain, forward to
     its own end, then enforce the duration bounds without ever relaxing a directly-required
     setup (ENGINE-PLAN.md Phase 2.3 — this is the guarantee the whole design rests on).
+
+    Expansion happens in three passes, in this order for a reason:
+      1. narrative dependencies  — hard, never relaxed
+      2. referential dependencies — soft, relaxed only against MAX_CLIP_SEC
+      3. pause alignment          — a preference, taken only when it changes nothing above
+    Correctness first, then comprehensibility, then polish. Running 3 before 2 would let a
+    cosmetic boundary preference decide whether a pronoun resolves.
     """
     valid_indices = sentences_by_idx.keys()
     if seed["start_sentence_idx"] not in valid_indices or seed["end_sentence_idx"] not in valid_indices:
@@ -438,22 +453,37 @@ def _build_candidate_for_seed(
     ):
         if candidate_start not in valid_indices:
             continue
-        duration = _duration_sec(sentences_by_idx, candidate_start, end_idx)
-        if duration < MIN_CLIP_SEC:
-            continue
-        if duration <= MAX_CLIP_SEC:
-            start_sec = sentences_by_idx[candidate_start]["start_sec"]
-            end_sec = sentences_by_idx[end_idx]["end_sec"]
+        referential_start = _extend_for_references(
+            sentences_by_idx, candidate_start, end_idx, referential_deps,
+        )
+        selected = _select_bounds(sentences_by_idx, referential_start, end_idx, boundary_scorer)
+        if selected is not None:
+            chosen_start, chosen_end, boundary_info = selected
+            # None, not [], when references were never resolved. An empty list is a claim —
+            # "we checked and nothing escapes this clip" — and reporting it for a run that
+            # never looked would be the same unverified assertion this feature exists to
+            # remove, just with our name on it instead of the LLM's.
+            dangling = (
+                reference_resolver.dangling_indices(referential_deps, chosen_start, chosen_end)
+                if referential_deps is not None else None
+            )
+            start_sec = sentences_by_idx[chosen_start]["start_sec"]
+            end_sec = sentences_by_idx[chosen_end]["end_sec"]
             return {
-                "start_sentence_idx": candidate_start,
-                "end_sentence_idx": end_idx,
+                "start_sentence_idx": chosen_start,
+                "end_sentence_idx": chosen_end,
+                "boundary_selection": boundary_info,
+                # The literal sentences that still point outside the clip. Empty is the claim
+                # worth making out loud: nothing in this clip refers to unseen material.
+                "dangling_reference_indices": dangling,
+                "references_expanded_by": candidate_start - referential_start,
                 "start_sec": start_sec,
                 "end_sec": end_sec,
                 "beats": included_beats,
                 "seed_beat": seed,
                 "title": seed.get("title") or "Untitled clip",
                 "quotable_line": seed.get("quotable_line", ""),
-                # Computed against candidate_start — the exact sentence clip_scoring.rank()
+                # Computed against chosen_start — the exact sentence clip_scoring.rank()
                 # scores as the opening (clip_scoring.py's opening_idx = start_sentence_idx)
                 # — so clip_scoring's hook beat_bonus and the text it actually scores now
                 # refer to the same sentence. Before this existed, the bonus looked for a
@@ -461,13 +491,151 @@ def _build_candidate_for_seed(
                 # structurally never contain one: beats_to_candidates seeds candidates only
                 # on PAYOFF_BEAT_TYPES, and this function only ever adds the seed plus its
                 # own setup chain — so the bonus could essentially never fire.
-                "opening_beat_type": _covering_beat_type(all_beats, candidate_start),
+                #
+                # Must be chosen_start, not candidate_start: pause alignment can move the
+                # in-point earlier, and reading the beat type off the pre-alignment index
+                # would reintroduce exactly the mismatch this field was added to remove.
+                "opening_beat_type": _covering_beat_type(all_beats, chosen_start),
             }
 
     # Neither the fully-satisfied nor the direct-only window fits within [MIN, MAX] — the
     # candidate cannot be safely trimmed further without violating its dependency chain, so
     # it must not be emitted. Fewer clips beats a broken one.
     return None
+
+
+# --- Pause-aligned boundary selection ----------------------------------------------------
+#
+# Sentence boundaries are text-driven (multimodal_engine splits on punctuation and length), so
+# they are NOT acoustic boundaries. Measured over the real corpus, 49% of sentence starts have
+# no recorded pause before them at all (percentile table in clip_scoring above
+# BOUNDARY_PAUSE_TARGET_SEC). Snapping the cut inside a boundary — word_timing.snap_clip_bounds
+# — fixes placement, but it cannot turn a mid-phrase boundary into a phrase boundary. Only the
+# solver can do that, by preferring a DIFFERENT sentence boundary when it has the slack.
+#
+# The search is expansion-only and therefore dependency-safe by construction: the in-point may
+# move earlier (which adds context and can never drop a required setup) and the out-point may
+# move later (the payoff stays in). Neither direction can violate the guarantee this module
+# exists to make, so pause alignment is not traded off against it at any point.
+#
+# Asymmetric limits: leading context is usually harmless and often helpful, whereas material
+# after the payoff is more likely to be dead weight, so the out-point gets less rope.
+PAUSE_SEARCH_START_SENTENCES = 3
+PAUSE_SEARCH_END_SENTENCES = 2
+
+# A wider clip has a real cost, so only take one for a materially better boundary. Against the
+# 0.6s pause target this is roughly 0.18s of additional pause on one edge — comfortably above
+# the noise in Whisper's word timings, which are quantised to hundredths.
+MIN_BOUNDARY_GAIN = 0.15
+
+
+# A referential dependency can itself land on a sentence that opens with an anaphor, so
+# expansion iterates. Bounded so a transcript where every sentence starts with a pronoun walks
+# back a fixed distance rather than to sentence zero. In practice the duration bound below
+# stops it first.
+MAX_REFERENCE_EXPANSION_STEPS = 8
+
+
+def _extend_for_references(
+    sentences_by_idx: Dict[int, Dict[str, Any]],
+    start_idx: int,
+    end_idx: int,
+    referential_deps: Optional[Dict[int, int]],
+) -> int:
+    """
+    Pull the in-point back until no sentence in range refers to something outside it.
+
+    Soft, unlike `requires_setup_from_idx`. A narrative dependency is never relaxed — a clip
+    that cuts a punchline from its setup is simply wrong. A referential one is relaxed when
+    satisfying it would breach MAX_CLIP_SEC, because almost every spoken sentence carries some
+    anaphor and hard-failing on them would reject nearly every candidate. What survives the
+    relaxation is reported honestly: clip_scoring reads the residual dangling count off
+    `dangling_reference_indices` instead of guessing.
+    """
+    if not referential_deps:
+        return start_idx
+
+    current = start_idx
+    for _ in range(MAX_REFERENCE_EXPANSION_STEPS):
+        needed = current
+        for idx in range(current, end_idx + 1):
+            dep = referential_deps.get(idx)
+            if dep is not None and dep < needed:
+                needed = dep
+        if needed >= current:
+            return current
+        if needed not in sentences_by_idx:
+            return current
+        if _duration_sec(sentences_by_idx, needed, end_idx) > MAX_CLIP_SEC:
+            # Cannot reach the antecedent without breaking the duration bound. Stop here and
+            # let the residual be counted rather than silently pretending it resolved.
+            return current
+        current = needed
+    return current
+
+
+def _select_bounds(
+    sentences_by_idx: Dict[int, Dict[str, Any]],
+    required_start: int,
+    required_end: int,
+    boundary_scorer: Optional[BoundaryScorer],
+) -> "Optional[tuple[int, int, Dict[str, Any]]]":
+    """
+    Pick the (start_idx, end_idx) that satisfies the duration bounds and lands on the cleanest
+    available pause. Returns (start, end, info) or None if the required window doesn't fit.
+
+    The tight window (required_start, required_end) must clear [MIN, MAX] on its own — exactly
+    as before this function existed. Expansion is for boundary QUALITY only, never to reach
+    MIN_CLIP_SEC: padding a short candidate with filler sentences to make the minimum would
+    contradict "fewer clips beats a broken one" below, and would quietly turn a rejected clip
+    into a bad one.
+
+    With boundary_scorer=None this is byte-for-byte the old behaviour — the tight window, or
+    nothing.
+    """
+    duration = _duration_sec(sentences_by_idx, required_start, required_end)
+    if duration < MIN_CLIP_SEC or duration > MAX_CLIP_SEC:
+        return None
+
+    no_change = {"pause_aligned": False, "boundary_gain": 0.0, "sentences_added": 0}
+    if boundary_scorer is None:
+        return required_start, required_end, no_change
+
+    def score(s: int, e: int) -> float:
+        return boundary_scorer(sentences_by_idx[s]["start_sec"], sentences_by_idx[e]["end_sec"])
+
+    base_score = score(required_start, required_end)
+    best_score, best_expansion = base_score, 0
+    best_start, best_end = required_start, required_end
+
+    valid = sentences_by_idx.keys()
+    starts = [required_start - k for k in range(PAUSE_SEARCH_START_SENTENCES + 1) if required_start - k in valid]
+    ends = [required_end + k for k in range(PAUSE_SEARCH_END_SENTENCES + 1) if required_end + k in valid]
+
+    for s in starts:
+        for e in ends:
+            if s == required_start and e == required_end:
+                continue
+            d = _duration_sec(sentences_by_idx, s, e)
+            if d < MIN_CLIP_SEC or d > MAX_CLIP_SEC:
+                continue
+            candidate_score = score(s, e)
+            if candidate_score < base_score + MIN_BOUNDARY_GAIN:
+                continue
+            expansion = (required_start - s) + (e - required_end)
+            # Best boundary wins; the tightest clip breaks ties, so we never widen further
+            # than the improvement actually requires.
+            if (candidate_score, -expansion) > (best_score, -best_expansion):
+                best_score, best_expansion = candidate_score, expansion
+                best_start, best_end = s, e
+
+    if best_expansion == 0:
+        return required_start, required_end, no_change
+    return best_start, best_end, {
+        "pause_aligned": True,
+        "boundary_gain": round(best_score - base_score, 4),
+        "sentences_added": best_expansion,
+    }
 
 
 def _sentence_overlap_fraction(a: Dict[str, Any], b: Dict[str, Any]) -> float:
@@ -496,10 +664,27 @@ def _merge_overlapping_candidates(candidates: List[Dict[str, Any]]) -> List[Dict
     return kept
 
 
-def beats_to_candidates(sentences: List[Dict[str, Any]], beats: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def beats_to_candidates(
+    sentences: List[Dict[str, Any]],
+    beats: List[Dict[str, Any]],
+    boundary_scorer: Optional[BoundaryScorer] = None,
+    resolve_references: bool = True,
+) -> List[Dict[str, Any]]:
     """
     Turn beats into clip candidates. Seeds on payoff-class beats (punchline, confession,
     turning_point, lesson, payoff) since a clip without a payoff isn't a clip.
+
+    `resolve_references` computes referential dependencies (reference_resolver) from the same
+    sentence list and satisfies them by backward expansion, so a candidate does not open on a
+    pronoun whose antecedent it excluded. Unlike `boundary_scorer` this needs no external data
+    — the text is already here — so it defaults on. Pass False to isolate the narrative
+    constraint in a test.
+
+    `boundary_scorer` is an optional callable (start_sec, end_sec) -> float in [0, 1] rating
+    how cleanly a window's edges land on real pauses — build one with
+    clip_scoring.make_boundary_scorer(video_id). It is injected rather than imported so this
+    module stays pure: no video_id, no filesystem, and its tests keep passing sentence dicts
+    alone. Omit it and boundary selection is exactly the old first-fit behaviour.
     """
     if not sentences or not beats:
         return []
@@ -507,16 +692,26 @@ def beats_to_candidates(sentences: List[Dict[str, Any]], beats: List[Dict[str, A
     sentences_by_idx = {s["sentence_idx"]: s for s in sentences}
     seeds = [b for b in beats if b["beat_type"] in PAYOFF_BEAT_TYPES]
 
+    referential_deps = (
+        reference_resolver.referential_dependencies(sentences) if resolve_references else None
+    )
+
     candidates = []
     for seed in seeds:
-        cand = _build_candidate_for_seed(seed, beats, sentences_by_idx)
+        cand = _build_candidate_for_seed(
+            seed, beats, sentences_by_idx, boundary_scorer, referential_deps,
+        )
         if cand is not None:
             candidates.append(cand)
 
     return _merge_overlapping_candidates(candidates)
 
 
-def analyze_video(sentences: List[Dict[str, Any]], max_clips: int = 6) -> Dict[str, Any]:
+def analyze_video(
+    sentences: List[Dict[str, Any]],
+    max_clips: int = 6,
+    boundary_scorer: Optional[BoundaryScorer] = None,
+) -> Dict[str, Any]:
     """
     Top-level orchestration: try LLM beat extraction, fall back to heuristic mode on any
     failure, then run the constraint solver.
@@ -575,7 +770,7 @@ def analyze_video(sentences: List[Dict[str, Any]], max_clips: int = 6) -> Dict[s
           f"windows={(extraction or {}).get('windows_ok', '-')}/{(extraction or {}).get('windows_total', '-')} "
           f"model={(extraction or {}).get('model', llm_client.get_model())}")
 
-    candidates = beats_to_candidates(sentences, beats)
+    candidates = beats_to_candidates(sentences, beats, boundary_scorer)
     return {
         "beats": beats,
         "candidates": candidates,

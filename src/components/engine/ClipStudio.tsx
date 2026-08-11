@@ -37,6 +37,13 @@ export const ClipStudio: React.FC<ClipStudioProps> = ({ videos, backendOnline })
     };
   }, []);
 
+  // The adjust endpoint returns the persisted clip, so swap it in rather than refetching the
+  // whole list — a refetch would also reorder nothing but would discard each card's local
+  // render state for no gain.
+  const handleClipAdjusted = (updated: ClipCandidate) => {
+    setClips((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
+  };
+
   const runAnalyze = async () => {
     if (!selectedVideoId) return;
     setError(null);
@@ -171,7 +178,7 @@ export const ClipStudio: React.FC<ClipStudioProps> = ({ videos, backendOnline })
           <span className="eyebrow-mono">{clips.length} RANKED CLIP{clips.length === 1 ? '' : 'S'}</span>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             {clips.map((clip, idx) => (
-              <ClipCard key={clip.id} clip={clip} rank={idx + 1} />
+              <ClipCard key={clip.id} clip={clip} rank={idx + 1} onAdjusted={handleClipAdjusted} />
             ))}
           </div>
         </div>

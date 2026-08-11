@@ -22,11 +22,45 @@ import transcript_service
 DEFAULT_LEAD_IN_SEC = 0.12
 DEFAULT_TAIL_SEC = 0.25
 
+# How far either snapping path will search for a word edge before giving up and leaving the
+# boundary where it was. Shared by snap_to_words() (manual drag) and snap_clip_bounds()
+# (analysis pipeline); see the rationale for the 1.2 figure above snap_clip_bounds().
+SNAP_WINDOW_SEC = 1.2
+
 
 class Word(TypedDict):
     word: str
     start: float
     end: float
+
+
+class SnapInfo(TypedDict):
+    """Why a boundary ended up where it did. Both snapping paths return one, so a caller (and
+    ultimately the UI) can tell "moved onto the word edge" apart from "deliberately left your
+    boundary alone because there was no speech within the window" — the two look identical
+    from the timestamps alone, and only the second is worth explaining to a user who just
+    dragged a handle and saw nothing happen."""
+    snapped: bool           # did either edge move?
+    start_moved_by: float   # seconds, signed (positive = start moved later)
+    end_moved_by: float     # seconds, signed (positive = end moved later)
+    reason: str
+
+
+def _no_snap(reason: str) -> SnapInfo:
+    return {"snapped": False, "start_moved_by": 0.0, "end_moved_by": 0.0, "reason": reason}
+
+
+def _snap_info(
+    start_sec: float, end_sec: float, new_start: float, new_end: float, reason: str
+) -> SnapInfo:
+    start_moved = round(new_start - start_sec, 4)
+    end_moved = round(new_end - end_sec, 4)
+    return {
+        "snapped": bool(start_moved or end_moved),
+        "start_moved_by": start_moved,
+        "end_moved_by": end_moved,
+        "reason": reason,
+    }
 
 
 def _words_path(video_id: str) -> str:
@@ -113,13 +147,25 @@ def ensure_words(
     return words
 
 
-def _nearest_word_boundary(words: List[Word], t: float, prefer: str) -> float:
-    """Nearest word start (prefer='start') or end (prefer='end') to timestamp t."""
+def _nearest_word_boundary(
+    words: List[Word], t: float, prefer: str, window: float
+) -> Optional[float]:
+    """
+    Nearest word start (prefer='start') or end (prefer='end') to timestamp t, searching only
+    within `window` seconds either side.
+
+    Returns None when no word edge falls inside the window. The bound is the whole point: an
+    unbounded `min` over every word in the video will happily drag a boundary dropped into a
+    long silence several seconds to the nearest speech, which is a much worse answer than
+    leaving it where the caller put it.
+    """
     if not words:
-        return t
+        return None
     key = "start" if prefer == "start" else "end"
-    closest = min(words, key=lambda w: abs(w[key] - t))
-    return closest[key]
+    in_window = [w for w in words if abs(w[key] - t) <= window]
+    if not in_window:
+        return None
+    return min(in_window, key=lambda w: abs(w[key] - t))[key]
 
 
 def snap_to_words(
@@ -128,10 +174,20 @@ def snap_to_words(
     end_sec: float,
     lead_in: float = DEFAULT_LEAD_IN_SEC,
     tail: float = DEFAULT_TAIL_SEC,
-) -> Tuple[float, float]:
+    window: float = SNAP_WINDOW_SEC,
+) -> Tuple[float, float, SnapInfo]:
     """
     Snap [start_sec, end_sec] onto exact word boundaries for `video_id`, then apply a small
     lead-in/tail so the cut breathes instead of starting exactly on the first phoneme.
+
+    Each edge is searched independently and only within `window` seconds. An edge with no word
+    boundary in range is returned exactly as it came in, lead-in/tail included — a handle the
+    user dragged into a long silence stays in that silence rather than being yanked across it
+    to distant speech. Refusing to move beats moving badly.
+
+    Returns (start, end, SnapInfo). The third element is how the caller distinguishes a
+    deliberate refusal from a no-op: both leave the timestamps alone, but only the refusal has
+    something to tell the user. Its `reason` names each edge's outcome, in start-then-end order.
 
     Falls back to the input unchanged (never crosses into an adjacent word) if no word
     timing file exists yet for this video — callers should treat that as
@@ -139,19 +195,50 @@ def snap_to_words(
     """
     words = load_words(video_id)
     if not words:
-        return start_sec, end_sec
+        return start_sec, end_sec, _no_snap("no word timing for this video")
 
-    snapped_start = _nearest_word_boundary(words, start_sec, prefer="start")
-    snapped_end = _nearest_word_boundary(words, end_sec, prefer="end")
+    snapped_start = _nearest_word_boundary(words, start_sec, prefer="start", window=window)
+    snapped_end = _nearest_word_boundary(words, end_sec, prefer="end", window=window)
+
+    if snapped_start is None and snapped_end is None:
+        return start_sec, end_sec, _no_snap(
+            "no word start within snap window; no word end within snap window"
+        )
+
+    if snapped_start is None:
+        # Only the out-point had speech in range; leave the in-point exactly where it was.
+        new_end = snapped_end + tail
+        if new_end <= start_sec:
+            return start_sec, end_sec, _no_snap("snap would collapse the clip window")
+        return start_sec, new_end, _snap_info(
+            start_sec, end_sec, start_sec, new_end,
+            "no word start within snap window; snapped to nearest word end",
+        )
+
+    if snapped_end is None:
+        new_start = max(0.0, snapped_start - lead_in)
+        if new_start >= end_sec:
+            return start_sec, end_sec, _no_snap("snap would collapse the clip window")
+        return new_start, end_sec, _snap_info(
+            start_sec, end_sec, new_start, end_sec,
+            "snapped to nearest word start; no word end within snap window",
+        )
 
     if snapped_end <= snapped_start:
         # Degenerate window (e.g. a single-word clip where nearest boundaries collapsed) —
         # don't let lead-in/tail push start past end.
-        return snapped_start, max(snapped_end, snapped_start + 0.1)
+        new_end = max(snapped_end, snapped_start + 0.1)
+        return snapped_start, new_end, _snap_info(
+            start_sec, end_sec, snapped_start, new_end,
+            "snapped onto a degenerate window; lead-in and tail suppressed",
+        )
 
     final_start = max(0.0, snapped_start - lead_in)
     final_end = snapped_end + tail
-    return final_start, final_end
+    return final_start, final_end, _snap_info(
+        start_sec, end_sec, final_start, final_end,
+        "snapped to nearest word start; snapped to nearest word end",
+    )
 
 
 def _boundary_words(video_id: str) -> Optional[List[Word]]:
@@ -249,27 +336,15 @@ def phrase_gap_after(video_id: str, end_sec: float) -> Optional[float]:
 # cover the quantisation plus the segment-boundary slop Whisper itself introduces; a window
 # much wider than that starts reaching into genuinely adjacent speech.
 #
-# This is deliberately NOT snap_to_words(): that helper takes a globally nearest word edge
-# (min over ALL words), which is correct for a human dragging a handle in the UI but wrong
-# here — an unbounded search can drag a boundary seconds across a silence. Everything below
-# is bounded by `window` and refuses to move rather than move badly.
-
-SNAP_WINDOW_SEC = 1.2
+# This is deliberately NOT snap_to_words(): that helper takes whichever word edge is nearest
+# in either direction, which is what a human dragging a handle in the UI means, whereas the
+# quantisation fixed here is directional — floor() moved the in-point earlier, ceil() moved
+# the out-point later, so the snap searches forward from the start and backward from the end.
+# Both functions share SNAP_WINDOW_SEC and both refuse to move rather than move badly.
 
 # Never place a cut closer than this to a neighbouring word, so lead-in/tail can't bleed a
 # syllable of the sentence before or after into the clip.
 ADJACENT_MARGIN_SEC = 0.06
-
-
-class SnapInfo(TypedDict):
-    snapped: bool           # did either edge move?
-    start_moved_by: float   # seconds, signed (positive = start moved later)
-    end_moved_by: float     # seconds, signed (positive = end moved later)
-    reason: str
-
-
-def _no_snap(reason: str) -> SnapInfo:
-    return {"snapped": False, "start_moved_by": 0.0, "end_moved_by": 0.0, "reason": reason}
 
 
 def snap_clip_bounds(
@@ -337,11 +412,6 @@ def snap_clip_bounds(
     if new_end - new_start < 0.5:
         return start_sec, end_sec, _no_snap("snap would collapse the clip window")
 
-    start_moved = round(new_start - start_sec, 4)
-    end_moved = round(new_end - end_sec, 4)
-    return new_start, new_end, {
-        "snapped": bool(start_moved or end_moved),
-        "start_moved_by": start_moved,
-        "end_moved_by": end_moved,
-        "reason": f"{start_reason}; {end_reason}",
-    }
+    return new_start, new_end, _snap_info(
+        start_sec, end_sec, new_start, new_end, f"{start_reason}; {end_reason}"
+    )

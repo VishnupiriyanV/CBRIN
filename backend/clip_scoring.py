@@ -202,23 +202,39 @@ def _hook_strength(candidate: Dict[str, Any]) -> Tuple[float, Dict[str, float]]:
     return score, cues_out
 
 
+# Each sentence still pointing outside the clip after the solver has expanded as far as
+# MAX_CLIP_SEC allows. One is a real defect; the scale is steep on purpose.
+DANGLING_REFERENCE_PENALTY = 0.35
+
+
 def _self_containedness(candidate: Dict[str, Any]) -> float:
+    """
+    Driven by the solver's COMPUTED referential dependencies, not by the LLM's opinion of
+    itself.
+
+    This used to count deixis terms in the first ten words and then apply +/-0.2 from
+    `seed_beat["self_contained"]` — a heuristic wrapped around an unverified model claim, in a
+    module whose entire point is that dependencies are structural rather than asserted. The
+    LLM flag is now ignored completely: it was the only input here that nothing could check,
+    and narrative_engine already expands the clip to satisfy what it can, so a residual
+    dangling reference is a measured fact rather than a guess.
+
+    The deixis scan is kept, at reduced weight, for two cases the resolver deliberately does
+    not cover: a back-reference that is not sentence-initial, and degraded mode, where
+    `dangling_reference_indices` is absent because references were never resolved.
+    """
     opening_text = candidate.get("_opening_text", "")
-    words = re.findall(r"\b[a-zA-Z']+\b", opening_text.lower())
-    first_ten = words[:10]
-
-    penalty = sum(1 for w in first_ten if w in _DEIXIS_TERMS) * 0.15
     lowered = opening_text.lower()
-    penalty += sum(0.2 for phrase in _DEIXIS_PHRASES if phrase in lowered)
+    words = re.findall(r"\b[a-zA-Z']+\b", lowered)
 
-    seed_beat = candidate.get("seed_beat") or {}
-    llm_flag_bonus = 0.0
-    if seed_beat.get("self_contained") is True:
-        llm_flag_bonus = 0.2
-    elif seed_beat.get("self_contained") is False:
-        penalty += 0.2
+    penalty = sum(1 for w in words[:10] if w in _DEIXIS_TERMS) * 0.08
+    penalty += sum(0.15 for phrase in _DEIXIS_PHRASES if phrase in lowered)
 
-    return _clamp01(1.0 - penalty + llm_flag_bonus)
+    dangling = candidate.get("dangling_reference_indices")
+    if dangling is not None:
+        penalty += len(dangling) * DANGLING_REFERENCE_PENALTY
+
+    return _clamp01(1.0 - penalty)
 
 
 def _emotional_delta(candidate: Dict[str, Any], video_id: str) -> float:
@@ -326,10 +342,40 @@ def _boundary_cleanliness(candidate: Dict[str, Any], video_id: str) -> float:
     had landed in an unrelated silence; a large phrase_gap means the opposite — an
     unambiguous phrase boundary — so tapering it would penalise the best cut points available.
     """
+    return _boundary_score_for(video_id, candidate["start_sec"], candidate["end_sec"])
+
+
+# Returned when there is no word timing for the video at all. phrase_gap_* answers None for
+# two very different reasons — "the clip opens the recording, nothing to cut into" (a perfect
+# boundary) and "there is no timing data" (unknown) — and scoring the second as perfect would
+# rank an un-timed video's clips ABOVE properly measured ones. The old formula had the
+# opposite bug: silence_gap_* returned 0.0 with no data, so missing timing scored as the worst
+# possible boundary. Neither is honest; 0.5 says "unknown" and matches how _taste_match and
+# _emotional_delta already report absent evidence.
+BOUNDARY_UNKNOWN_SCORE = 0.5
+
+
+def _boundary_score_for(video_id: str, start_sec: float, end_sec: float) -> float:
+    if word_timing.load_words(video_id) is None:
+        return BOUNDARY_UNKNOWN_SCORE
     return _clamp01((
-        _pause_score(word_timing.phrase_gap_before(video_id, candidate["start_sec"]))
-        + _pause_score(word_timing.phrase_gap_after(video_id, candidate["end_sec"]))
+        _pause_score(word_timing.phrase_gap_before(video_id, start_sec))
+        + _pause_score(word_timing.phrase_gap_after(video_id, end_sec))
     ) / 2.0)
+
+
+def make_boundary_scorer(video_id: str):
+    """
+    A (start_sec, end_sec) -> [0, 1] callable for narrative_engine.beats_to_candidates, so the
+    solver can PREFER sentence boundaries that land on real pauses instead of only being
+    marked on whichever one it happened to pick first.
+
+    Deliberately the same function _boundary_cleanliness reports. If the solver optimised
+    against one definition of a clean boundary and the ranker scored a different one, the two
+    would drift and the score would stop describing the choice — which is the failure this
+    signal has already had once, in the opposite direction (see _boundary_cleanliness).
+    """
+    return lambda start_sec, end_sec: _boundary_score_for(video_id, start_sec, end_sec)
 
 
 def _taste_match(candidate: Dict[str, Any], taste_centroid: Optional[np.ndarray]) -> Optional[float]:

@@ -704,7 +704,12 @@ def _run_analyze_job(video_id: str, max_clips: int):
             print(f"[ENGINE] Word timing unavailable for '{video_id}': {e}. Continuing with sentence-level timing only.")
 
         report("beats", 0.5, "extracting narrative beats")
-        analysis = narrative_engine.analyze_video(sentences, max_clips=max_clips)
+        # Only pass a boundary scorer when word timing actually succeeded — without it every
+        # window scores identically and the solver would "prefer" boundaries on no evidence.
+        boundary_scorer = clip_scoring.make_boundary_scorer(video_id) if timing_precise else None
+        analysis = narrative_engine.analyze_video(
+            sentences, max_clips=max_clips, boundary_scorer=boundary_scorer,
+        )
 
         report("scoring", 0.75, "scoring clip candidates")
         sentences_by_idx = {s["sentence_idx"]: s for s in sentences}
@@ -770,15 +775,27 @@ def engine_get_clips(video_id: str):
 
 @app.post("/api/engine/clips/{clip_id}/adjust")
 def engine_adjust_clip(clip_id: str, payload: EngineAdjustRequest):
-    """Snap a manually-adjusted trim range onto exact word boundaries."""
+    """Snap a manually-adjusted trim range onto exact word boundaries.
+
+    The returned clip carries `boundary_snap` describing what the snap did — including the
+    case where it declined to move a handle because no word edge fell within its search
+    window. Without that the client cannot tell a refusal from a no-op, and a user who drags
+    into a silence just sees the handle spring back with no explanation.
+    """
     all_clips = _load_clips()
     clip = all_clips.get(clip_id)
     if clip is None:
         raise HTTPException(status_code=404, detail=f"Clip '{clip_id}' not found.")
 
-    snapped_start, snapped_end = word_timing.snap_to_words(clip["video_id"], payload.start_sec, payload.end_sec)
+    snapped_start, snapped_end, snap_info = word_timing.snap_to_words(
+        clip["video_id"], payload.start_sec, payload.end_sec
+    )
     clip["start_sec"] = snapped_start
     clip["end_sec"] = snapped_end
+    # Overwrite whatever the analysis run recorded (clip_scoring.py sets the same key from
+    # snap_clip_bounds): boundary_snap should always describe how the clip's CURRENT bounds
+    # were arrived at, and these are now the user's, not the pipeline's.
+    clip["boundary_snap"] = snap_info
     all_clips[clip_id] = clip
     _save_clips(all_clips)
     return clip
