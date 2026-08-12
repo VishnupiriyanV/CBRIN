@@ -491,6 +491,106 @@ def _taste_match(candidate: Dict[str, Any], taste_centroid: Optional[np.ndarray]
     return _clamp01((cosine + 1.0) / 2.0)
 
 
+# --- Diversity-aware selection --------------------------------------------------------------
+# narrative_engine._merge_overlapping_candidates collapses candidates overlapping >60% by
+# SENTENCE COUNT — temporal overlap only. Two clips fifteen minutes apart that make the same
+# point are not overlapping by that test, so both survive and both can rank top-5. Picking the
+# top N by composite alone is exposed to what the frame-selection literature calls redundancy
+# collapse: every pick clustered on one strong stretch of the video.
+#
+# MMR (Carbonell & Goldstein) is the standard fix — trade relevance against novelty. Gygli et
+# al. established the same shape for video summarization as a submodular objective with greedy
+# selection. Here: score everything, then select greedily on
+#
+#     lambda * composite - (1 - lambda) * max_cosine_to_already_selected
+#
+# LAMBDA IS NOT A FREE PARAMETER — it depends on the relative SPREAD of the two terms, which
+# are on different scales. Measured on this library (2026-08-11, 14 persisted clips):
+#
+#   composite:          min=0.402  p50=0.481  max=0.617  stdev=0.060
+#   adjacent gap within one video:  p50=0.0367  p90=0.0541  max=0.0652
+#   pairwise cosine within one video: p50=0.216  p90=0.459  max=0.588  (none above 0.7)
+#
+# So a typical quality difference between neighbouring candidates is ~0.037, while similarity
+# ranges over ~0.65. At lambda=0.7 the novelty term spans 0.3*0.65 = 0.194 against a typical
+# lambda-weighted quality gap of 0.7*0.037 = 0.026 — novelty with roughly 7x the authority of
+# quality, which is the opposite of the intent. The same failure clip_scoring already has on
+# record for hook_strength: a nominal weight that doesn't match effective influence.
+#
+# 0.85 sizes the penalty so a near-duplicate can lose to a modestly worse but novel clip
+# (0.15*0.65 = 0.098, about two adjacent quality steps) without a weak clip being promoted for
+# being unusual. Re-derive it if the composite distribution shifts — a signal change that
+# widens or narrows composite spread silently changes what this lambda means.
+#
+# Note the honest consequence on THIS corpus: max pairwise similarity is 0.588 and only 2 of
+# 31 pairs exceed 0.5, so at 0.85 selection is unchanged for every video in the library. That
+# is the correct result for a corpus with no real redundancy, not evidence the guard works —
+# TestDiversitySelection covers the firing case synthetically.
+MMR_LAMBDA = 0.85
+
+
+def _encode_candidates(candidates: List[Dict[str, Any]]) -> Optional[np.ndarray]:
+    """Unit-normalised embeddings for every candidate, in ONE batch call. Returns None when
+    the dense model is unavailable — the same degraded-mode bail as _taste_match."""
+    from vector_store import EMBEDDING_MODEL, HAS_DENSE_MODEL
+    if not HAS_DENSE_MODEL:
+        return None
+    texts = [
+        (c.get("_full_text") or c.get("quotable_line") or "").strip() for c in candidates
+    ]
+    if not any(texts):
+        return None
+    return EMBEDDING_MODEL.encode(texts, convert_to_numpy=True, normalize_embeddings=True)
+
+
+def _select_diverse(
+    ordered: List[Dict[str, Any]], max_clips: int, lambda_: float = MMR_LAMBDA
+) -> List[Dict[str, Any]]:
+    """
+    Greedy MMR over `ordered` (already sorted best-first, deterministically).
+
+    Annotates every selected clip with `diversity.max_similarity` — how close it is to the
+    nearest already-selected clip — so a near-duplicate that survived is visible rather than
+    silently present. The top-scoring clip is always selected first and reports 0.0.
+
+    Determinism holds: `ordered` is deterministic, the scan runs in that order, and ties use
+    strict `>`, so an exact MMR tie resolves to the higher-composite candidate.
+    """
+    if max_clips <= 0:
+        return []
+
+    vectors = _encode_candidates(ordered)
+    if vectors is None or len(ordered) <= 1:
+        # Degraded: no dense model, so novelty cannot be measured. Fall back to top-k by
+        # composite and say so, rather than reporting a diversity figure nothing computed.
+        for c in ordered[:max_clips]:
+            c["diversity"] = {"max_similarity": None, "measured": False}
+        return list(ordered[:max_clips])
+
+    selected: List[int] = [0]
+    ordered[0]["diversity"] = {"max_similarity": 0.0, "measured": True}
+
+    while len(selected) < min(max_clips, len(ordered)):
+        best_i: Optional[int] = None
+        best_mmr = 0.0
+        best_sim = 0.0
+        for i in range(len(ordered)):
+            if i in selected:
+                continue
+            similarity = max(float(np.dot(vectors[i], vectors[j])) for j in selected)
+            mmr = lambda_ * ordered[i]["composite"] - (1.0 - lambda_) * similarity
+            if best_i is None or mmr > best_mmr:
+                best_i, best_mmr, best_sim = i, mmr, similarity
+        if best_i is None:
+            break
+        ordered[best_i]["diversity"] = {
+            "max_similarity": round(best_sim, 4), "measured": True,
+        }
+        selected.append(best_i)
+
+    return [ordered[i] for i in selected]
+
+
 def score_candidate(
     candidate: Dict[str, Any],
     video_id: str,
@@ -609,13 +709,21 @@ def rank(
         for c in enriched
     ]
 
-    for s in scored:
+    # Deterministic best-first order, then diversity-aware selection from it. _full_text must
+    # still be present here — _select_diverse embeds it — so the scratch keys are stripped
+    # after selection rather than before.
+    scored.sort(key=lambda c: (-c["composite"], c["start_sec"], c["id"]))
+    selected = _select_diverse(scored, max_clips)
+
+    for s in selected:
         s["reason"] = _top_contributor_reason(s["signals"])
         s.pop("_opening_text", None)
         s.pop("_full_text", None)
 
-    scored.sort(key=lambda c: (-c["composite"], c["start_sec"], c["id"]))
-    return scored[:max_clips]
+    # Re-sort for display. MMR decides WHICH clips are shown; the user still expects them
+    # best-first, and clip_eval.py depends on this ordering being stable.
+    selected.sort(key=lambda c: (-c["composite"], c["start_sec"], c["id"]))
+    return selected
 
 
 def record_feedback(clip_id: str, verdict: str) -> int:

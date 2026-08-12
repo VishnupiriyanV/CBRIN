@@ -165,6 +165,73 @@ class TestHookStrength:
         assert archetype_encode_calls["n"] == 1
 
 
+class TestDiversitySelection:
+    """MMR selection. The real library has no pair above 0.588 cosine, so the firing case is
+    covered here with texts constructed to be near-duplicates."""
+
+    @staticmethod
+    def _cand(cid, composite, text, start_sec=0.0):
+        return {"id": cid, "composite": composite, "start_sec": start_sec, "_full_text": text}
+
+    def test_near_duplicate_loses_to_a_novel_clip(self):
+        pool = [
+            self._cand("a", 0.60, "Most founders underprice their very first product badly.", 0),
+            self._cand("b", 0.55, "Founders almost always underprice the first product they sell.", 10),
+            self._cand("c", 0.52, "Filming outdoors in winter destroyed three of my microphones.", 20),
+        ]
+        picked = [c["id"] for c in cs._select_diverse([dict(c) for c in pool], 2)]
+        # b is a paraphrase of a and outranks c on composite, but adds nothing.
+        assert picked == ["a", "c"]
+
+    def test_top_scoring_clip_is_always_selected(self):
+        pool = [
+            self._cand("a", 0.90, "Most founders underprice their very first product badly.", 0),
+            self._cand("b", 0.20, "Founders almost always underprice the first product they sell.", 10),
+        ]
+        assert cs._select_diverse([dict(c) for c in pool], 1)[0]["id"] == "a"
+
+    def test_quality_still_wins_when_nothing_is_redundant(self):
+        pool = [
+            self._cand("a", 0.60, "Most founders underprice their very first product badly.", 0),
+            self._cand("b", 0.55, "Filming outdoors in winter destroyed three of my microphones.", 10),
+            self._cand("c", 0.30, "My accountant called about a tax bill I had not expected.", 20),
+        ]
+        picked = [c["id"] for c in cs._select_diverse([dict(c) for c in pool], 2)]
+        assert picked == ["a", "b"]
+
+    def test_pool_smaller_than_max_clips_returns_everything(self):
+        pool = [
+            self._cand("a", 0.60, "Most founders underprice their very first product badly.", 0),
+            self._cand("b", 0.55, "Founders almost always underprice the first product they sell.", 10),
+        ]
+        assert len(cs._select_diverse([dict(c) for c in pool], 5)) == 2
+
+    def test_selected_clips_report_their_similarity(self):
+        pool = [
+            self._cand("a", 0.60, "Most founders underprice their very first product badly.", 0),
+            self._cand("b", 0.55, "Filming outdoors in winter destroyed three of my microphones.", 10),
+        ]
+        picked = cs._select_diverse([dict(c) for c in pool], 2)
+        assert picked[0]["diversity"] == {"max_similarity": 0.0, "measured": True}
+        assert picked[1]["diversity"]["measured"] is True
+        assert 0.0 <= picked[1]["diversity"]["max_similarity"] <= 1.0
+
+    def test_selection_is_deterministic(self):
+        pool = [
+            self._cand("a", 0.50, "Most founders underprice their very first product badly.", 0),
+            self._cand("b", 0.50, "Founders almost always underprice the first product they sell.", 10),
+            self._cand("c", 0.50, "Filming outdoors in winter destroyed three of my microphones.", 20),
+        ]
+        runs = [
+            [c["id"] for c in cs._select_diverse([dict(x) for x in pool], 2)] for _ in range(3)
+        ]
+        assert runs[0] == runs[1] == runs[2]
+
+    def test_zero_max_clips(self):
+        pool = [self._cand("a", 0.6, "Some ordinary sentence about pricing.", 0)]
+        assert cs._select_diverse(pool, 0) == []
+
+
 class TestSelfContainedness:
     """Driven by the solver's computed referential dependencies, not the LLM's self-assessment."""
 

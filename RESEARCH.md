@@ -53,7 +53,7 @@ Priority is payoff-per-unit-effort, with dependencies respected. Each gap states
 | 1 | Boundaries scored but never snapped | S | **done** — 2026-08-11 |
 | 2 | `self_contained` asserted, not proven | M | **done** — 2026-08-11 |
 | 3 | Prosody is speech-rate only | M | **done** — 2026-08-11 (hook term deferred) |
-| 4 | Dedup isn't diversity | S | open |
+| 4 | Dedup isn't diversity | S | **done** — 2026-08-11 |
 | 5 | Sliding windows can't see long-range deps | L | open |
 
 Pause-aligned boundary selection (under Gap 1) also landed, in `narrative_engine` rather than the scorer.
@@ -253,6 +253,28 @@ using embeddings from `vector_store`'s existing `all-MiniLM-L6-v2`. Roughly 30 l
 
 Keep the existing overlap merge — it is doing a different job (structural dedupe) and should run first.
 
+#### Implemented 2026-08-11
+
+`clip_scoring._select_diverse()`, called from `rank()` between the deterministic sort and the display sort. MMR decides *which* clips are shown; the returned list is re-sorted best-first afterward, so `clip_eval.py`'s ordering contract is untouched. `_merge_overlapping_candidates` still runs first and unchanged.
+
+**λ is not a free parameter, and picking 0.7 by eye was wrong.** The two MMR terms are on different scales, so the nominal weight and the effective influence diverge. Measured on the library:
+
+| | |
+|---|---|
+| composite | min 0.402, p50 0.481, max 0.617, stdev 0.060 |
+| adjacent composite gap within a video | p50 **0.037**, p90 0.054 |
+| pairwise cosine within a video | p50 0.216, p90 0.459, max **0.588** |
+
+At λ = 0.7 the novelty term spans `0.3 × 0.65 = 0.194` against a typical λ-weighted quality gap of `0.7 × 0.037 = 0.026` — novelty carrying roughly **7× the authority of quality**, the opposite of the intent. Exactly the failure mode `clip_scoring` already has on record for `hook_strength`: a nominal weight that doesn't match effective influence.
+
+λ = **0.85** sizes the penalty so a near-duplicate can lose to a modestly worse but novel clip (`0.15 × 0.65 = 0.098`, about two adjacent quality steps) without a weak clip being promoted for being unusual. This has to be re-derived if any signal change widens or narrows the composite spread — that silently changes what λ means.
+
+**On this corpus it changes nothing, and that is the correct result.** Max pairwise similarity is 0.588 and only 2 of 31 pairs exceed 0.5 — there is no real redundancy here to remove. At λ = 0.7 it did reorder one video, which on this evidence would have been churn rather than improvement. The firing case is covered synthetically in `TestDiversitySelection` with constructed paraphrases, since the library cannot exercise it.
+
+Caveat on the measurement: the pools are the *already-selected* clips, not the full candidate set — `_merge_overlapping_candidates` has already removed the temporally-overlapping ones. The true candidate pool is larger and probably more redundant, so this understates the effect rather than overstating it.
+
+Selected clips carry `diversity.max_similarity` so a near-duplicate that survived is visible rather than silently present, and `measured: False` when the dense model is absent — the same "unknown, not zero" distinction as `BOUNDARY_UNKNOWN_SCORE` and `dangling_reference_indices`.
+
 ---
 
 ### Gap 5 — Sliding windows cannot see long-range dependencies
@@ -295,8 +317,9 @@ A. Structure   embeddings → divisive clustering → topic tree      (no LLM)  
 B. Beats       LLM over coherent segments + cross-segment links   (LLM)         [have]
 C. Solve       narrative deps + referential deps → candidates     (determ.)     [done]
                pause-aligned boundary selection                                 [done]
-D. Rank        text + acoustic signals, then MMR                  (no LLM)      [Gap 4 open]
+D. Rank        text + acoustic signals, then MMR                  (no LLM)      [done]
                pitch/energy prosody in emotional_delta                          [done]
+               MMR diversity selection                                          [done]
 E. Snap        onset/offset search ±1.2s, guard band              (determ.)     [Gap 1 — done]
 ```
 
