@@ -27,6 +27,7 @@ INDEX_META_FILE = os.path.join(DATA_DIR, "index_meta.json")
 
 # ENGINE (Layer 3)
 WORDS_DIR = os.path.join(DATA_DIR, "words")
+PROSODY_DIR = os.path.join(DATA_DIR, "prosody")
 CLIPS_DIR = os.path.join(DATA_DIR, "clips")
 CLIPS_FILE = os.path.join(DATA_DIR, "clips.json")
 BRAND_KIT_FILE = os.path.join(DATA_DIR, "brand_kit.json")
@@ -44,7 +45,7 @@ def use_root(root: str) -> None:
     so nothing a test does can ever touch the real backend/data/ directory."""
     global DATA_DIR, MEDIA_DIR, KEYFRAMES_DIR, CHUNKS_FILE, EMBEDDINGS_FILE
     global VISUAL_EMBEDDINGS_FILE, VIDEOS_FILE, INDEX_META_FILE
-    global WORDS_DIR, CLIPS_DIR, CLIPS_FILE, BRAND_KIT_FILE, JOBS_FILE, CLIP_FEEDBACK_FILE
+    global WORDS_DIR, PROSODY_DIR, CLIPS_DIR, CLIPS_FILE, BRAND_KIT_FILE, JOBS_FILE, CLIP_FEEDBACK_FILE
     global VOICE_PROFILE_FILE, TOOL_RUNS_FILE, TOOL_USAGE_FILE
 
     DATA_DIR = root
@@ -57,6 +58,7 @@ def use_root(root: str) -> None:
     INDEX_META_FILE = os.path.join(DATA_DIR, "index_meta.json")
 
     WORDS_DIR = os.path.join(DATA_DIR, "words")
+    PROSODY_DIR = os.path.join(DATA_DIR, "prosody")
     CLIPS_DIR = os.path.join(DATA_DIR, "clips")
     CLIPS_FILE = os.path.join(DATA_DIR, "clips.json")
     BRAND_KIT_FILE = os.path.join(DATA_DIR, "brand_kit.json")
