@@ -121,6 +121,130 @@ class TestDurationBounds:
         assert candidates == []
 
 
+class TestSegmentAwareWindowing:
+    """Windows are built from topic segments instead of fixed 60-sentence slices, and each
+    window carries a digest of what came before it — which is what makes a long-range
+    requires_setup_from_idx expressible at all."""
+
+    @staticmethod
+    def _segmenter(size):
+        """Split into fixed-size runs, standing in for real topic segmentation."""
+        return lambda sentences: [
+            sentences[i:i + size] for i in range(0, len(sentences), size)
+        ]
+
+    def test_short_transcript_still_passes_whole(self, monkeypatch):
+        sentences = _sentences(10)
+        windows, segments = ne._plan_windows(sentences, self._segmenter(4))
+        assert len(windows) == 1
+        assert segments == []
+
+    def test_windows_are_built_from_whole_segments(self, monkeypatch):
+        monkeypatch.setattr(ne, "WINDOW_SENTENCE_COUNT", 20)
+        monkeypatch.setattr(ne, "WORD_COUNT_WINDOW_THRESHOLD", 0)
+        sentences = _sentences(60)
+        windows, segments = ne._plan_windows(sentences, self._segmenter(8))
+        assert len(segments) == 8
+        # Every window boundary must coincide with a segment boundary.
+        seg_starts = {s[0]["sentence_idx"] for s in segments}
+        assert all(w[0]["sentence_idx"] in seg_starts for w in windows)
+        assert all(len(w) <= 20 for w in windows)
+
+    def test_every_sentence_appears_exactly_once(self, monkeypatch):
+        monkeypatch.setattr(ne, "WINDOW_SENTENCE_COUNT", 20)
+        monkeypatch.setattr(ne, "WORD_COUNT_WINDOW_THRESHOLD", 0)
+        sentences = _sentences(60)
+        windows, _ = ne._plan_windows(sentences, self._segmenter(8))
+        seen = [s["sentence_idx"] for w in windows for s in w]
+        # No overlap, unlike the sliding scheme — segment boundaries are chosen to be real.
+        assert seen == sorted(seen)
+        assert seen == [s["sentence_idx"] for s in sentences]
+
+    def test_oversized_segment_is_split_to_fit_the_window(self, monkeypatch):
+        monkeypatch.setattr(ne, "WINDOW_SENTENCE_COUNT", 10)
+        monkeypatch.setattr(ne, "WINDOW_OVERLAP", 0)
+        monkeypatch.setattr(ne, "WORD_COUNT_WINDOW_THRESHOLD", 0)
+        sentences = _sentences(40)
+        # One segment of 40 — larger than any window the provider would accept.
+        windows, _ = ne._plan_windows(sentences, lambda s: [s])
+        assert windows  # not dropped
+        assert all(len(w) <= 10 for w in windows)
+
+    def test_falls_back_to_fixed_windows_without_a_segmenter(self, monkeypatch):
+        monkeypatch.setattr(ne, "WINDOW_SENTENCE_COUNT", 20)
+        monkeypatch.setattr(ne, "WINDOW_OVERLAP", 5)
+        monkeypatch.setattr(ne, "WORD_COUNT_WINDOW_THRESHOLD", 0)
+        sentences = _sentences(60)
+        windows, segments = ne._plan_windows(sentences, None)
+        assert segments == []
+        assert len(windows) > 1
+
+    def test_segmenter_failure_falls_back_instead_of_raising(self, monkeypatch):
+        monkeypatch.setattr(ne, "WINDOW_SENTENCE_COUNT", 20)
+        monkeypatch.setattr(ne, "WORD_COUNT_WINDOW_THRESHOLD", 0)
+
+        def broken(_sentences):
+            raise RuntimeError("embedding model exploded")
+
+        windows, segments = ne._plan_windows(_sentences(60), broken)
+        assert windows and segments == []
+
+
+class TestCrossSegmentContext:
+    def test_header_lists_only_preceding_segments(self):
+        segments = [_sentences(30)[0:10], _sentences(30)[10:20], _sentences(30)[20:30]]
+        header = ne._context_header(segments, first_idx=20)
+        assert "[0-9]" in header and "[10-19]" in header
+        assert "[20-29]" not in header
+
+    def test_no_header_for_the_first_window(self):
+        segments = [_sentences(20)[0:10], _sentences(20)[10:20]]
+        assert ne._context_header(segments, first_idx=0) == ""
+
+    def test_header_is_capped_but_keeps_the_most_recent(self):
+        sentences = _sentences(120)
+        segments = [sentences[i:i + 10] for i in range(0, 120, 10)]
+        header = ne._context_header(segments, first_idx=120, max_lines=3)
+        assert header.count("\n[") + header.count("\n") >= 1
+        assert "[110-119]" in header      # most recent kept
+        assert "[0-9]" not in header      # oldest dropped
+
+    def test_header_tells_the_model_not_to_create_beats_there(self):
+        segments = [_sentences(20)[0:10], _sentences(20)[10:20]]
+        header = ne._context_header(segments, first_idx=10)
+        assert "Do NOT create beats" in header
+
+    def test_context_header_is_prepended_to_the_window(self, monkeypatch):
+        captured = {}
+
+        def fake_complete(system, user, schema, **kw):
+            captured["user"] = user
+            return {"beats": []}, {"model": "m", "prompt_tokens": 1, "completion_tokens": 1}
+
+        monkeypatch.setattr(ne.llm_client, "complete_json_with_usage", fake_complete)
+        ne._extract_beats_for_window(
+            [_sentence(5, "the current line", 15, 18)],
+            context_header="EARLIER: [0-4] something before\n\nCURRENT SECTION:\n",
+        )
+        assert captured["user"].startswith("EARLIER: [0-4] something before")
+        assert "[5] 00:15  the current line" in captured["user"]
+
+    def test_long_range_dependency_survives_validation(self):
+        # The point of the whole change: a beat late in the transcript may point its
+        # requires_setup_from_idx at a sentence far outside its own window, and validation
+        # must keep it. Before segment-aware windowing the model could never SEE index 2 while
+        # working on sentence 300, so this beat was unproducible rather than rejected.
+        sentences = _sentences(320)
+        raw = [{
+            "beat_type": "punchline", "start_sentence_idx": 300, "end_sentence_idx": 301,
+            "requires_setup_from_idx": 2, "title": "callback", "why_it_lands": "",
+            "emotional_arc": {}, "self_contained": False, "quotable_line": "",
+        }]
+        cleaned = ne._validate_and_clean_beats(raw, {s["sentence_idx"]: s for s in sentences})
+        assert len(cleaned) == 1
+        assert cleaned[0]["requires_setup_from_idx"] == 2
+
+
 class TestReferentialDependencies:
     """The second dependency type: a clip must not open on a pronoun whose antecedent it
     excluded. Soft where the narrative constraint is hard — see _extend_for_references."""
