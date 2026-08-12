@@ -28,6 +28,7 @@ from multimodal_engine import preload_models
 # so nothing here is meant to run concurrently with itself.
 import jobs
 import media_service
+import prosody
 import word_timing
 import narrative_engine
 import clip_scoring
@@ -702,6 +703,15 @@ def _run_analyze_job(video_id: str, max_clips: int):
         except Exception as e:
             timing_precise = False
             print(f"[ENGINE] Word timing unavailable for '{video_id}': {e}. Continuing with sentence-level timing only.")
+
+        # Acoustic prosody for _emotional_delta. Independent of word timing — a video can have
+        # one without the other — so it gets its own guard and never fails the analysis.
+        try:
+            report("prosody", 0.3, "measuring pitch and energy")
+            prosody.ensure_prosody(video_id, media_path, report=report)
+        except Exception as e:
+            print(f"[ENGINE] Prosody unavailable for '{video_id}': {e}. "
+                  f"Emotional delta will fall back to speech rate alone.")
 
         report("beats", 0.5, "extracting narrative beats")
         # Only pass a boundary scorer when word timing actually succeeded — without it every

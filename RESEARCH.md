@@ -52,7 +52,7 @@ Priority is payoff-per-unit-effort, with dependencies respected. Each gap states
 |---|---|---|---|
 | 1 | Boundaries scored but never snapped | S | **done** — 2026-08-11 |
 | 2 | `self_contained` asserted, not proven | M | **done** — 2026-08-11 |
-| 3 | Prosody is speech-rate only | M | open |
+| 3 | Prosody is speech-rate only | M | **done** — 2026-08-11 (hook term deferred) |
 | 4 | Dedup isn't diversity | S | open |
 | 5 | Sliding windows can't see long-range deps | L | open |
 
@@ -202,6 +202,35 @@ The newer, stronger vision-language model **lost to the older model that could h
 
 That orthogonality is the point. `clip_scoring.py:64` records the measured correlation between the semantic and lexical halves of `hook_strength` at **−0.075**, and cites near-independence as the reason to blend them. Acoustic features are the cheapest available source of a third independent signal — which matters given the honest state of that calibration: at 50 labels, no weight split in a 0.0–1.0 sweep cleared both the AUC and median-delta bars (line 74).
 
+#### Implemented 2026-08-11
+
+`backend/prosody.py`, consumed by a rewritten `clip_scoring._emotional_delta`, extracted in `main.py` alongside `word_timing.ensure_words`.
+
+**No new dependency.** librosa is the obvious tool and drags soundfile/audioread/pooch behind it; torchaudio isn't installed. This needs coarse prosody — animated or flat — not precise f0 tracking, so it decodes with the ffmpeg already bundled for clip rendering and computes contours with numpy and scipy, both already present as scikit-learn dependencies. Nothing touches the network. Extraction runs 43 minutes of video in ~9s and caches 356KB.
+
+Pitch is expressed in **semitones relative to the speaker's own median**, which is what makes it comparable across people rather than reporting that one voice is deeper than another. Measured baselines across the library span 98–208 Hz, so this was not optional.
+
+`_emotional_delta` is now `0.35 × arc + 0.65 × acoustic`, where acoustic blends pitch range (0.40), energy delta (0.30), pitch direction (0.15), and speaking rate (0.15) — the old whole signal demoted to one term of four. Terms are *dropped and the remainder renormalised* when unmeasurable, never zero-filled; `window_features` returns `None` for "not measured", the same distinction `BOUNDARY_UNKNOWN_SCORE` draws.
+
+Effect on the 14 persisted clips:
+
+| | old (rate only) | new |
+|---|---|---|
+| mean | 0.124 | 0.212 |
+| **stdev** | **0.100** | **0.164** |
+| range | 0.016–0.308 | 0.057–0.567 |
+
+The spread is the point — the signal now separates the monotone speaker (`yt-pWH1TF1ZfKA`, pitch range 6–8 st, every clip scoring 0.06–0.13) from the animated one (`13e5-clip-0`, 22 st with an energy delta of 0.34, scoring 0.567). The words-per-minute proxy could not see that difference; it ranked those two clips 0.109 and 0.299.
+
+**Two DSP bugs found by measuring, not by testing.** Both would have shipped silently, and every unit test passed throughout:
+
+1. Median `pitch_range_st` was **17.0 semitones**, p99 **32.8** (2.7 octaves) — human speaking range is ~10–12 semitones end to end. Raw f0 percentiles came back p1 = 60.2 Hz and p99 = 400.0 Hz: the `F0_MIN_HZ`/`F0_MAX_HZ` search bounds themselves, to one decimal. Frames with no real periodicity still produce an `argmax`, which lands on whichever end of the range the correlation slopes toward, so 29% of "voiced" frames were reporting the rails rather than the speaker. Fixed by requiring the peak to be an interior local maximum and raising the voicing threshold 0.3 → 0.45. Median dropped to **11.0 st**.
+2. A median filter over the pitch track went in first, on the assumption these were isolated octave errors. It moved the median only 17.0 → 15.4 — which is what proved the errors were sustained rather than isolated and redirected the diagnosis. Kept, since it does remove genuine octave jumps, but it was not the fix.
+
+Calibration floors/ceilings are the measured p5/p95 over all 439 sentences, recorded above `PITCH_RANGE_FLOOR_ST` in `clip_scoring.py`. They were invalidated once mid-implementation: calibrating against the pre-fix distribution would have baked the rail artifact permanently into the weights.
+
+**Deferred: the `hook_strength` acoustic term.** A hook delivered flat is not a hook, and opening energy is genuinely orthogonal evidence — but `hook_strength` carries a documented calibration (`HOOK_RAW_FLOOR`/`CEIL` from a 436-sentence distribution, plus a brute-force sem/lex weight sweep against `hook_labels.yaml`). Adding a third component invalidates all of it. At 50 labels no weight split already clears both acceptance bars, so fitting a third signal on that set would be overfitting — and `clip_scoring.py:92` says it plainly: *don't move these on vibes*. Unblocked by expanding `hook_labels.yaml`, not by more code.
+
 ---
 
 ### Gap 4 — Deduplication is not diversity
@@ -266,7 +295,8 @@ A. Structure   embeddings → divisive clustering → topic tree      (no LLM)  
 B. Beats       LLM over coherent segments + cross-segment links   (LLM)         [have]
 C. Solve       narrative deps + referential deps → candidates     (determ.)     [done]
                pause-aligned boundary selection                                 [done]
-D. Rank        text + acoustic signals, then MMR                  (no LLM)      [have + Gaps 3,4]
+D. Rank        text + acoustic signals, then MMR                  (no LLM)      [Gap 4 open]
+               pitch/energy prosody in emotional_delta                          [done]
 E. Snap        onset/offset search ±1.2s, guard band              (determ.)     [Gap 1 — done]
 ```
 

@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
+import prosody
 import word_timing
 from multimodal_engine import MultimodalEngine, STOPWORDS
 
@@ -237,28 +238,126 @@ def _self_containedness(candidate: Dict[str, Any]) -> float:
     return _clamp01(1.0 - penalty)
 
 
+# --- Acoustic prosody calibration ---------------------------------------------------------
+# Floors/ceilings are the measured p5/p95 of each feature over the FULL 439-sentence corpus
+# (2026-08-11, via the prosody extraction over all 5 indexed videos). Per-sentence rather than
+# per-clip percentiles on purpose: n=439 against n=14, and the two distributions agree closely
+# where they overlap (clip-level pitch_range p50=9.29 vs sentence-level 10.97).
+#
+#   pitch_range_st   p5= 5.26  p25= 7.20  p50=10.97  p75=16.24  p95=23.25  p99=26.18
+#   pitch_delta_st   p5= 0.12  p25= 0.62  p50= 1.75  p75= 3.54  p95= 8.84  p99=13.69  (abs)
+#   energy_delta     p5= 0.01  p25= 0.06  p50= 0.13  p75= 0.22  p95= 0.39  p99= 0.64
+#
+# Re-measure and re-set these if the pitch tracker in prosody.py changes. They were already
+# invalidated once mid-implementation: before prosody's local-maximum peak check existed,
+# pitch_range_st had a median of 17.0 semitones and a p99 of 32.8 (2.7 octaves) because
+# aperiodic frames were pinning to the F0_MIN_HZ/F0_MAX_HZ search bounds. Calibrating against
+# that distribution would have baked the artifact into the weights.
+PITCH_RANGE_FLOOR_ST = 5.26
+PITCH_RANGE_CEIL_ST = 23.25
+PITCH_DELTA_FLOOR_ST = 0.12
+PITCH_DELTA_CEIL_ST = 8.84
+ENERGY_DELTA_FLOOR = 0.01
+ENERGY_DELTA_CEIL = 0.39
+
+# Within the acoustic half. Pitch spread and loudness change carry the most direct external
+# support (the VQualA audio ablation), speaking rate the least — it was the whole signal
+# before and is now one term of four.
+ACOUSTIC_WEIGHTS = {
+    "pitch_range": 0.40,
+    "energy_delta": 0.30,
+    "pitch_delta": 0.15,
+    "rate_delta": 0.15,
+}
+
+# The LLM's emotional_arc claim against the measured contour. Weighted toward the measurement:
+# the arc is an unverifiable model assertion of the same kind that _self_containedness stopped
+# trusting, whereas the acoustic half is computed from the audio.
+ARC_WEIGHT = 0.35
+ACOUSTIC_WEIGHT = 0.65
+
+
+def _normalise(value: float, floor: float, ceil: float) -> float:
+    if ceil <= floor:
+        return 0.0
+    return _clamp01((value - floor) / (ceil - floor))
+
+
+def _speech_rate_delta(candidate: Dict[str, Any], video_id: str) -> Optional[float]:
+    """Words-per-minute change between clip halves — the original acoustic proxy, kept as one
+    term of four and as the sole degraded-mode signal when prosody is unavailable."""
+    words = word_timing.load_words(video_id)
+    if not words:
+        return None
+    in_range = [w for w in words if candidate["start_sec"] <= w["start"] <= candidate["end_sec"]]
+    if len(in_range) < 4:
+        return None
+    mid = len(in_range) // 2
+    first_dur = max(in_range[mid]["start"] - in_range[0]["start"], 0.01)
+    second_dur = max(in_range[-1]["end"] - in_range[mid]["start"], 0.01)
+    wpm_first = mid / (first_dur / 60.0)
+    wpm_second = (len(in_range) - mid) / (second_dur / 60.0)
+    return _clamp01(abs(wpm_second - wpm_first) / max(wpm_first, wpm_second, 1.0))
+
+
+def _acoustic_delta(candidate: Dict[str, Any], video_id: str) -> Optional[float]:
+    """
+    Measured delivery dynamics in [0, 1], or None when nothing could be measured.
+
+    Terms are dropped rather than zero-filled when unavailable, and the remaining weights are
+    renormalised — a clip whose pitch could not be measured should be scored on what WAS
+    measured, not penalised for the gap. Same principle as BOUNDARY_UNKNOWN_SCORE.
+    """
+    features = prosody.window_features(video_id, candidate["start_sec"], candidate["end_sec"])
+    rate_delta = _speech_rate_delta(candidate, video_id)
+
+    terms: Dict[str, float] = {}
+    if rate_delta is not None:
+        terms["rate_delta"] = rate_delta
+    if features is not None:
+        terms["energy_delta"] = _normalise(
+            features["energy_delta"], ENERGY_DELTA_FLOOR, ENERGY_DELTA_CEIL)
+        if features["pitch_reliable"]:
+            terms["pitch_range"] = _normalise(
+                features["pitch_range_st"], PITCH_RANGE_FLOOR_ST, PITCH_RANGE_CEIL_ST)
+            terms["pitch_delta"] = _normalise(
+                abs(features["pitch_delta_st"]), PITCH_DELTA_FLOOR_ST, PITCH_DELTA_CEIL_ST)
+
+    if not terms:
+        return None
+    total = sum(ACOUSTIC_WEIGHTS[k] for k in terms)
+    return _clamp01(sum(terms[k] * ACOUSTIC_WEIGHTS[k] for k in terms) / total)
+
+
 def _emotional_delta(candidate: Dict[str, Any], video_id: str) -> float:
+    """
+    How much the delivery moves across the clip — measured from the audio, not inferred from
+    the word count.
+
+    This used to be a words-per-minute delta between halves: one prosodic dimension of three,
+    and the weakest. A speaker who drops to a whisper and builds to a shout at a constant rate
+    registered as flat. Pitch spread, pitch direction and loudness change now carry most of
+    the weight (prosody.window_features), with speaking rate demoted to one term of four.
+
+    The evidence for adding audio at all is the ICCV VQualA 2025 engagement challenge: on
+    90,000 short videos with real engagement labels, VideoLLaMA2-7B *with* audio (0.695) beat
+    the newer vision-language-only Qwen2.5-VL-7B (0.664).
+    """
     arc_score = 0.0
     for b in candidate.get("beats", []):
         arc = b.get("emotional_arc") or {}
         if arc.get("opening") and arc.get("peak") and arc["opening"] != arc["peak"]:
-            arc_score = 0.5
+            arc_score = 1.0
             break
 
-    words = word_timing.load_words(video_id)
-    acoustic_score = 0.0
-    if words:
-        in_range = [w for w in words if candidate["start_sec"] <= w["start"] <= candidate["end_sec"]]
-        if len(in_range) >= 4:
-            mid = len(in_range) // 2
-            first_half_dur = max(in_range[mid]["start"] - in_range[0]["start"], 0.01)
-            second_half_dur = max(in_range[-1]["end"] - in_range[mid]["start"], 0.01)
-            wpm_first = (mid) / (first_half_dur / 60.0)
-            wpm_second = (len(in_range) - mid) / (second_half_dur / 60.0)
-            delta = abs(wpm_second - wpm_first) / max(wpm_first, wpm_second, 1.0)
-            acoustic_score = _clamp01(delta)
+    acoustic_score = _acoustic_delta(candidate, video_id)
 
-    return _clamp01(0.5 * arc_score + 0.5 * acoustic_score) if (arc_score or acoustic_score) else 0.3
+    if acoustic_score is None:
+        # No audio and no word timing. 0.3 is the long-standing neutral default here; keep it
+        # rather than inventing a number from the LLM's arc claim alone.
+        return _clamp01(ARC_WEIGHT * arc_score) if arc_score else 0.3
+
+    return _clamp01(ARC_WEIGHT * arc_score + ACOUSTIC_WEIGHT * acoustic_score)
 
 
 # idf_lookup values are log((n+1)/(df+1)) + 1.0, so >=1.0 always. The old (avg_idf - 1.0) / 3.0
