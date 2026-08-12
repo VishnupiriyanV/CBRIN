@@ -54,7 +54,7 @@ Priority is payoff-per-unit-effort, with dependencies respected. Each gap states
 | 2 | `self_contained` asserted, not proven | M | **done** — 2026-08-11 |
 | 3 | Prosody is speech-rate only | M | **done** — 2026-08-11 (hook term deferred) |
 | 4 | Dedup isn't diversity | S | **done** — 2026-08-11 |
-| 5 | Sliding windows can't see long-range deps | L | open |
+| 5 | Sliding windows can't see long-range deps | L | **done** — 2026-08-11 |
 
 Pause-aligned boundary selection (under Gap 1) also landed, in `narrative_engine` rather than the scorer.
 
@@ -308,22 +308,58 @@ A payoff at sentence 340 whose setup lives at sentence 12 is **structurally invi
 
 Sequenced last because it is the largest change and the other four are independently valuable. Sequenced *at all* because until it lands, the structural guarantee only holds within a 60-sentence horizon, and that limit should be stated honestly anywhere the claim is made publicly.
 
+#### Implemented 2026-08-11
+
+`backend/topic_segmenter.py` (new), `narrative_engine._plan_windows()` / `_pack_segments()` / `_context_header()`, injected from `main.py` via `topic_segmenter.make_segmenter()`.
+
+**The objective is O(1) per candidate split, which is what makes segmentation affordable before the LLM stage rather than instead of it.** For unit-normalised sentence vectors, the mean cosine of a span to its own centroid is `|T(i,j)| / (j−i+1)` where `T` is the vector sum — so total span cohesion is just `|T|`, and splitting `[i,j)` at `k` scores
+
+```
+gain(k) = |T(i,k)| + |T(k,j)| − |T(i,j)|
+```
+
+which is ≥ 0 by the triangle inequality, with equality exactly when the two halves point the same way — i.e. when they're about the same thing. Every term is a norm of a prefix-sum difference, so no pairwise similarity matrix is ever built. 270 sentences segment in 625ms.
+
+The gain threshold is what handles TreeSeg's "the ground-truth number of segments is unknown": a transcript that never changes subject produces zero splits rather than being forced into a preset count. Confirmed on the two short videos in the library, which correctly return one segment.
+
+Boundaries are semantically real, not just numerically convenient. On the keynote the splits land at *"macOS Golden Gate"* → *"responsiveness"* → *"rebuilt spotlight search"* → *"Health app cycle tracking"*.
+
+**Windows have no overlap now.** `WINDOW_OVERLAP` existed to stop a beat being lost across an *arbitrary* cut; these cuts fall where the transcript changes subject, so a beat spanning one is what the segmentation says shouldn't happen. The context header is the better safety net anyway — it lets the model see and point at earlier material rather than only re-reading the last ten sentences of it. A segment larger than a window still falls back to sliding inside that segment, since segmentation must never emit a window the provider rejects.
+
+Measured on the one video in the library long enough to trigger windowing at all (`yt-pWH1TF1ZfKA`, 109 sentences / 8,635 words):
+
+| | old | new |
+|---|---|---|
+| window 2 | sentences 50–108 | sentences 57–108 |
+| split point | arbitrary (60-slide, 10 overlap) | topic boundary at 57 |
+| reach-back from a beat in window 2 | sentence 50 — **50 sentences unreachable** | sentence 0 — **0 unreachable** |
+
+The header cost 1,164 characters (~300 tokens) to digest 6 prior segments — one verbatim opening line each, no LLM call and nothing that can hallucinate.
+
+**Honest limit on this measurement: four of five videos never reach the windowing path.** `WORD_COUNT_WINDOW_THRESHOLD` is 6,000 words and the 270-sentence keynote is only 3,862, so it passes whole. This gap is real for the 40-minute podcasts that are the actual target, and the library contains exactly one of those. The mechanism is verified; the benefit is not yet measurable at corpus scale.
+
+Also worth stating plainly: cross-segment linking will mostly produce *fewer* clips, not more. A payoff that genuinely needs a setup twenty minutes back cannot be a 75-second clip, and the solver already rejects that correctly (`_build_candidate_for_seed` falls back to direct-only, then refuses). What changes is that such a clip is now *identified* as unfixable instead of being emitted as a plausible-looking clip whose dependency nothing could see.
+
+With this in, the structural guarantee is no longer bounded by a 60-sentence horizon.
+
 ---
 
 ## 4. Reference architecture
 
 ```
-A. Structure   embeddings → divisive clustering → topic tree      (no LLM)      [Gap 5]
-B. Beats       LLM over coherent segments + cross-segment links   (LLM)         [have]
+A. Structure   embeddings → divisive clustering → topic tree      (no LLM)      [done]
+B. Beats       LLM over coherent segments + cross-segment links   (LLM)         [done]
 C. Solve       narrative deps + referential deps → candidates     (determ.)     [done]
                pause-aligned boundary selection                                 [done]
 D. Rank        text + acoustic signals, then MMR                  (no LLM)      [done]
                pitch/energy prosody in emotional_delta                          [done]
                MMR diversity selection                                          [done]
-E. Snap        onset/offset search ±1.2s, guard band              (determ.)     [Gap 1 — done]
+E. Snap        onset/offset search ±1.2s, guard band              (determ.)     [done]
 ```
 
 Note the shape: **one LLM stage, everything else deterministic or embedding-based.** That matches TF-SELECTOR's result, and it keeps stages A, D, and E entirely offline — no network call, which preserves the local-first positioning rather than fighting it.
+
+All five stages are now in place. What that does *not* mean is that the pipeline is validated: §5's corpus problem is untouched by any of this work, and several of the measurements above rest on 14 clips across 5 videos. The architecture is built; the evidence that it picks better clips is still owed.
 
 ---
 

@@ -17,11 +17,17 @@ from typing import Any, Callable, Dict, List, Optional
 
 import llm_client
 import reference_resolver
+import topic_segmenter
 
 # (start_sec, end_sec) -> [0, 1] rating of how cleanly a window's edges land on real pauses.
 # Injected rather than imported so this module stays free of video_id and the filesystem —
 # build one with clip_scoring.make_boundary_scorer(video_id).
 BoundaryScorer = Callable[[float, float], float]
+
+# sentences -> topic-coherent runs of sentences. Injected rather than imported so this module
+# keeps no dependency on the embedding model or the filesystem — build one with
+# topic_segmenter.make_segmenter().
+Segmenter = Callable[[List[Dict[str, Any]]], List[List[Dict[str, Any]]]]
 
 BEAT_TYPES = {
     "hook", "setup", "punchline", "confession", "turning_point",
@@ -53,7 +59,10 @@ For each beat you identify, output an object with these exact fields:
 - start_sentence_idx: integer, the [N] index of the first sentence of this beat
 - end_sentence_idx: integer, the [N] index of the last sentence of this beat
 - requires_setup_from_idx: integer or null — if this beat only makes sense with earlier \
-context, the [N] index where that required context begins. null if self-contained.
+context, the [N] index where that required context begins. null if self-contained. This may \
+point at a line in an EARLIER IN THIS TRANSCRIPT section if one is shown, not only at the \
+current section — a callback to something set up much earlier is exactly what this field is \
+for.
 - title: short human-readable label for this beat
 - why_it_lands: one sentence explaining why this moment works
 - emotional_arc: {"opening": str, "peak": str, "closing": str} — one or two words each
@@ -140,13 +149,11 @@ def _validate_and_clean_beats(beats: List[Dict[str, Any]], sentences_by_idx: Dic
     return cleaned
 
 
-def _windows_for(sentences: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
-    total_words = sum(len(s["text"].split()) for s in sentences)
-    if total_words <= WORD_COUNT_WINDOW_THRESHOLD or len(sentences) <= WINDOW_SENTENCE_COUNT:
-        return [sentences]
-
+def _sliding_windows(sentences: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
+    """Fixed-size windows with overlap — the original scheme, now the degraded-mode path used
+    when no segmenter is available or segmentation returns nothing usable."""
     windows = []
-    step = WINDOW_SENTENCE_COUNT - WINDOW_OVERLAP
+    step = max(WINDOW_SENTENCE_COUNT - WINDOW_OVERLAP, 1)
     for start in range(0, len(sentences), step):
         windows.append(sentences[start:start + WINDOW_SENTENCE_COUNT])
         if start + WINDOW_SENTENCE_COUNT >= len(sentences):
@@ -154,14 +161,119 @@ def _windows_for(sentences: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
     return windows
 
 
+def _pack_segments(segments: List[List[Dict[str, Any]]]) -> List[List[Dict[str, Any]]]:
+    """
+    Fill windows with whole topic segments, up to WINDOW_SENTENCE_COUNT.
+
+    No overlap, unlike the sliding scheme. Overlap existed to stop a beat being lost across an
+    ARBITRARY cut; these cuts are chosen to fall where the transcript changes subject, so a
+    beat spanning one is what the segmentation says shouldn't happen. The cross-segment
+    context header is the better safety net anyway — it lets the model see and point at
+    earlier material instead of only re-reading the last ten sentences of it.
+
+    A single segment larger than a window is split by the sliding scheme; segmentation cannot
+    be allowed to produce a window the provider will reject.
+    """
+    windows: List[List[Dict[str, Any]]] = []
+    current: List[Dict[str, Any]] = []
+
+    for segment in segments:
+        if len(segment) > WINDOW_SENTENCE_COUNT:
+            if current:
+                windows.append(current)
+                current = []
+            windows.extend(_sliding_windows(segment))
+            continue
+        if current and len(current) + len(segment) > WINDOW_SENTENCE_COUNT:
+            windows.append(current)
+            current = []
+        current.extend(segment)
+
+    if current:
+        windows.append(current)
+    return windows
+
+
+def _plan_windows(
+    sentences: List[Dict[str, Any]], segmenter: Optional[Segmenter] = None
+) -> "tuple[List[List[Dict[str, Any]]], List[List[Dict[str, Any]]]]":
+    """
+    Returns (windows, segments).
+
+    `segments` is the topic structure the windows were built from, or [] when the transcript
+    was small enough to pass whole or segmentation was unavailable. Callers use it to build
+    the cross-segment context header.
+    """
+    total_words = sum(len(s["text"].split()) for s in sentences)
+    if total_words <= WORD_COUNT_WINDOW_THRESHOLD or len(sentences) <= WINDOW_SENTENCE_COUNT:
+        return [sentences], []
+
+    if segmenter is not None:
+        try:
+            segments = segmenter(sentences)
+        except Exception as e:
+            print(f"[NarrativeEngine] Topic segmentation failed ({e}); falling back to fixed windows.")
+            segments = None
+        if segments and len(segments) > 1:
+            return _pack_segments(segments), segments
+
+    return _sliding_windows(sentences), []
+
+
+def _windows_for(
+    sentences: List[Dict[str, Any]], segmenter: Optional[Segmenter] = None
+) -> List[List[Dict[str, Any]]]:
+    return _plan_windows(sentences, segmenter)[0]
+
+
+_CONTEXT_HEADER_INTRO = (
+    "EARLIER IN THIS TRANSCRIPT — for reference only. Do NOT create beats from these lines. "
+    "They exist so that if a beat in the current section only makes sense with one of them, "
+    "you can point requires_setup_from_idx at the [N] index where that context begins.\n"
+)
+
+
+def _context_header(
+    segments: List[List[Dict[str, Any]]], first_idx: int, max_lines: int = 40
+) -> str:
+    """
+    A compact digest of every topic segment that ended before `first_idx`.
+
+    This is what makes a long-range dependency expressible at all. With fixed 60-sentence
+    windows, a payoff at sentence 340 whose setup sits at sentence 12 was structurally
+    invisible: no window held both, so no call could emit that requires_setup_from_idx, and
+    the solver's guarantee silently reduced to "within any 60 consecutive sentences".
+
+    Costs one short line per prior segment rather than re-sending the transcript. Capped at
+    `max_lines` (keeping the MOST RECENT, which are the likeliest referents) so the header
+    cannot grow without bound on a feature-length transcript.
+    """
+    lines = []
+    for segment in segments:
+        if not segment or segment[-1]["sentence_idx"] >= first_idx:
+            continue
+        gist = topic_segmenter.summarise_segment(segment)
+        if gist:
+            lines.append(f"[{segment[0]['sentence_idx']}-{segment[-1]['sentence_idx']}] {gist}")
+
+    if not lines:
+        return ""
+    if len(lines) > max_lines:
+        lines = lines[-max_lines:]
+    return _CONTEXT_HEADER_INTRO + "\n".join(lines) + "\n\nCURRENT SECTION:\n"
+
+
 def _extract_beats_for_window(
-    window: List[Dict[str, Any]], allow_split: bool = True
+    window: List[Dict[str, Any]], allow_split: bool = True, context_header: str = ""
 ) -> "tuple[List[Dict[str, Any]], Dict[str, Any]]":
     """Runs one window through the LLM. On a context-length failure — the one failure mode
     that's deterministic rather than transient, so a plain retry on the same window would
     fail identically — splits the window in half once and merges the two halves' beats and
-    usage. `allow_split=False` on the recursive calls caps this at a single split."""
-    transcript_text = _format_transcript_window(window)
+    usage. `allow_split=False` on the recursive calls caps this at a single split.
+
+    `context_header` digests the topic segments preceding this window so a beat can declare a
+    dependency on material outside it (see _context_header)."""
+    transcript_text = context_header + _format_transcript_window(window)
     try:
         parsed, usage = llm_client.complete_json_with_usage(
             _SYSTEM_PROMPT, transcript_text, _BEAT_SCHEMA,
@@ -170,6 +282,8 @@ def _extract_beats_for_window(
     except llm_client.LLMUnavailable as e:
         if allow_split and llm_client.is_context_length_error(str(e)) and len(window) > 1:
             mid = len(window) // 2
+            # Drop the context header on the retry: it is the one part of the payload that is
+            # optional, and this failure means the payload was already too large.
             beats_a, usage_a = _extract_beats_for_window(window[:mid], allow_split=False)
             beats_b, usage_b = _extract_beats_for_window(window[mid:], allow_split=False)
             merged_usage = {
@@ -184,7 +298,7 @@ def _extract_beats_for_window(
 
 
 def extract_beats_with_report(
-    sentences: List[Dict[str, Any]]
+    sentences: List[Dict[str, Any]], segmenter: Optional[Segmenter] = None
 ) -> "tuple[List[Dict[str, Any]], Dict[str, Any]]":
     """
     Windowed LLM beat extraction that tolerates per-window failure.
@@ -207,7 +321,7 @@ def extract_beats_with_report(
         return [], empty_report
 
     sentences_by_idx = {s["sentence_idx"]: s for s in sentences}
-    windows = _windows_for(sentences)
+    windows, segments = _plan_windows(sentences, segmenter)
 
     all_beats: List[Dict[str, Any]] = []
     errors: List[str] = []
@@ -218,7 +332,8 @@ def extract_beats_with_report(
 
     for window in windows:
         try:
-            beats_for_window, usage = _extract_beats_for_window(window)
+            header = _context_header(segments, window[0]["sentence_idx"]) if window else ""
+            beats_for_window, usage = _extract_beats_for_window(window, context_header=header)
             all_beats.extend(beats_for_window)
             windows_ok += 1
             report_model = usage.get("model") or report_model
@@ -232,6 +347,8 @@ def extract_beats_with_report(
         "windows_ok": windows_ok,
         "windows_failed": len(windows) - windows_ok,
         "errors": errors,
+        "segments": len(segments),
+        "segmented": bool(segments),
         "model": report_model,
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
@@ -247,14 +364,16 @@ def extract_beats_with_report(
     return _dedupe_beats(cleaned), report
 
 
-def extract_beats(sentences: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def extract_beats(
+    sentences: List[Dict[str, Any]], segmenter: Optional[Segmenter] = None
+) -> List[Dict[str, Any]]:
     """
     LLM-backed beat extraction. Raises llm_client.LLMUnavailable if every transcript window
     fails — callers should fall back to heuristic_beats(). Thin wrapper around
     extract_beats_with_report() for callers (e.g. backend/eval/clip_eval.py) that only need
     the beats, not the extraction report.
     """
-    beats, _report = extract_beats_with_report(sentences)
+    beats, _report = extract_beats_with_report(sentences, segmenter)
     return beats
 
 
@@ -711,6 +830,7 @@ def analyze_video(
     sentences: List[Dict[str, Any]],
     max_clips: int = 6,
     boundary_scorer: Optional[BoundaryScorer] = None,
+    segmenter: Optional[Segmenter] = None,
 ) -> Dict[str, Any]:
     """
     Top-level orchestration: try LLM beat extraction, fall back to heuristic mode on any
@@ -739,7 +859,7 @@ def analyze_video(
 
     if llm_client.is_configured():
         try:
-            beats, extraction = extract_beats_with_report(sentences)
+            beats, extraction = extract_beats_with_report(sentences, segmenter)
             if extraction["windows_failed"] == 0:
                 mode = "llm"
             else:

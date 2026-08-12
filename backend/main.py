@@ -31,6 +31,7 @@ import media_service
 import prosody
 import word_timing
 import narrative_engine
+import topic_segmenter
 import clip_scoring
 import brand_kit as brand_kit_module
 import clip_renderer
@@ -717,8 +718,12 @@ def _run_analyze_job(video_id: str, max_clips: int):
         # Only pass a boundary scorer when word timing actually succeeded — without it every
         # window scores identically and the solver would "prefer" boundaries on no evidence.
         boundary_scorer = clip_scoring.make_boundary_scorer(video_id) if timing_precise else None
+        # Topic-coherent windowing replaces fixed 60-sentence slices, so a beat can declare
+        # a dependency on material outside its own window. None here means the dense model
+        # is unavailable and extraction falls back to the old fixed windows.
         analysis = narrative_engine.analyze_video(
             sentences, max_clips=max_clips, boundary_scorer=boundary_scorer,
+            segmenter=topic_segmenter.make_segmenter(),
         )
 
         report("scoring", 0.75, "scoring clip candidates")
