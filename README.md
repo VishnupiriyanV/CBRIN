@@ -1,6 +1,10 @@
 # CBRIN
 
-**Local-first video search and clip generation.** Index long-form video into a searchable library, then cut short-form clips from it — transcription, embedding, scoring, and rendering all run on your own machine. Source footage never leaves the device. The only optional network call is to an LLM provider for narrative analysis.
+**Local-first video search and clip generation.** Index long-form video into a searchable library, then cut short-form clips from it.
+
+Automated clippers choose where to cut from transcript position and engagement heuristics. That is why they hand back a punchline with its setup missing, a clip that opens on *"so he told me the whole thing"*, or a cut that lands halfway through a word — and why, when a clip comes out wrong, there is a single opaque score and nothing to inspect.
+
+CBRIN treats those as constraints rather than scoring problems. A solver refuses to emit a clip that excludes its own setup or opens on a reference the viewer never saw; boundaries are moved onto real word onsets; and ranking is a breakdown of individually named signals instead of one number. Where a constraint cannot be satisfied it produces fewer clips and says why. Everything except narrative analysis runs on your own machine, so source footage is never uploaded and nothing is metered per clip.
 
 ## Contents
 
@@ -19,7 +23,7 @@
 
 ### The problem
 
-Automated clipping tools decide where to cut from transcript position and engagement heuristics. That produces four recurring failures, and they are structural rather than incidental:
+The four failures above are structural rather than incidental. Each one follows from deciding cut points by position and heuristic, and none of them is fixed by scoring the same candidates more accurately.
 
 **Clips arrive without their setup.** A punchline is scored highly on its own merits and cut on its own boundaries, leaving the line that made it land somewhere on the cutting-room floor. Nothing in a position-and-heuristic approach represents the dependency between the two, so nothing can prevent the cut.
 
@@ -33,7 +37,7 @@ Separately, the prevailing delivery model requires uploading source footage to a
 
 ### How this addresses it
 
-Each failure is met with a mechanism rather than a better heuristic. The relevant guarantees are detailed in [How clip selection works](#how-clip-selection-works); in summary:
+Each failure is met with a mechanism, not a better heuristic. The guarantees behind these are detailed in [How clip selection works](#how-clip-selection-works):
 
 | Problem | Mechanism |
 | --- | --- |
