@@ -73,3 +73,13 @@ backend/data/
 .pytest_cache/
 
 humanizer/
+
+# Private working docs — strategy, PRD, research notes, session handoffs, posting plan.
+# Kept on disk, deliberately out of the repo. See README.md for what is public.
+internal/
+
+# Agent skills, editor/agent config, and their lockfile — local tooling, not part of
+# the product. launch.json stays on disk; it drives the local dev-server preview.
+.agents/
+.claude/
+skills-lock.json
