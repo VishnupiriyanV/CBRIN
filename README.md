@@ -4,6 +4,7 @@
 
 ## Contents
 
+- [Why this exists](#why-this-exists)
 - [Overview](#overview)
 - [How clip selection works](#how-clip-selection-works)
 - [Getting started](#getting-started)
@@ -11,6 +12,42 @@
 - [API](#api)
 - [Development](#development)
 - [Repository conventions](#repository-conventions)
+
+---
+
+## Why this exists
+
+### The problem
+
+Automated clipping tools decide where to cut from transcript position and engagement heuristics. That produces four recurring failures, and they are structural rather than incidental:
+
+**Clips arrive without their setup.** A punchline is scored highly on its own merits and cut on its own boundaries, leaving the line that made it land somewhere on the cutting-room floor. Nothing in a position-and-heuristic approach represents the dependency between the two, so nothing can prevent the cut.
+
+**Clips open on a reference to something the viewer never saw.** "So he told me the whole thing" is a broken opening line regardless of how strong the moment is. Detecting this requires knowing that a pronoun's antecedent falls outside the clip — a property most tools never compute.
+
+**Cuts land mid-phrase.** Speech-recognition sentence boundaries are text-driven and quantised, often by as much as a second. A cut placed on one clips the first phoneme or opens on dead air.
+
+**The ranking is unexplainable.** Scores are typically presented as a single number with an undisclosed derivation — Opus Clip's virality score, for instance, is documented as 0–99 with the generating algorithm withheld. When a clip ranks poorly there is nothing to inspect and nothing to correct.
+
+Separately, the prevailing delivery model requires uploading source footage to a third-party service and metering output per clip. For unreleased material that is a disclosure decision, not just a workflow one.
+
+### How this addresses it
+
+Each failure is met with a mechanism rather than a better heuristic. The relevant guarantees are detailed in [How clip selection works](#how-clip-selection-works); in summary:
+
+| Problem | Mechanism |
+| --- | --- |
+| Setup severed from payoff | A dependency solver treats `requires_setup_from_idx` as a hard constraint. A candidate that cannot include its own setup within the duration bounds is discarded rather than emitted. |
+| Dangling references | Referential dependencies are resolved across the transcript. Clips are expanded backward until every reference resolves; whatever cannot be resolved is reported per clip, not hidden. |
+| Mid-phrase cuts | Boundaries are chosen at pauses where the duration budget allows, then relocated onto true word onsets with guard bands. |
+| Opaque ranking | Ranking is a weighted sum of individually named signals, each surfaced with its own value. Where a signal cannot be measured it reports as unknown rather than defaulting to zero or to perfect. |
+| Upload requirement | Every stage except narrative analysis runs locally. Footage is not transmitted, and there is no per-clip metering. |
+
+The design principle throughout is that a guarantee is worth more than a heuristic that is usually right. Where a constraint cannot be satisfied, the system produces fewer clips and says why, rather than producing a plausible-looking one whose defect is invisible until playback.
+
+### Scope
+
+This is a working tool under active development, not a finished product. The pipeline is complete and covered by tests; the evidence that it selects *better* clips than a heuristic baseline is not yet established at scale, because that requires a substantially larger evaluation corpus than the one currently indexed. Calibration constants in `clip_scoring.py` carry the measurements they were derived from, along with the sample sizes behind them.
 
 ---
 
