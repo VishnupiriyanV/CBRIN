@@ -226,6 +226,10 @@ def _windows_for(
     return _plan_windows(sentences, segmenter)[0]
 
 
+# When there are more prior segments than the header can list, the oldest are folded into this
+# many bucket lines rather than dropped, so no sentence range becomes unaddressable.
+_CONTEXT_COMPRESSED_BUCKETS = 6
+
 _CONTEXT_HEADER_INTRO = (
     "EARLIER IN THIS TRANSCRIPT — for reference only. Do NOT create beats from these lines. "
     "They exist so that if a beat in the current section only makes sense with one of them, "
@@ -244,22 +248,44 @@ def _context_header(
     invisible: no window held both, so no call could emit that requires_setup_from_idx, and
     the solver's guarantee silently reduced to "within any 60 consecutive sentences".
 
-    Costs one short line per prior segment rather than re-sending the transcript. Capped at
-    `max_lines` (keeping the MOST RECENT, which are the likeliest referents) so the header
-    cannot grow without bound on a feature-length transcript.
-    """
-    lines = []
-    for segment in segments:
-        if not segment or segment[-1]["sentence_idx"] >= first_idx:
-            continue
-        gist = topic_segmenter.summarise_segment(segment)
-        if gist:
-            lines.append(f"[{segment[0]['sentence_idx']}-{segment[-1]['sentence_idx']}] {gist}")
+    Costs one short line per prior segment rather than re-sending the transcript.
 
-    if not lines:
+    Bounded at `max_lines`, but NOT by dropping the oldest segments. Doing that silently
+    reintroduced the horizon this function exists to remove: segments run ~10 sentences on the
+    real corpus, so a 1600-sentence podcast produces ~160 of them, and keeping only the last
+    40 meant a beat at sentence 1500 could reach no further back than sentence 1100 — with
+    nothing in the prompt to indicate that sentences 0-1099 had been withheld. Instead the
+    oldest segments are COMPRESSED into a few bucket lines spanning their index ranges, so
+    every sentence index in the transcript stays addressable and the model can still point a
+    dependency at the opening of the video.
+    """
+    prior = [
+        s for s in segments
+        if s and s[-1]["sentence_idx"] < first_idx and topic_segmenter.summarise_segment(s)
+    ]
+    if not prior:
         return ""
-    if len(lines) > max_lines:
-        lines = lines[-max_lines:]
+
+    def line(segment: List[Dict[str, Any]]) -> str:
+        span = f"[{segment[0]['sentence_idx']}-{segment[-1]['sentence_idx']}]"
+        return f"{span} {topic_segmenter.summarise_segment(segment)}"
+
+    if len(prior) <= max_lines:
+        lines = [line(s) for s in prior]
+    else:
+        keep = max(max_lines - _CONTEXT_COMPRESSED_BUCKETS, 1)
+        recent, older = prior[-keep:], prior[:-keep]
+        per_bucket = max(-(-len(older) // _CONTEXT_COMPRESSED_BUCKETS), 1)
+        lines = []
+        for i in range(0, len(older), per_bucket):
+            bucket = older[i:i + per_bucket]
+            span = f"[{bucket[0][0]['sentence_idx']}-{bucket[-1][-1]['sentence_idx']}]"
+            lines.append(
+                f"{span} {len(bucket)} earlier sections, opening: "
+                f"{topic_segmenter.summarise_segment(bucket[0])}"
+            )
+        lines.extend(line(s) for s in recent)
+
     return _CONTEXT_HEADER_INTRO + "\n".join(lines) + "\n\nCURRENT SECTION:\n"
 
 

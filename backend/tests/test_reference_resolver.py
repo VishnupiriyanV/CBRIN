@@ -46,6 +46,28 @@ class TestUnboundAnaphorDetection:
         assert not rr.opens_with_unbound_anaphor("It was hard to explain.")
         assert not rr.opens_with_unbound_anaphor("It takes about a week.")
 
+    def test_contracted_openers_are_detected(self):
+        # _WORD_RE keeps the apostrophe inside a token, so "it's"/"that's"/"he's" never matched
+        # the bare-word sets and every contracted opener was reported self-contained. In spoken
+        # transcripts — the only input this module sees — that is the common case, and the miss
+        # is in the expensive direction.
+        assert rr.opens_with_unbound_anaphor("It's changed everything about how I work.")
+        assert rr.opens_with_unbound_anaphor("That's the moment I knew it was over.")
+        assert rr.opens_with_unbound_anaphor("He's the one who told me.")
+        assert rr.opens_with_unbound_anaphor("They're the ones who called me.")
+        assert rr.opens_with_unbound_anaphor("She'll tell you the same thing.")
+
+    def test_pleonastic_check_still_applies_to_contractions(self):
+        # The pleonastic patterns already spelled out the "'s"; they were simply unreachable.
+        assert not rr.opens_with_unbound_anaphor("It's been three years since then.")
+        assert not rr.opens_with_unbound_anaphor("It's a long story.")
+        assert not rr.opens_with_unbound_anaphor("It's raining again.")
+
+    def test_contraction_split_does_not_create_false_positives(self):
+        assert not rr.opens_with_unbound_anaphor("Don't sign that contract.")
+        assert not rr.opens_with_unbound_anaphor("Shouldn't we check the numbers first?")
+        assert not rr.opens_with_unbound_anaphor("This week's episode is about pricing.")
+
     def test_weather_it_is_pleonastic_in_any_tense(self):
         # "it rained" has exactly as little referent as "it's raining".
         assert not rr.opens_with_unbound_anaphor("It rained the entire week we were filming.")

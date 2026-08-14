@@ -59,6 +59,10 @@ SILENCE_RMS_FRACTION = 0.02
 # a 32ms hop is just under a second of actual voiced speech.
 MIN_VOICED_FRAMES_FOR_PITCH = 30
 
+# Frames per FFT batch in _f0_via_autocorrelation. Bounds peak memory to a few hundred MB
+# regardless of how long the video is; see the note in that function.
+FFT_BATCH_FRAMES = 8192
+
 
 class ProsodyUnavailable(Exception):
     """Raised when audio cannot be decoded. Callers should degrade, never fail the analysis."""
@@ -124,44 +128,67 @@ def _f0_via_autocorrelation(frames: np.ndarray, rms: np.ndarray) -> np.ndarray:
     if max_lag <= min_lag:
         return np.zeros(frames.shape[0], dtype=np.float32)
 
-    # Remove per-frame DC so a constant offset can't dominate the correlation.
-    centred = frames - frames.mean(axis=1, keepdims=True)
+    n_frames = frames.shape[0]
+    width = max_lag - min_lag + 1
+    if width < 3:
+        # No interior lag to validate a peak against — see the local-maximum test below.
+        return np.zeros(n_frames, dtype=np.float32)
 
     n_fft = 1 << int(np.ceil(np.log2(2 * FRAME_LENGTH)))
-    spectrum = np.fft.rfft(centred, n=n_fft, axis=1)
-    autocorr = np.fft.irfft(spectrum * np.conjugate(spectrum), n=n_fft, axis=1)
 
-    zero_lag = autocorr[:, 0:1]
-    # Frames with no energy have a zero-lag of 0; guard before dividing.
-    safe = np.where(zero_lag > 1e-10, zero_lag, 1.0)
-    normalised = autocorr[:, min_lag:max_lag + 1] / safe
+    best_value = np.empty(n_frames, dtype=np.float32)
+    zero_lag = np.empty(n_frames, dtype=np.float32)
+    lags = np.empty(n_frames, dtype=np.int64)
+    peak_ok = np.empty(n_frames, dtype=bool)
 
-    best_offset = np.argmax(normalised, axis=1)
-    rows = np.arange(normalised.shape[0])
-    best_value = normalised[rows, best_offset]
-    lags = best_offset + min_lag
+    # Batched on purpose. Every intermediate below is (batch x n_fft), so computing the whole
+    # video at once made peak memory scale with DURATION: measured ~2.5 GB for a 43-minute
+    # video and ~6.9 GB for a two-hour one (centred + spectrum + its conjugate product +
+    # autocorr, all live simultaneously). A two-hour podcast on an 8 GB laptop is the stated
+    # target case, and it would have died with MemoryError. Batching caps the transient at a
+    # few hundred MB regardless of length; results are identical because frames are
+    # independent.
+    for lo in range(0, n_frames, FFT_BATCH_FRAMES):
+        hi = min(lo + FFT_BATCH_FRAMES, n_frames)
+        block = frames[lo:hi]
 
-    # The peak must be a genuine interior local maximum. Without this, a frame with no real
-    # periodicity still yields an argmax, which lands on whichever end of the search range the
-    # correlation happens to slope toward — so aperiodic frames pile up at exactly F0_MIN_HZ
-    # and F0_MAX_HZ and read as extreme pitch.
+        # Remove per-frame DC so a constant offset can't dominate the correlation.
+        centred = block - block.mean(axis=1, keepdims=True)
+        spectrum = np.fft.rfft(centred, n=n_fft, axis=1)
+        autocorr = np.fft.irfft(spectrum * np.conjugate(spectrum), n=n_fft, axis=1)
+
+        z = autocorr[:, 0:1]
+        # Frames with no energy have a zero-lag of 0; guard before dividing.
+        safe = np.where(z > 1e-10, z, 1.0)
+        normalised = autocorr[:, min_lag:max_lag + 1] / safe
+
+        rows = np.arange(normalised.shape[0])
+        offset = np.argmax(normalised, axis=1)
+        best_value[lo:hi] = normalised[rows, offset]
+        zero_lag[lo:hi] = z[:, 0]
+        lags[lo:hi] = offset + min_lag
+
+        # The peak must be a genuine interior local maximum — see the note below.
+        safe_offset = np.clip(offset, 1, width - 2)
+        peak_ok[lo:hi] = (
+            (offset > 0) & (offset < width - 1)
+            & (normalised[rows, safe_offset] > normalised[rows, safe_offset - 1])
+            & (normalised[rows, safe_offset] > normalised[rows, safe_offset + 1])
+        )
+
+    # `peak_ok` above requires the peak to be a genuine interior local maximum. Without it, a
+    # frame with no real periodicity still yields an argmax, which lands on whichever end of
+    # the search range the correlation happens to slope toward — so aperiodic frames pile up
+    # at exactly F0_MIN_HZ and F0_MAX_HZ and read as extreme pitch.
     #
-    # Measured before this check existed, on the real 25-minute video: raw f0 percentiles were
+    # Measured before that check existed, on the real 25-minute video: raw f0 percentiles were
     # p1=60.2Hz and p99=400.0Hz — the search bounds themselves, to one decimal — with 29% of
     # "voiced" frames beyond +/-9 semitones of the speaker's own median. The rails, not the
     # speaker. A median filter cannot fix this because the errors are sustained, not isolated.
-    interior = (best_offset > 0) & (best_offset < normalised.shape[1] - 1)
-    safe_offset = np.clip(best_offset, 1, max(normalised.shape[1] - 2, 1))
-    is_local_max = (
-        (normalised[rows, safe_offset] > normalised[rows, safe_offset - 1])
-        & (normalised[rows, safe_offset] > normalised[rows, safe_offset + 1])
-    )
-
     voiced = (
         (best_value >= VOICING_THRESHOLD)
-        & interior
-        & is_local_max
-        & (zero_lag[:, 0] > 1e-10)
+        & peak_ok
+        & (zero_lag > 1e-10)
         & (rms > SILENCE_RMS_FRACTION * max(float(rms.max()), 1e-10))
     )
     f0 = np.where(voiced, SAMPLE_RATE / np.maximum(lags, 1), 0.0)

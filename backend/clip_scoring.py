@@ -228,7 +228,11 @@ def _self_containedness(candidate: Dict[str, Any]) -> float:
     lowered = opening_text.lower()
     words = re.findall(r"\b[a-zA-Z']+\b", lowered)
 
-    penalty = sum(1 for w in words[:10] if w in _DEIXIS_TERMS) * 0.08
+    # Split contractions before the membership test: the pattern keeps the apostrophe inside a
+    # token, so "it's"/"that's"/"they're" would never match the bare words in _DEIXIS_TERMS.
+    # Same defect reference_resolver._head fixes on the primary path; this is the degraded-mode
+    # fallback, so it needs the same treatment to be worth anything.
+    penalty = sum(1 for w in words[:10] if w.split("'", 1)[0] in _DEIXIS_TERMS) * 0.08
     penalty += sum(0.15 for phrase in _DEIXIS_PHRASES if phrase in lowered)
 
     dangling = candidate.get("dangling_reference_indices")

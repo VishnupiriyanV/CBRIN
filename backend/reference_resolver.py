@@ -110,15 +110,28 @@ _DEICTIC_HEAD_NOUNS = {
     "course", "session", "one",
 }
 
-# "that" as a complementiser or relativiser ("I knew that he...", "the thing that matters") is
-# not anaphoric. Only a demonstrative in subject position is.
-_THAT_COMPLEMENTISER = re.compile(r"^that\s+(is|was|are|were)\s+\w", re.IGNORECASE)
-
 _WORD_RE = re.compile(r"[a-zA-Z']+")
 
 
 def _tokens(text: str) -> List[str]:
     return _WORD_RE.findall(text.lower())
+
+
+def _head(token: str) -> str:
+    """
+    The word before any contraction clitic: "it's" -> "it", "they're" -> "they".
+
+    _WORD_RE deliberately keeps the apostrophe inside a token (so "don't" stays one word), and
+    the sets above hold bare words. Without this, every contracted opener fell through every
+    membership test and the sentence was reported as self-contained: "It's changed everything",
+    "That's the moment I knew", "He's the one who told me" all scored False. Contractions are
+    pervasive in spoken transcripts, which is the only input this module ever sees, and the
+    miss is in the expensive direction — a dangling reference that ships.
+
+    Possessives already in the sets ("its", "hers", "theirs") have no apostrophe and are
+    unaffected; "don't" -> "don" matches nothing, which is correct.
+    """
+    return token.split("'", 1)[0]
 
 
 def _strip_leading_connectives(tokens: List[str]) -> List[str]:
@@ -151,11 +164,13 @@ def opens_with_unbound_anaphor(text: str) -> bool:
     if not tokens:
         return False
 
-    first = tokens[0]
+    # Match on the head so contractions are seen: "it's" -> "it", "that's" -> "that".
+    first = _head(tokens[0])
 
     if first == "it":
         # Rebuild the text from the first real token so the pleonastic patterns anchor
-        # correctly even when connectives were stripped ("So it turns out...").
+        # correctly even when connectives were stripped ("So it turns out..."). The raw token
+        # is used here, not the head — the patterns already spell out the "'s" themselves.
         remainder = " ".join(tokens)
         if _PLEONASTIC_IT.match(remainder):
             return False
@@ -166,12 +181,13 @@ def opens_with_unbound_anaphor(text: str) -> bool:
 
     if first in _DEMONSTRATIVES:
         # Determiner use on a temporal or self-referential noun is deictic, not anaphoric.
-        if len(tokens) > 1 and tokens[1] in _DEICTIC_HEAD_NOUNS:
+        # Head again, so "this week's episode" reads as "week".
+        if len(tokens) > 1 and _head(tokens[1]) in _DEICTIC_HEAD_NOUNS:
             return False
-        if first == "that" and _THAT_COMPLEMENTISER.match(" ".join(tokens)):
-            # "That is ..." is still demonstrative in speech; only treat it as bound when it
-            # heads a relative clause, which the pattern above does not match on its own.
-            return True
+        # Sentence-initial "that"/"this" is demonstrative in speech regardless of what
+        # follows — "That is why" and "That was the moment" both point backwards. There is no
+        # complementiser case to exclude at position 0 ("I knew that he left" does not start
+        # with it), so no further test is warranted here.
         return True
 
     return False

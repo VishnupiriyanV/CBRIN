@@ -201,13 +201,32 @@ class TestCrossSegmentContext:
         segments = [_sentences(20)[0:10], _sentences(20)[10:20]]
         assert ne._context_header(segments, first_idx=0) == ""
 
-    def test_header_is_capped_but_keeps_the_most_recent(self):
+    def test_header_is_capped_but_every_index_stays_addressable(self):
+        # Dropping the oldest segments silently reintroduced the horizon this header exists to
+        # remove: at ~10 sentences per segment a 1600-sentence podcast makes ~160 of them, so
+        # keeping only the newest 40 left a beat at sentence 1500 unable to reach past 1100 —
+        # with nothing in the prompt saying anything had been withheld. The oldest are now
+        # compressed into bucket lines instead.
+        import re
+        sentences = _sentences(1600)
+        segments = [sentences[i:i + 10] for i in range(0, 1600, 10)]
+        header = ne._context_header(segments, first_idx=1500)
+
+        spans = re.findall(r"\[(\d+)-(\d+)\]", header)
+        assert len(spans) <= 40, "header must stay bounded"
+        covered = set()
+        for a, b in spans:
+            covered.update(range(int(a), int(b) + 1))
+        assert set(range(1500)).issubset(covered), "every preceding sentence must stay addressable"
+        assert spans[0][0] == "0", "the opening of the video must remain referenceable"
+
+    def test_short_transcript_lists_every_segment_verbatim(self):
         sentences = _sentences(120)
         segments = [sentences[i:i + 10] for i in range(0, 120, 10)]
-        header = ne._context_header(segments, first_idx=120, max_lines=3)
-        assert header.count("\n[") + header.count("\n") >= 1
-        assert "[110-119]" in header      # most recent kept
-        assert "[0-9]" not in header      # oldest dropped
+        header = ne._context_header(segments, first_idx=120)
+        assert "[110-119]" in header
+        assert "[0-9]" in header
+        assert "earlier sections" not in header  # no compression needed at this size
 
     def test_header_tells_the_model_not_to_create_beats_there(self):
         segments = [_sentences(20)[0:10], _sentences(20)[10:20]]

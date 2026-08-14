@@ -72,6 +72,50 @@ class TestPitchTracking:
         assert abs(data["baseline_f0"] - 180.0) < 6.0
 
 
+class TestFftBatching:
+    """_f0_via_autocorrelation batches its FFTs. Every intermediate is (batch x n_fft), so
+    computing a whole video at once made peak memory scale with duration — ~2.5 GB for a
+    43-minute video, ~6.9 GB for a two-hour one, which is a MemoryError on the 8 GB laptop
+    this tool targets."""
+
+    @staticmethod
+    def _mixed_signal(seconds):
+        """Tone, then noise, then tone — so a batch boundary can fall on a voicing change."""
+        rng = np.random.default_rng(3)
+        third = seconds / 3
+        return np.concatenate([
+            _tone(140.0, third),
+            rng.standard_normal(int(prosody.SAMPLE_RATE * third)).astype(np.float32) * 0.2,
+            _tone(190.0, third),
+        ])
+
+    def test_batched_result_is_identical_to_unbatched(self, monkeypatch):
+        # Drives the batch size down rather than the signal length up: a signal long enough to
+        # exceed the shipped 8192-frame batch would be ~4.5 minutes of synthetic audio, which
+        # is a slow test for no extra coverage.
+        sig = self._mixed_signal(30.0)
+        frames = prosody._frame(sig)
+        rms = np.sqrt(np.maximum((frames.astype(np.float32) ** 2).mean(axis=1), 0.0)).astype(np.float32)
+
+        monkeypatch.setattr(prosody, "FFT_BATCH_FRAMES", 10 ** 9)
+        unbatched = prosody._f0_via_autocorrelation(frames, rms)
+
+        for batch in (37, 128, 512):
+            monkeypatch.setattr(prosody, "FFT_BATCH_FRAMES", batch)
+            assert frames.shape[0] > batch, "fixture must span several batches"
+            assert np.array_equal(prosody._f0_via_autocorrelation(frames, rms), unbatched), (
+                f"batch size {batch} changed the result"
+            )
+
+    def test_batch_boundary_does_not_corrupt_pitch(self, monkeypatch):
+        # A boundary falling mid-tone must not produce a discontinuity.
+        monkeypatch.setattr(prosody, "FFT_BATCH_FRAMES", 64)
+        data = prosody.analyze_signal(_tone(150.0, 10.0))
+        voiced = data["f0"][data["f0"] > 0]
+        assert voiced.size > 0
+        assert abs(12 * np.log2(float(np.median(voiced)) / 150.0)) < 1.0
+
+
 class TestWindowFeatures:
     @staticmethod
     def _write(video_id, signal):
