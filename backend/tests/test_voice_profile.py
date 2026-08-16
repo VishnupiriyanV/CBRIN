@@ -5,6 +5,7 @@ against people just using raw ChatGPT").
 
 Run with: python -m pytest backend/tests/test_voice_profile.py -v
 """
+import copy
 import os
 import sys
 
@@ -97,3 +98,33 @@ class TestToPromptBlock:
         assert "soft ask" in block
         assert "delve" in block
         assert "long enough sample sentence" in block
+
+
+class TestDefaultsAreNotAliased:
+    """load() shallow-copied DEFAULT_VOICE_PROFILE, so on a fresh install — before any profile
+    file exists — the returned "tone"/"banned_words"/"sample_content"/"default_platforms"
+    lists WERE the module constant's own lists. Mutating one in place corrupted the defaults
+    for the life of the process. Latent rather than live (apply_edit replaces lists rather
+    than updating them), but it is the same defect brand_kit.load() had for real."""
+
+    def test_fresh_install_load_is_independent_of_the_constant(self):
+        loaded = vp.load()
+        for key in ("tone", "banned_words", "sample_content", "default_platforms"):
+            assert loaded[key] is not vp.DEFAULT_VOICE_PROFILE[key], key
+
+    def test_mutating_a_loaded_profile_leaves_the_constant_intact(self):
+        before = copy.deepcopy(vp.DEFAULT_VOICE_PROFILE)
+        loaded = vp.load()
+        loaded["tone"].append("LEAKED")
+        loaded["banned_words"].append("LEAKED")
+        assert vp.DEFAULT_VOICE_PROFILE == before
+
+    def test_two_loads_do_not_share_lists(self):
+        a, b = vp.load(), vp.load()
+        assert a["tone"] is not b["tone"]
+
+    def test_autoseed_result_is_independent_too(self):
+        before = copy.deepcopy(vp.DEFAULT_VOICE_PROFILE)
+        seeded = vp.autoseed(chunk_texts=[], force=True)
+        seeded["tone"].append("LEAKED")
+        assert vp.DEFAULT_VOICE_PROFILE == before

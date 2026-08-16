@@ -10,6 +10,7 @@ library via the same corpus-IDF machinery narrative_engine already uses for quot
 form on first run. Any manual edit flips auto_seeded to False, so a later autoseed() call
 never silently overwrites a deliberate choice.
 """
+import copy
 import json
 import os
 from typing import Any, Dict, List, Optional
@@ -34,16 +35,31 @@ MIN_SAMPLE_CHARS = 120  # skip throwaway one-liners when picking sample_content
 
 
 def load() -> Dict[str, Any]:
+    """
+    The persisted profile merged over the defaults.
+
+    DEEP copies, for the reason documented on brand_kit.load(). `dict(DEFAULT_VOICE_PROFILE)`
+    is shallow, so on a fresh install — before any profile file exists — the returned "tone",
+    "banned_words", "sample_content" and "default_platforms" lists ARE the module constant's
+    own lists, and any caller mutating one in place corrupts the defaults for the life of the
+    process. Demonstrated: appending to load()["tone"] left DEFAULT_VOICE_PROFILE["tone"]
+    permanently changed, and every later load() returned the corruption.
+
+    No current caller does mutate them — apply_edit() replaces lists rather than updating them,
+    since only nested DICTS take the .update() path — so unlike brand_kit this was latent
+    rather than live. It is fixed because it is the same defect one nested dict away from
+    being real, and the sibling module proved that is not a theoretical concern.
+    """
     if not os.path.exists(paths.VOICE_PROFILE_FILE):
-        return dict(DEFAULT_VOICE_PROFILE)
+        return copy.deepcopy(DEFAULT_VOICE_PROFILE)
     try:
         with open(paths.VOICE_PROFILE_FILE, 'r', encoding='utf-8') as f:
             data = json.load(f)
-        merged = dict(DEFAULT_VOICE_PROFILE)
+        merged = copy.deepcopy(DEFAULT_VOICE_PROFILE)
         merged.update(data)
         return merged
     except Exception:
-        return dict(DEFAULT_VOICE_PROFILE)
+        return copy.deepcopy(DEFAULT_VOICE_PROFILE)
 
 
 def save(profile: Dict[str, Any]) -> Dict[str, Any]:
@@ -105,7 +121,9 @@ def autoseed(chunk_texts: Optional[List[str]] = None, force: bool = False) -> Di
         candidates.sort(key=len, reverse=True)
         sample_content = candidates[:MAX_SAMPLE_CONTENT]
 
-    new_profile = dict(DEFAULT_VOICE_PROFILE)
+    # Deep, same as load(): the `.get(key, DEFAULT_VOICE_PROFILE[key])` fallbacks below would
+    # otherwise alias the module constant's lists straight into the returned profile.
+    new_profile = copy.deepcopy(DEFAULT_VOICE_PROFILE)
     new_profile["niche"] = niche
     new_profile["sample_content"] = sample_content
     new_profile["tone"] = current.get("tone", DEFAULT_VOICE_PROFILE["tone"])
