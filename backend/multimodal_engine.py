@@ -328,6 +328,9 @@ class MultimodalEngine:
     # auto-captions) still produce bounded chunks instead of one giant "sentence" per video.
     MAX_SENTENCE_SECONDS = 40.0
     MAX_SENTENCE_WORDS = 80
+    # Below this a fragment does not stand alone as a searchable sentence — but it is MERGED
+    # into a neighbour rather than dropped. See flush() in segment_transcript_into_sentences.
+    MIN_SENTENCE_WORDS = 3
 
     @staticmethod
     def segment_transcript_into_sentences(segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -352,10 +355,34 @@ class MultimodalEngine:
         sentence_end_sec: float = 0.0
         sentence_idx = 0
 
-        def flush():
+        def flush(force: bool = False):
+            """
+            Emit the pending words as a sentence, or carry them into the next one.
+
+            Text below MIN_SENTENCE_WORDS used to be DISCARDED here — `current_words` was
+            cleared whether or not the sentence was emitted, so "I quit." and "Absolutely
+            not." never reached chunks.json at all. They could not be searched and no clip
+            boundary could land on them, which for a tool built to find punchlines is exactly
+            the wrong content to lose.
+
+            Now a short fragment is left pending so it merges forward into the next sentence.
+            `sentence_start_sec` is kept too, so the merged sentence spans from the fragment's
+            own start — the timeline stays contiguous and nothing shifts.
+
+            `force` is for the two cases where there is no "next sentence" to merge into: the
+            end of the transcript, and a hard duration cap. Those append to the previous
+            sentence instead, extending its end_sec, so the fragment still survives without
+            growing a sentence past MAX_SENTENCE_SECONDS. A fragment with nothing before or
+            after it is emitted on its own rather than lost.
+            """
             nonlocal current_words, sentence_start_sec, sentence_end_sec, sentence_idx
             full_text = " ".join(current_words).strip()
-            if full_text and len(full_text.split()) >= 3 and sentence_start_sec is not None:
+            if not full_text or sentence_start_sec is None:
+                current_words = []
+                sentence_start_sec = None
+                return
+
+            if len(full_text.split()) >= MultimodalEngine.MIN_SENTENCE_WORDS:
                 sentences.append({
                     "sentence_idx": sentence_idx,
                     "text": full_text,
@@ -363,6 +390,25 @@ class MultimodalEngine:
                     "end_sec": math.ceil(sentence_end_sec),
                 })
                 sentence_idx += 1
+            elif not force:
+                # Too short to stand alone — keep it pending so it prefixes the next
+                # sentence. Deliberately does NOT clear current_words/sentence_start_sec.
+                return
+            elif sentences:
+                # No next sentence to merge into; fold it into the previous one.
+                previous = sentences[-1]
+                previous["text"] = f"{previous['text']} {full_text}".strip()
+                previous["end_sec"] = max(previous["end_sec"], math.ceil(sentence_end_sec))
+            else:
+                # Nothing before it either — the whole transcript is this fragment.
+                sentences.append({
+                    "sentence_idx": sentence_idx,
+                    "text": full_text,
+                    "start_sec": math.floor(sentence_start_sec),
+                    "end_sec": math.ceil(sentence_end_sec),
+                })
+                sentence_idx += 1
+
             current_words = []
             sentence_start_sec = None
 
@@ -399,10 +445,14 @@ class MultimodalEngine:
                     and (sentence_end_sec - sentence_start_sec) >= MultimodalEngine.MAX_SENTENCE_SECONDS
                 )
 
+                # The duration cap is forced: carrying a short fragment forward past it would
+                # let one sentence grow unbounded in time, which is the invariant this cap
+                # exists to hold. Punctuation and the word cap can merge forward safely — the
+                # word cap can only fire well above the minimum length anyway.
                 if hit_punctuation or hit_word_cap or hit_time_cap:
-                    flush()
+                    flush(force=hit_time_cap)
 
-        flush()
+        flush(force=True)
 
         return sentences
 

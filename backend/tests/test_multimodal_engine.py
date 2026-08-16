@@ -91,10 +91,71 @@ class TestSingleSegment:
         assert len(sentences) == 1
         assert sentences[0]["text"].startswith("no ending")
 
-    def test_too_short_fragment_is_dropped(self):
-        # Fewer than 3 words — matches the existing minimum-length filter.
-        segments = [_seg(0.0, 1.0, "Hi.")]
-        assert MultimodalEngine.segment_transcript_into_sentences(segments) == []
+class TestShortFragmentsAreMergedNotDropped:
+    """Sub-minimum fragments used to be DISCARDED: flush() cleared current_words whether or
+    not it emitted, so "I quit." and "Absolutely not." never reached chunks.json — unsearchable,
+    and no clip boundary could land on them. For a tool built to find punchlines that is
+    exactly the wrong content to lose. They now merge into a neighbour instead."""
+
+    def test_fragment_merges_into_the_next_sentence(self):
+        segments = [
+            _seg(0.0, 4.0, "So I walked into the meeting completely unprepared."),
+            _seg(4.0, 1.0, "I quit."),
+            _seg(5.0, 4.0, "That was the moment everything changed for me."),
+        ]
+        sentences = MultimodalEngine.segment_transcript_into_sentences(segments)
+        assert len(sentences) == 2
+        assert sentences[1]["text"].startswith("I quit.")
+        # Merged sentence starts at the FRAGMENT's own start, not the next segment's.
+        assert sentences[1]["start_sec"] == 4
+
+    def test_fragment_at_the_end_merges_into_the_previous(self):
+        # Nothing follows it, so forward-merging is impossible — fold it backward instead
+        # of losing it, extending that sentence's end.
+        segments = [
+            _seg(0.0, 4.0, "So I walked into the meeting completely unprepared."),
+            _seg(4.0, 1.0, "I quit."),
+        ]
+        sentences = MultimodalEngine.segment_transcript_into_sentences(segments)
+        assert len(sentences) == 1
+        assert sentences[0]["text"].endswith("I quit.")
+        assert sentences[0]["end_sec"] == 5
+
+    def test_lone_fragment_is_kept_rather_than_dropped(self):
+        # Was: segment_transcript_into_sentences(...) == []. Nothing precedes or follows it,
+        # so it stands alone — an entirely short transcript should still be indexed.
+        sentences = MultimodalEngine.segment_transcript_into_sentences([_seg(0.0, 1.0, "Hi.")])
+        assert len(sentences) == 1
+        assert sentences[0]["text"] == "Hi."
+
+    def test_consecutive_fragments_all_survive(self):
+        segments = [
+            _seg(0.0, 0.5, "No."),
+            _seg(0.5, 0.5, "Never."),
+            _seg(1.0, 3.0, "That is the whole point of the exercise."),
+        ]
+        sentences = MultimodalEngine.segment_transcript_into_sentences(segments)
+        merged = " ".join(s["text"] for s in sentences)
+        assert "No." in merged and "Never." in merged
+
+    def test_merged_timeline_stays_contiguous_and_ordered(self):
+        segments = [
+            _seg(0.0, 4.0, "First real sentence goes here."),
+            _seg(4.0, 1.0, "Wait."),
+            _seg(5.0, 4.0, "Second real sentence goes here."),
+            _seg(9.0, 1.0, "Right."),
+        ]
+        sentences = MultimodalEngine.segment_transcript_into_sentences(segments)
+        for earlier, later in zip(sentences, sentences[1:]):
+            assert earlier["start_sec"] <= later["start_sec"]
+        assert [s["sentence_idx"] for s in sentences] == list(range(len(sentences)))
+
+    def test_duration_cap_still_bounds_a_fragment(self):
+        # Carrying a fragment forward past the duration cap would let one sentence grow
+        # unbounded in time, so the cap forces it out instead — still not dropped.
+        sentences = MultimodalEngine.segment_transcript_into_sentences([_seg(0.0, 45.0, "Hi")])
+        assert len(sentences) == 1
+        assert sentences[0]["text"] == "Hi"
 
 
 class TestSentenceIdxIsSequential:
