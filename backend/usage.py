@@ -12,6 +12,7 @@ metered against a plan.
 """
 import json
 import os
+import threading
 import time
 from typing import Any, Dict, List, Optional
 
@@ -70,17 +71,32 @@ def check_rate_limit(now: Optional[float] = None) -> None:
         )
 
 
+# Serialises the load-append-save below. Two things go wrong without it, and both were
+# reproduced: concurrent writers each read the same N entries and the last write wins, so
+# spend silently vanishes (measured: 5 concurrent records, 1 survived, 100 of 500 tokens
+# counted); and on Windows two simultaneous os.replace() calls onto the same destination
+# raise PermissionError outright — already seen in production, which is why POST /api/answer
+# wraps its record() in a try/except. That guard treats one call site; studio_runner's two
+# calls are unguarded and would fail a run AFTER the model was called and paid for.
+#
+# STUDIO_EXECUTOR runs 2 workers and /api/answer records from request threads, so concurrent
+# writers are the normal case, not a stress scenario.
+_lock = threading.Lock()
+
+
 def record(tool_id: str, usage: Dict[str, Any], now: Optional[float] = None) -> None:
     now = now if now is not None else time.time()
-    entries = _load_all()
-    entries.append({
+    entry = {
         "ts": now,
         "tool_id": tool_id,
         "prompt_tokens": int(usage.get("prompt_tokens", 0) or 0),
         "completion_tokens": int(usage.get("completion_tokens", 0) or 0),
         "model": usage.get("model", ""),
-    })
-    _save_all(entries)
+    }
+    with _lock:
+        entries = _load_all()
+        entries.append(entry)
+        _save_all(entries)
 
 
 def summary(now: Optional[float] = None) -> Dict[str, Any]:

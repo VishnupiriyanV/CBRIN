@@ -10,6 +10,7 @@ block using the same input, and doesn't require the creator to re-paste source t
 import json
 import os
 import time
+import threading
 import uuid
 from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Optional
@@ -53,13 +54,21 @@ def _save_all(runs: Dict[str, ToolRun]) -> Dict[str, ToolRun]:
     return trimmed
 
 
+# Serialises every load-modify-save below. Without it two concurrent writers each read the
+# same snapshot and the last save wins, dropping the other's run entirely; and on Windows
+# two simultaneous os.replace() calls onto this file raise PermissionError. STUDIO_EXECUTOR
+# runs 2 workers, so both are ordinary outcomes rather than stress-test artefacts.
+_lock = threading.Lock()
+
+
 def record(tool_id: str, inputs: Dict[str, Any], output: Dict[str, Any],
            meta: Optional[Dict[str, Any]] = None) -> str:
     run_id = str(uuid.uuid4())
     run = ToolRun(id=run_id, tool_id=tool_id, inputs=inputs, output=output, meta=meta or {})
-    runs = _load_all()
-    runs[run_id] = run
-    _save_all(runs)
+    with _lock:
+        runs = _load_all()
+        runs[run_id] = run
+        _save_all(runs)
     return run_id
 
 
@@ -76,22 +85,24 @@ def list_runs(tool_id: Optional[str] = None, limit: int = 50) -> List[ToolRun]:
 
 
 def delete(run_id: str) -> bool:
-    runs = _load_all()
-    if run_id not in runs:
-        return False
-    del runs[run_id]
-    _save_all(runs)
+    with _lock:
+        runs = _load_all()
+        if run_id not in runs:
+            return False
+        del runs[run_id]
+        _save_all(runs)
     return True
 
 
 def update_output(run_id: str, output: Dict[str, Any]) -> Optional[ToolRun]:
     """Overwrite a run's output in place after a targeted single-block regenerate, so run
     history reflects the latest accepted version instead of accumulating one row per click."""
-    runs = _load_all()
-    run = runs.get(run_id)
-    if run is None:
-        return None
-    run.output = output
-    runs[run_id] = run
-    _save_all(runs)
+    with _lock:
+        runs = _load_all()
+        run = runs.get(run_id)
+        if run is None:
+            return None
+        run.output = output
+        runs[run_id] = run
+        _save_all(runs)
     return run

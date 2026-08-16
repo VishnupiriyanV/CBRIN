@@ -77,3 +77,46 @@ class TestSummary:
         result = usage.summary(now=now)
         assert result["runs_this_month"] == 0
         assert result["tokens_in_month"] == 0
+
+
+class TestConcurrentRecordingIsSafe:
+    """record() is load-append-save with no lock, called from STUDIO_EXECUTOR's 2 workers and
+    from /api/answer's request threads. Two failures were reproduced: concurrent writers each
+    read the same N entries so the last save wins and spend vanishes; and on Windows two
+    simultaneous os.replace() calls onto the same file raise PermissionError — already seen in
+    production, which is why POST /api/answer wraps its record() in a try/except."""
+
+    def test_concurrent_records_all_survive(self, monkeypatch):
+        import threading
+        import time
+
+        real_load = usage._load_all
+
+        def slow_load():
+            entries = real_load()
+            time.sleep(0.03)  # widen the read-then-write window
+            return entries
+
+        monkeypatch.setattr(usage, "_load_all", slow_load)
+
+        errors = []
+
+        def work(i):
+            try:
+                usage.record(f"tool{i}", {"prompt_tokens": 100, "completion_tokens": 10})
+            except Exception as e:  # pragma: no cover - only on a regression
+                errors.append(e)
+
+        threads = [threading.Thread(target=work, args=(i,)) for i in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        monkeypatch.setattr(usage, "_load_all", real_load)
+
+        assert errors == [], f"concurrent writes raised: {errors}"
+        summary = usage.summary()
+        assert summary["runs_this_month"] == 5
+        assert summary["tokens_in_month"] == 500
+        assert summary["tokens_out_month"] == 50
