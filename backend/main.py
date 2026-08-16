@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 import io
 
+import atomic_io
 import paths
 from vector_store import VectorStore
 from transcript_service import fetch_youtube_transcript, transcribe_file_with_whisper, fetch_youtube_metadata, preload_whisper_model, content_hash_id, get_youtube_video_id, WHISPER_MODEL_TIERS, WHISPER_MODEL_SIZE
@@ -666,9 +667,11 @@ def _load_clips() -> Dict[str, Any]:
 
 
 def _save_clips(clips: Dict[str, Any]):
-    os.makedirs(paths.DATA_DIR, exist_ok=True)
-    with open(paths.CLIPS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(clips, f, indent=2, ensure_ascii=False)
+    # Atomic: clips.json holds every analysed clip for every video, and _load_clips() above
+    # swallows a parse failure by returning {}. A truncated write therefore does not just lose
+    # this video's analysis — the next save writes that empty dict back out and takes every
+    # OTHER video's clips with it, silently. Re-earning them costs Whisper plus an LLM pass.
+    atomic_io.write_json(paths.CLIPS_FILE, clips)
 
 
 def _sentences_for_video(video_id: str) -> List[Dict[str, Any]]:

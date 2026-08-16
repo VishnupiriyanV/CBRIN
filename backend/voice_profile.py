@@ -14,6 +14,7 @@ import json
 import os
 from typing import Any, Dict, List, Optional
 
+import atomic_io
 import paths
 
 DEFAULT_VOICE_PROFILE: Dict[str, Any] = {
@@ -47,8 +48,8 @@ def load() -> Dict[str, Any]:
 
 def save(profile: Dict[str, Any]) -> Dict[str, Any]:
     os.makedirs(paths.DATA_DIR, exist_ok=True)
-    with open(paths.VOICE_PROFILE_FILE, 'w', encoding='utf-8') as f:
-        json.dump(profile, f, indent=2, ensure_ascii=False)
+    # Atomic — user-authored voice profile; unrecoverable if truncated.
+    atomic_io.write_json(paths.VOICE_PROFILE_FILE, profile)
     return profile
 
 

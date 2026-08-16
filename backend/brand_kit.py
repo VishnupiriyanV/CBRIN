@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
+import atomic_io
 import paths
 
 DEFAULT_BRAND_KIT: Dict[str, Any] = {
@@ -52,9 +53,10 @@ def load() -> Dict[str, Any]:
 
 
 def save(kit: Dict[str, Any]) -> Dict[str, Any]:
-    os.makedirs(paths.DATA_DIR, exist_ok=True)
-    with open(paths.BRAND_KIT_FILE, 'w', encoding='utf-8') as f:
-        json.dump(kit, f, indent=2, ensure_ascii=False)
+    # Atomic — user-authored brand configuration. load() above falls back to DEFAULT_BRAND_KIT
+    # on any parse error, so a truncated write silently reverts the creator's colours, fonts
+    # and logo to stock with no error shown.
+    atomic_io.write_json(paths.BRAND_KIT_FILE, kit)
     return kit
 
 

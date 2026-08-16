@@ -252,3 +252,57 @@ class TestEnsureWordsCaching:
         assert result == SAMPLE_WORDS
         # Should report exactly one "using cached" call, never touch Whisper.
         assert calls["count"] == 1
+
+
+class TestBisectLookupsMatchLinearScan:
+    """phrase_gap_* and snap_clip_bounds moved from full linear scans to bisect over sorted
+    start/end arrays — 37x and 66x on an 8.5k-word file, and O(log n) so it keeps scaling.
+    The precondition is that ensure_words() appends in Whisper's time order; these pin the
+    rewrite against a naive reference so an off-by-one can't silently shift a cut."""
+
+    WORDS = [
+        {"word": "a", "start": 1.0, "end": 1.4},
+        {"word": "b", "start": 1.5, "end": 1.9},
+        {"word": "c", "start": 3.0, "end": 3.6},   # 1.1s gap before
+        {"word": "d", "start": 3.7, "end": 4.2},
+        {"word": "e", "start": 7.0, "end": 7.5},   # 2.8s gap before
+    ]
+
+    @staticmethod
+    def _ref_gap_before(words, t):
+        following = [w["start"] for w in words if w["start"] >= t]
+        if not following:
+            return None
+        onset = min(following)
+        prior = [w["end"] for w in words if w["end"] <= onset]
+        return max(0.0, onset - max(prior)) if prior else None
+
+    @staticmethod
+    def _ref_gap_after(words, t):
+        preceding = [w["end"] for w in words if w["end"] <= t]
+        if not preceding:
+            return None
+        offset = max(preceding)
+        later = [w["start"] for w in words if w["start"] >= offset]
+        return max(0.0, min(later) - offset) if later else None
+
+    def test_gaps_match_reference_across_the_timeline(self):
+        _write_words("vid-bisect", self.WORDS)
+        # Includes points before the first word, after the last, and exactly on every edge —
+        # the boundaries where bisect_left/bisect_right differ.
+        probes = [-1.0, 0.0, 0.9, 1.0, 1.4, 1.45, 1.9, 2.5, 3.0, 3.6, 4.2, 5.0, 7.0, 7.5, 9.0]
+        for t in probes:
+            assert wt.phrase_gap_before("vid-bisect", t) == self._ref_gap_before(self.WORDS, t), t
+            assert wt.phrase_gap_after("vid-bisect", t) == self._ref_gap_after(self.WORDS, t), t
+
+    def test_bounds_cache_invalidates_with_the_word_file(self):
+        _write_words("vid-inval", self.WORDS)
+        first = wt.phrase_gap_before("vid-inval", 3.0)
+        _write_words("vid-inval", [{"word": "x", "start": 0.0, "end": 0.5},
+                                   {"word": "y", "start": 5.0, "end": 5.5}])
+        os.utime(os.path.join(paths.WORDS_DIR, "vid-inval.json"), (0, 0))
+        assert wt.phrase_gap_before("vid-inval", 5.0) != first
+
+    def test_missing_timing_still_returns_none(self):
+        assert wt.phrase_gap_before("vid-no-such", 1.0) is None
+        assert wt.phrase_gap_after("vid-no-such", 1.0) is None

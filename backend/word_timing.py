@@ -11,10 +11,12 @@ so clip boundaries can be nudged onto exact word edges.
 Runs once per video and is meant to be invoked through jobs.py (a 25-minute video on Whisper
 'base'/CPU takes minutes) — not on a request thread.
 """
+import bisect
 import json
 import os
 from typing import Callable, List, Optional, Tuple, TypedDict
 
+import atomic_io
 import media_service
 import paths
 import transcript_service
@@ -137,9 +139,10 @@ def ensure_words(
         for w in seg.get("words", []) or []:
             words.append({"word": w["word"], "start": w["start"], "end": w["end"]})
 
-    os.makedirs(paths.WORDS_DIR, exist_ok=True)
-    with open(_words_path(video_id), 'w', encoding='utf-8') as f:
-        json.dump(words, f, indent=2, ensure_ascii=False)
+    # Atomic: regenerable, but only by re-running Whisper over the whole video. A half
+    # written cache also loads as valid-ish JSON only by luck; load_words() would return
+    # None and silently drop timing precision for every clip.
+    atomic_io.write_json(_words_path(video_id), words)
 
     if report:
         report("words", 1.0, f"transcribed {len(words)} words")
@@ -245,6 +248,51 @@ def _boundary_words(video_id: str) -> Optional[List[Word]]:
     return load_words(video_id)
 
 
+# Sorted parallel arrays of every word's start and end, cached beside _WORDS_CACHE.
+#
+# Every lookup below used to be a list comprehension over the whole video — 0.80ms per
+# phrase_gap call and 1.51ms per snap on an 8,550-word file, scaling linearly. _select_bounds
+# evaluates up to 13 windows per option and two options per seed, so a single analysis spent
+# ~1.6s here, and a three-hour podcast (~35k words) would spend four times that.
+#
+# ensure_words() appends in Whisper's own segment-then-word order, so both arrays are already
+# ascending — verified across every file in the real corpus before this was written. That makes
+# bisect valid and turns each lookup into O(log n).
+_BOUNDS_CACHE: "dict[str, Tuple[float, List[float], List[float]]]" = {}
+
+
+def _word_bounds(video_id: str) -> "Optional[Tuple[List[float], List[float]]]":
+    """(starts, ends) for `video_id`, both ascending, or None when there is no timing."""
+    path = _words_path(video_id)
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        _BOUNDS_CACHE.pop(path, None)
+        return None
+
+    cached = _BOUNDS_CACHE.get(path)
+    if cached is not None and cached[0] == mtime:
+        return cached[1], cached[2]
+
+    words = load_words(video_id)
+    if not words:
+        return None
+    starts = [w["start"] for w in words]
+    ends = [w["end"] for w in words]
+    _BOUNDS_CACHE[path] = (mtime, starts, ends)
+    return starts, ends
+
+
+def _first_start_at_or_after(starts: List[float], t: float) -> Optional[float]:
+    i = bisect.bisect_left(starts, t)
+    return starts[i] if i < len(starts) else None
+
+
+def _last_end_at_or_before(ends: List[float], t: float) -> Optional[float]:
+    i = bisect.bisect_right(ends, t)
+    return ends[i - 1] if i > 0 else None
+
+
 def silence_gap_before(video_id: str, t: float) -> float:
     """Seconds of silence between the previous word's end and t. 0.0 if no words data or t
     is before/at the first word.
@@ -289,33 +337,33 @@ def phrase_gap_before(video_id: str, start_sec: float) -> Optional[float]:
     Returns None when nothing precedes the clip (it opens the recording) — no adjacent speech
     to cut into, which callers should treat as a perfectly clean boundary rather than a zero.
     """
-    words = load_words(video_id)
-    if not words:
+    bounds = _word_bounds(video_id)
+    if bounds is None:
         return None
-    following = [w["start"] for w in words if w["start"] >= start_sec]
-    if not following:
+    starts, ends = bounds
+    onset = _first_start_at_or_after(starts, start_sec)
+    if onset is None:
         return None
-    onset = min(following)
-    prior_ends = [w["end"] for w in words if w["end"] <= onset]
-    if not prior_ends:
+    prior_end = _last_end_at_or_before(ends, onset)
+    if prior_end is None:
         return None
-    return max(0.0, onset - max(prior_ends))
+    return max(0.0, onset - prior_end)
 
 
 def phrase_gap_after(video_id: str, end_sec: float) -> Optional[float]:
     """Mirror of phrase_gap_before for the out-point: silence following the last word ending
     at or before `end_sec`. None when the clip runs to the end of the recording."""
-    words = load_words(video_id)
-    if not words:
+    bounds = _word_bounds(video_id)
+    if bounds is None:
         return None
-    preceding = [w["end"] for w in words if w["end"] <= end_sec]
-    if not preceding:
+    starts, ends = bounds
+    offset = _last_end_at_or_before(ends, end_sec)
+    if offset is None:
         return None
-    offset = max(preceding)
-    later_starts = [w["start"] for w in words if w["start"] >= offset]
-    if not later_starts:
+    next_start = _first_start_at_or_after(starts, offset)
+    if next_start is None:
         return None
-    return max(0.0, min(later_starts) - offset)
+    return max(0.0, next_start - offset)
 
 
 # --- Clip boundary snapping --------------------------------------------------------------
@@ -372,32 +420,35 @@ def snap_clip_bounds(
     moving to a worse place; a boundary this function declines to fix is still scored honestly
     by clip_scoring._boundary_cleanliness.
     """
-    words = load_words(video_id)
-    if not words:
+    bounds = _word_bounds(video_id)
+    if bounds is None:
         return start_sec, end_sec, _no_snap("no word timing for this video")
+    starts, ends = bounds
     if end_sec <= start_sec:
         return start_sec, end_sec, _no_snap("degenerate input window")
 
     # --- in-point -----------------------------------------------------------------------
-    onsets = [w for w in words if start_sec <= w["start"] <= start_sec + window]
+    onset = _first_start_at_or_after(starts, start_sec)
+    if onset is not None and onset > start_sec + window:
+        onset = None  # nearest speech is outside the window — refuse to move
     new_start = start_sec
     start_reason = "no word onset within snap window"
-    if onsets:
-        onset = min(onsets, key=lambda w: w["start"])["start"]
+    if onset is not None:
         # Don't let lead_in reach back into whatever was being said before the clip.
-        prior_ends = [w["end"] for w in words if w["end"] <= onset]
-        floor_bound = (max(prior_ends) + ADJACENT_MARGIN_SEC) if prior_ends else 0.0
+        prior_end = _last_end_at_or_before(ends, onset)
+        floor_bound = (prior_end + ADJACENT_MARGIN_SEC) if prior_end is not None else 0.0
         new_start = max(0.0, onset - lead_in, min(floor_bound, onset))
         start_reason = "snapped to speech onset"
 
     # --- out-point ----------------------------------------------------------------------
-    offsets = [w for w in words if end_sec - window <= w["end"] <= end_sec]
+    offset = _last_end_at_or_before(ends, end_sec)
+    if offset is not None and offset < end_sec - window:
+        offset = None  # nearest speech is outside the window — refuse to move
     new_end = end_sec
     end_reason = "no word offset within snap window"
-    if offsets:
-        offset = max(offsets, key=lambda w: w["end"])["end"]
-        later_starts = [w["start"] for w in words if w["start"] >= offset]
-        ceil_bound = (min(later_starts) - ADJACENT_MARGIN_SEC) if later_starts else offset + tail
+    if offset is not None:
+        next_start = _first_start_at_or_after(starts, offset)
+        ceil_bound = (next_start - ADJACENT_MARGIN_SEC) if next_start is not None else offset + tail
         # Capped at the original end_sec: ceil() only ever moved the out-point LATER, so a
         # correct snap can only pull it earlier. Without the cap, `offset + tail` can push
         # past the raw bound — and because ceil() rounds up by as much as a second, the next

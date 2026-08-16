@@ -736,6 +736,7 @@ def record_feedback(clip_id: str, verdict: str) -> int:
     import json
     import os
     import time
+    import atomic_io
     import paths
 
     os.makedirs(paths.DATA_DIR, exist_ok=True)
@@ -748,8 +749,12 @@ def record_feedback(clip_id: str, verdict: str) -> int:
             existing = []
 
     existing.append({"clip_id": clip_id, "verdict": verdict, "ts": time.time()})
-    with open(paths.CLIP_FEEDBACK_FILE, 'w', encoding='utf-8') as f:
-        json.dump(existing, f, indent=2, ensure_ascii=False)
+    # Atomic: this is read-append-write over the creator's accumulated taste labels, which are
+    # user-generated and unrecoverable — nothing can regenerate them. A truncated write is read
+    # back as [] by the guard above, so the very next verdict persists a one-element list and
+    # every prior label is gone with no error surfaced. MIN_LABELS_FOR_TASTE gates a whole
+    # signal on this file.
+    atomic_io.write_json(paths.CLIP_FEEDBACK_FILE, existing)
 
     return len(existing)
 

@@ -262,8 +262,9 @@ class VectorStore:
         """Call once pending re-chunk repairs (self.pending_rechunk) have been attempted,
         successfully or not, so the next boot doesn't re-run the eviction/repair pass."""
         self._ensure_dirs()
-        with open(paths.INDEX_META_FILE, 'w', encoding='utf-8') as f:
-            json.dump({"schema_version": SCHEMA_VERSION}, f, indent=2)
+        # Atomic like the rest of the index: a half-written schema marker makes the next
+        # boot re-run the eviction/repair pass over an already-repaired library.
+        atomic_io.write_json(paths.INDEX_META_FILE, {"schema_version": SCHEMA_VERSION})
         self.pending_rechunk = []
         self.pending_rechunk_meta = {}
 
