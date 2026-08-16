@@ -123,6 +123,33 @@ class TestValidation:
         assert bk.apply_edit({"colors": {"accent": "#FF7A17"}})["colors"]["accent"] == "#FF7A17"
         assert bk.apply_edit({"safe_margins": {"bottom": 0.25}})["safe_margins"]["bottom"] == 0.25
 
+    def test_zero_words_per_cue_is_rejected(self):
+        # build_cues() feeds this straight to range() as the step: 0 raises ValueError inside
+        # a background render job, long after the PUT returned 200.
+        with pytest.raises(ValueError, match="max_words_per_cue"):
+            bk.apply_edit({"caption": {"max_words_per_cue": 0}})
+
+    def test_negative_words_per_cue_is_rejected(self):
+        # Worse than a crash: range() with a negative step yields nothing, so the render
+        # "succeeds" and produces a clip with no captions at all.
+        with pytest.raises(ValueError, match="max_words_per_cue"):
+            bk.apply_edit({"caption": {"max_words_per_cue": -2}})
+
+    def test_non_integer_words_per_cue_is_rejected(self):
+        for value in ("four", 2.5, True):
+            with pytest.raises(ValueError, match="max_words_per_cue"):
+                bk.apply_edit({"caption": {"max_words_per_cue": value}})
+
+    def test_absurd_words_per_cue_is_rejected(self):
+        with pytest.raises(ValueError, match="max_words_per_cue"):
+            bk.apply_edit({"caption": {"max_words_per_cue": 500}})
+
+    def test_sane_words_per_cue_is_accepted(self):
+        for value in (1, 4, bk.MAX_WORDS_PER_CUE):
+            assert bk.apply_edit(
+                {"caption": {"max_words_per_cue": value}}
+            )["caption"]["max_words_per_cue"] == value
+
     def test_fields_with_safe_fallbacks_stay_permissive(self):
         # caption.size resolves through .get(key, default) and fonts fall back to a bundled
         # face, so a bad value degrades rather than breaks — deliberately not rejected.

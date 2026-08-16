@@ -79,6 +79,10 @@ _HEX_COLOUR = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$")
 # top and bottom margins meet and there is nowhere left to draw.
 MAX_SAFE_MARGIN = 0.45
 
+# One cue is a single burned-in caption line. caption_render shrinks the font to fit, but only
+# 8 steps down to 14px, so a very long cue eventually overflows the frame regardless.
+MAX_WORDS_PER_CUE = 10
+
 
 def validate(kit: Dict[str, Any]) -> None:
     """
@@ -92,9 +96,15 @@ def validate(kit: Dict[str, Any]) -> None:
     Pillow. `safe_margins.bottom = 5.0` does not raise at all — it silently positions every
     caption off-frame, which is worse, because the render "succeeds".
 
-    Only the fields with no safe fallback are checked. `caption.size`, `caption.position` and
-    `fonts.*` already resolve through .get(key, default) or a font fallback, so a bad value
-    there degrades rather than breaks and is left permissive on purpose.
+    Only the fields with no safe fallback are checked, audited against every brand-kit read in
+    caption_render/clip_renderer: `caption.size` resolves through a lookup default,
+    `caption.position` falls through to centre, `fonts.*` falls back to a bundled face, and
+    `caption.animation`/`highlight_style` are not read at all. Those stay permissive on
+    purpose — a bad value degrades rather than breaks.
+
+    `caption.max_words_per_cue` is the exception: build_cues() feeds it straight to range() as
+    the step, with no fallback. 0 raises ValueError, a float or string raises TypeError, and a
+    negative value produces zero cues — a render that "succeeds" with no captions at all.
     """
     colors = kit.get("colors")
     if colors is not None:
@@ -104,6 +114,23 @@ def validate(kit: Dict[str, Any]) -> None:
             if not isinstance(value, str) or not _HEX_COLOUR.match(value):
                 raise ValueError(
                     f"colors.{name} must be a hex colour like '#ffffff', got {value!r}"
+                )
+
+    caption = kit.get("caption")
+    if caption is not None:
+        if not isinstance(caption, dict):
+            raise ValueError("caption must be an object")
+        words_per_cue = caption.get("max_words_per_cue")
+        if words_per_cue is not None:
+            if isinstance(words_per_cue, bool) or not isinstance(words_per_cue, int):
+                raise ValueError(
+                    f"caption.max_words_per_cue must be a whole number between 1 and "
+                    f"{MAX_WORDS_PER_CUE}, got {words_per_cue!r}"
+                )
+            if not (1 <= words_per_cue <= MAX_WORDS_PER_CUE):
+                raise ValueError(
+                    f"caption.max_words_per_cue must be between 1 and {MAX_WORDS_PER_CUE}, "
+                    f"got {words_per_cue}"
                 )
 
     margins = kit.get("safe_margins")
