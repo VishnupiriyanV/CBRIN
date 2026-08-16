@@ -109,3 +109,79 @@ class TestJobLifecycle:
         record = jobs2.get(job_id)
         assert record.status == "failed"
         assert "restart" in record.error
+
+
+class TestSavePersistsInSnapshotOrder:
+    """_save_all() used to snapshot under _lock and then write AFTER releasing it, so two
+    writers could snapshot in one order and reach disk in the other — the stale payload won.
+    A completed job then persisted as "running", and the next _init_from_disk() reported that
+    successful job as "interrupted by server restart". Two pools (the media queue and
+    studio_runner's) call report() concurrently, so this is reachable in normal use."""
+
+    def test_concurrent_writers_do_not_persist_a_stale_snapshot(self, monkeypatch):
+        import json
+        import threading
+        jobs = _fresh_jobs_module()
+
+        jobs._jobs.clear()
+        jobs._jobs["a"] = jobs.JobRecord(id="a", kind="k", video_id="v", status="queued")
+
+        first_snapshotted = threading.Event()
+        second_written = threading.Event()
+        real_write = jobs.atomic_io.write_json
+
+        def gated_write(path, payload):
+            status = payload["a"]["status"]
+            if status == "running":
+                # Stall the older writer between its snapshot and its write, giving the
+                # newer one a full window to snapshot and land first.
+                first_snapshotted.set()
+                second_written.wait(2.0)
+            real_write(path, payload)
+            if status == "done":
+                second_written.set()
+
+        monkeypatch.setattr(jobs.atomic_io, "write_json", gated_write)
+
+        def write(status, wait_for=None):
+            if wait_for:
+                wait_for.wait(2.0)
+            with jobs._lock:
+                jobs._jobs["a"].status = status
+            jobs._save_all()
+
+        older = threading.Thread(target=write, args=("running", None))
+        newer = threading.Thread(target=write, args=("done", first_snapshotted))
+        older.start(); newer.start(); older.join(); newer.join()
+
+        monkeypatch.setattr(jobs.atomic_io, "write_json", real_write)
+
+        with open(paths.JOBS_FILE, "r", encoding="utf-8") as f:
+            on_disk = json.load(f)["a"]["status"]
+        assert on_disk == jobs._jobs["a"].status == "done"
+
+    def test_lock_order_has_no_deadlock_under_contention(self):
+        import threading
+        jobs = _fresh_jobs_module()
+        jobs._jobs.clear()
+        for i in range(10):
+            jobs._jobs[str(i)] = jobs.JobRecord(id=str(i), kind="k", video_id="v")
+
+        errors = []
+
+        def hammer():
+            try:
+                for _ in range(20):
+                    jobs._save_all()
+                    jobs.list_all()
+                    jobs.get("1")
+            except Exception as e:  # pragma: no cover - only on a real deadlock/error
+                errors.append(e)
+
+        threads = [threading.Thread(target=hammer) for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+        assert not any(t.is_alive() for t in threads), "deadlock: writer/reader threads hung"
+        assert errors == []

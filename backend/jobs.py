@@ -32,6 +32,18 @@ MAX_RETAINED_JOBS = 200
 
 _executor = ThreadPoolExecutor(max_workers=1)
 _lock = threading.Lock()
+
+# Serialises _save_all() end to end. _lock alone only guards the in-memory dict and the
+# snapshot; the actual file write used to happen after releasing it, so two writers could
+# snapshot in one order and write in the other, and the stale payload won. Demonstrated
+# deterministically: a job that had completed persisted to disk as "running", and the next
+# _init_from_disk() then reported that successful job as "interrupted by server restart".
+#
+# Two pools call report() concurrently — the single-worker media queue and studio_runner's
+# own pool — so this is reachable in normal use, not just under stress.
+#
+# Lock order is always _write_lock then _lock, and nothing acquires them the other way round.
+_write_lock = threading.Lock()
 _jobs: Dict[str, "JobRecord"] = {}
 
 
@@ -70,15 +82,18 @@ def _load_all() -> Dict[str, JobRecord]:
 
 def _save_all():
     _ensure_dir()
-    with _lock:
-        # Retain only the most recent MAX_RETAINED_JOBS records.
-        ordered = sorted(_jobs.values(), key=lambda j: j.created_at, reverse=True)
-        keep = ordered[:MAX_RETAINED_JOBS]
-        _jobs.clear()
-        for j in keep:
-            _jobs[j.id] = j
-        payload = {jid: j.to_dict() for jid, j in _jobs.items()}
-    atomic_io.write_json(paths.JOBS_FILE, payload)
+    # Snapshot and write under the same lock, so writes reach disk in the order their
+    # snapshots were taken. See the note on _write_lock.
+    with _write_lock:
+        with _lock:
+            # Retain only the most recent MAX_RETAINED_JOBS records.
+            ordered = sorted(_jobs.values(), key=lambda j: j.created_at, reverse=True)
+            keep = ordered[:MAX_RETAINED_JOBS]
+            _jobs.clear()
+            for j in keep:
+                _jobs[j.id] = j
+            payload = {jid: j.to_dict() for jid, j in _jobs.items()}
+        atomic_io.write_json(paths.JOBS_FILE, payload)
 
 
 def _init_from_disk():

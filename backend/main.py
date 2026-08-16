@@ -337,12 +337,33 @@ def get_library():
     return result
 
 
+def _path_within(base_dir: str, *parts: str) -> Optional[str]:
+    """
+    Join `parts` under `base_dir`, or None if the result escapes it.
+
+    A route path parameter is `[^/]+`, which on Windows still admits BACKSLASHES — and uvicorn
+    percent-decodes before routing, so `GET /api/keyframe/..%5C..%5Csomething` arrives with
+    chunk_id = "..\\..\\something" and os.path.join happily walks out of the data directory.
+    (`%2F` is rejected by the router, so only the backslash form gets through; this is a
+    Windows app.) Verified against the real router before this guard was written.
+
+    Containment is checked on the RESOLVED path rather than by blacklisting "..", so symlinks
+    and any other spelling are covered too. /api/engine/clip_file already validated both of its
+    components against known clips and presets; these two routes never did.
+    """
+    root = os.path.realpath(base_dir)
+    candidate = os.path.realpath(os.path.join(base_dir, *parts))
+    if candidate != root and os.path.commonpath([candidate, root]) != root:
+        return None
+    return candidate
+
+
 @app.get("/api/media/{video_id}")
 def get_media_file(video_id: str):
     """Stream local uploaded audio/video file for HTML5 playback seeking."""
     for ext in ['.mp4', '.mov', '.webm', '.mkv', '.avi', '.mp3', '.wav', '.m4a']:
-        fpath = os.path.join(paths.MEDIA_DIR, f"{video_id}{ext}")
-        if os.path.exists(fpath):
+        fpath = _path_within(paths.MEDIA_DIR, f"{video_id}{ext}")
+        if fpath and os.path.exists(fpath):
             return FileResponse(fpath)
 
     raise HTTPException(status_code=404, detail="Media file not found for local video.")
@@ -351,8 +372,8 @@ def get_media_file(video_id: str):
 @app.get("/api/keyframe/{chunk_id}")
 def get_keyframe(chunk_id: str):
     """Serve a keyframe thumbnail JPEG for a specific chunk."""
-    keyframe_path = os.path.join(paths.KEYFRAMES_DIR, f"{chunk_id}.jpg")
-    if os.path.exists(keyframe_path):
+    keyframe_path = _path_within(paths.KEYFRAMES_DIR, f"{chunk_id}.jpg")
+    if keyframe_path and os.path.exists(keyframe_path):
         return FileResponse(keyframe_path, media_type="image/jpeg")
     raise HTTPException(status_code=404, detail="Keyframe not found for this chunk.")
 
