@@ -56,7 +56,17 @@ _client_config = None
 
 class LLMUnavailable(Exception):
     """No key configured, provider unreachable, or the response never validated against the
-    requested schema even after one retry. Callers should fall back to heuristic analysis."""
+    requested schema even after one retry. Callers should fall back to heuristic analysis.
+
+    `usage` carries whatever tokens were spent before giving up. A call that exhausts its
+    retries still costs money — the provider billed every attempt — and raising without it
+    meant that spend vanished from the monthly total entirely. It is zeroed for the failures
+    that never reached the provider (no key, unreachable), which genuinely cost nothing.
+    """
+
+    def __init__(self, message: str, usage: Optional[Dict[str, Any]] = None):
+        super().__init__(message)
+        self.usage = usage or {"prompt_tokens": 0, "completion_tokens": 0}
 
 
 def is_configured() -> bool:
@@ -227,7 +237,18 @@ def complete_json_with_usage(
                 client, model_name, system, attempt_user, resolved.base_url, resolved.bucket,
                 temperature=temperature, max_tokens=max_tokens,
             )
-            usage = _extract_usage(response, model_name)
+            # ACCUMULATE, don't replace. Every attempt is billed by the provider, including
+            # one whose JSON failed to parse or validate — and this retry exists precisely
+            # because that happens. Assigning here meant a call that succeeded on the retry
+            # reported only the retry's tokens: measured on a mocked two-attempt call, 500
+            # prompt + 120 completion tokens were billed and never recorded. usage.record()
+            # feeds the monthly total shown in the UI, so the spend figure ran low by exactly
+            # the attempts the user could not see.
+            attempt_usage = _extract_usage(response, model_name)
+            usage["prompt_tokens"] += attempt_usage.get("prompt_tokens", 0) or 0
+            usage["completion_tokens"] += attempt_usage.get("completion_tokens", 0) or 0
+            usage["model"] = attempt_usage.get("model") or usage["model"]
+
             raw = response.choices[0].message.content
             parsed = json.loads(raw)
 
@@ -269,7 +290,9 @@ def complete_json_with_usage(
             f"Respond again with ONLY valid JSON matching the required shape."
         )
 
-    raise LLMUnavailable(f"LLM response failed schema validation after retry: {last_error}")
+    raise LLMUnavailable(
+        f"LLM response failed schema validation after retry: {last_error}", usage=usage
+    )
 
 
 def _extract_usage(response, model_name: str) -> Dict[str, Any]:

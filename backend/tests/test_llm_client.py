@@ -280,3 +280,57 @@ class TestFallbackLadder:
     def test_unknown_provider_has_no_fallback(self):
         ladder = lc.fallback_models("https://api.example-unknown.com/v1", "some-model")
         assert ladder == ["some-model"]
+
+
+def _mock_response_with_usage(content: str, prompt_tokens: int, completion_tokens: int):
+    resp = _mock_response(content)
+    resp.usage = MagicMock(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens)
+    return resp
+
+
+class TestUsageAccountsForEveryAttempt:
+    """The provider bills each attempt, including one whose JSON failed to parse — and this
+    retry exists because that happens. usage used to be ASSIGNED per attempt rather than
+    accumulated, so a call that succeeded on the retry reported only the retry's tokens and
+    the monthly spend shown in the UI ran low by the attempts the user never saw."""
+
+    SCHEMA = {"type": "object", "required": ["beats"]}
+
+    def _run(self, responses):
+        client = MagicMock()
+        client.chat.completions.create.side_effect = responses
+        resolved = MagicMock(client=client, model="m", base_url="b", bucket="x")
+        with patch.object(lc, "resolve", return_value=resolved):
+            return lc.complete_json_with_usage("system", "user", self.SCHEMA)
+
+    def test_retry_tokens_are_added_not_replaced(self):
+        _parsed, usage = self._run([
+            _mock_response_with_usage("not valid json", 500, 120),
+            _mock_response_with_usage(json.dumps({"beats": []}), 520, 40),
+        ])
+        assert usage["prompt_tokens"] == 1020
+        assert usage["completion_tokens"] == 160
+
+    def test_single_attempt_is_unchanged(self):
+        _parsed, usage = self._run([
+            _mock_response_with_usage(json.dumps({"beats": []}), 300, 25),
+        ])
+        assert usage["prompt_tokens"] == 300
+        assert usage["completion_tokens"] == 25
+
+    def test_exhausted_retries_still_report_what_was_spent(self):
+        # Raising bare used to drop the spend entirely, even though both calls were billed.
+        with pytest.raises(lc.LLMUnavailable) as excinfo:
+            self._run([
+                _mock_response_with_usage("nope", 300, 50),
+                _mock_response_with_usage("still nope", 310, 55),
+            ])
+        assert excinfo.value.usage["prompt_tokens"] == 610
+        assert excinfo.value.usage["completion_tokens"] == 105
+
+    def test_failures_that_never_reached_the_provider_report_zero(self):
+        with patch.object(lc, "get_api_key", return_value=None):
+            with pytest.raises(lc.LLMUnavailable) as excinfo:
+                lc.complete_json_with_usage("system", "user", self.SCHEMA)
+        assert excinfo.value.usage["prompt_tokens"] == 0
+        assert excinfo.value.usage["completion_tokens"] == 0

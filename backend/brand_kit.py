@@ -8,9 +8,11 @@ timing. Fonts are NOT auto-detected — a wrong typeface guess from burned-in ca
 worse than asking, so three bundled open-licence fonts are offered instead (see
 backend/assets/fonts/README.md for what must be dropped in before rendering will work).
 """
+import copy
 import json
 import os
 import random
+import re
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -40,16 +42,27 @@ KMEANS_RANDOM_STATE = 42  # pinned for deterministic auto-seeding (test_brand_ki
 
 
 def load() -> Dict[str, Any]:
+    """
+    The persisted kit merged over the defaults.
+
+    DEEP copies the defaults. `dict(DEFAULT_BRAND_KIT)` is shallow, so every nested dict
+    ("colors", "caption", "safe_margins", ...) came back as the SAME OBJECT held by the
+    module constant — and apply_edit's `current[key].update(value)` then mutated that
+    constant in place, for the lifetime of the process. Demonstrated: one edit setting
+    safe_margins.bottom left DEFAULT_BRAND_KIT["safe_margins"]["bottom"] permanently changed,
+    and it happened even when validate() rejected the edit and nothing was written to disk.
+    Every later load() on a machine with no brand_kit.json then returned the corrupted values.
+    """
     if not os.path.exists(paths.BRAND_KIT_FILE):
-        return dict(DEFAULT_BRAND_KIT)
+        return copy.deepcopy(DEFAULT_BRAND_KIT)
     try:
         with open(paths.BRAND_KIT_FILE, 'r', encoding='utf-8') as f:
             data = json.load(f)
-        merged = dict(DEFAULT_BRAND_KIT)
+        merged = copy.deepcopy(DEFAULT_BRAND_KIT)
         merged.update(data)
         return merged
     except Exception:
-        return dict(DEFAULT_BRAND_KIT)
+        return copy.deepcopy(DEFAULT_BRAND_KIT)
 
 
 def save(kit: Dict[str, Any]) -> Dict[str, Any]:
@@ -60,9 +73,64 @@ def save(kit: Dict[str, Any]) -> Dict[str, Any]:
     return kit
 
 
+_HEX_COLOUR = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$")
+
+# A margin is a fraction of the frame. Past this the caption is pushed off-screen; at 0.5 the
+# top and bottom margins meet and there is nowhere left to draw.
+MAX_SAFE_MARGIN = 0.45
+
+
+def validate(kit: Dict[str, Any]) -> None:
+    """
+    Raise ValueError on anything caption_render cannot survive.
+
+    PUT /api/engine/brand_kit takes an untyped dict and persisted it as-is, so values that
+    look fine at write time blew up much later inside a background render job — with a raw
+    Python TypeError in the job's error field and no hint which field caused it. Verified
+    against the real renderer: `safe_margins.bottom = "abc"` raises TypeError on the
+    `1 - margin` arithmetic, and `colors.text = "not-a-colour"` raises ValueError inside
+    Pillow. `safe_margins.bottom = 5.0` does not raise at all — it silently positions every
+    caption off-frame, which is worse, because the render "succeeds".
+
+    Only the fields with no safe fallback are checked. `caption.size`, `caption.position` and
+    `fonts.*` already resolve through .get(key, default) or a font fallback, so a bad value
+    there degrades rather than breaks and is left permissive on purpose.
+    """
+    colors = kit.get("colors")
+    if colors is not None:
+        if not isinstance(colors, dict):
+            raise ValueError("colors must be an object")
+        for name, value in colors.items():
+            if not isinstance(value, str) or not _HEX_COLOUR.match(value):
+                raise ValueError(
+                    f"colors.{name} must be a hex colour like '#ffffff', got {value!r}"
+                )
+
+    margins = kit.get("safe_margins")
+    if margins is not None:
+        if not isinstance(margins, dict):
+            raise ValueError("safe_margins must be an object")
+        for edge, value in margins.items():
+            # bool is an int subclass and would sail through the numeric check.
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(
+                    f"safe_margins.{edge} must be a number between 0 and {MAX_SAFE_MARGIN}, "
+                    f"got {value!r}"
+                )
+            if not (0.0 <= float(value) <= MAX_SAFE_MARGIN):
+                raise ValueError(
+                    f"safe_margins.{edge} must be between 0 and {MAX_SAFE_MARGIN} "
+                    f"(a fraction of the frame), got {value}"
+                )
+
+
 def apply_edit(patch: Dict[str, Any]) -> Dict[str, Any]:
     """Merge a partial update into the persisted kit. Any edit flips auto_seeded to False so
-    a later autoseed() call never silently overwrites a creator's deliberate choice."""
+    a later autoseed() call never silently overwrites a creator's deliberate choice.
+
+    Validated on the MERGED result rather than the patch, so a partial edit cannot combine
+    with stored values into something the renderer rejects.
+    """
     current = load()
     for key, value in patch.items():
         if isinstance(value, dict) and isinstance(current.get(key), dict):
@@ -70,6 +138,7 @@ def apply_edit(patch: Dict[str, Any]) -> Dict[str, Any]:
         else:
             current[key] = value
     current["auto_seeded"] = False
+    validate(current)
     return save(current)
 
 

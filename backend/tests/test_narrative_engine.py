@@ -694,3 +694,46 @@ class TestBeatValidation:
         cleaned = ne._validate_and_clean_beats(beats, sentences_by_idx)
         assert len(cleaned) == 1
         assert cleaned[0]["quotable_line"] == ""
+
+
+class TestFailedWindowsStillReportTheirCost:
+    """A window that exhausts its retries was billed for every attempt. Its usage used to be
+    discarded, so a partially-failed analysis reported a LOWER cost than a fully successful
+    one — exactly backwards for a figure the UI shows as monthly spend."""
+
+    @staticmethod
+    def _sentences(n):
+        return [
+            {"sentence_idx": i, "text": f"Sentence {i} carries some ordinary words in it.",
+             "start_sec": i * 3, "end_sec": (i + 1) * 3}
+            for i in range(n)
+        ]
+
+    def test_failed_window_usage_is_included_in_the_report(self, monkeypatch):
+        monkeypatch.setattr(ne, "WINDOW_SENTENCE_COUNT", 10)
+        monkeypatch.setattr(ne, "WINDOW_OVERLAP", 0)
+        monkeypatch.setattr(ne, "WORD_COUNT_WINDOW_THRESHOLD", 0)
+
+        calls = {"n": 0}
+
+        def flaky(system, user, schema, **kw):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise ne.llm_client.LLMUnavailable(
+                    "schema validation failed",
+                    usage={"prompt_tokens": 400, "completion_tokens": 60},
+                )
+            return {"beats": []}, {"model": "m", "prompt_tokens": 100, "completion_tokens": 10}
+
+        monkeypatch.setattr(ne.llm_client, "complete_json_with_usage", flaky)
+        _beats, report = ne.extract_beats_with_report(self._sentences(30))
+
+        assert report["windows_failed"] >= 1
+        # 400 from the failed window plus 100 per successful one — the failure is not free.
+        assert report["prompt_tokens"] >= 400
+        assert report["completion_tokens"] >= 60
+
+    def test_exception_without_usage_is_tolerated(self):
+        # Older raises (and any third-party subclass) carry no .usage attribute.
+        err = ne.llm_client.LLMUnavailable("no key")
+        assert getattr(err, "usage", None) is not None

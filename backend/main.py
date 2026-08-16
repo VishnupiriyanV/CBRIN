@@ -3,6 +3,7 @@ import shutil
 import tempfile
 import os
 import json
+import re
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 
@@ -634,10 +635,24 @@ async def upload_and_transcribe_file(file: UploadFile = File(...), model_tier: s
     if model_tier not in WHISPER_MODEL_TIERS:
         raise HTTPException(status_code=400, detail=f"model_tier must be one of {list(WHISPER_MODEL_TIERS)}")
 
+    # NEVER build a path out of file.filename. It is the multipart filename, entirely
+    # client-controlled, and Starlette passes it through verbatim — verified: both
+    # "../../../evil.mp4" and "..\\..\\..\\evil.mp4" arrive intact and escape the temp
+    # directory once joined. The old sanitiser only replaced spaces, so this was an
+    # arbitrary-path WRITE with attacker-chosen content; multipart/form-data is a
+    # CORS-safelisted content type, so a page the user merely visits can POST here without a
+    # preflight, and while it cannot read the response the write still lands.
+    #
+    # mkstemp also removes a second, quieter bug: the old name was derived only from the
+    # upload's filename, so two concurrent uploads of "video.mp4" wrote to the same temp path
+    # and clobbered each other mid-copy.
     file_ext = os.path.splitext(file.filename)[1].lower()
-    temp_dir = tempfile.gettempdir()
-    safe_filename = file.filename.replace(" ", "_")
-    temp_file_path = os.path.join(temp_dir, safe_filename)
+    if not re.fullmatch(r"\.[a-z0-9]{1,8}", file_ext or ""):
+        file_ext = ""
+    fd, temp_file_path = tempfile.mkstemp(
+        prefix="cbrin_upload_", suffix=file_ext, dir=tempfile.gettempdir()
+    )
+    os.close(fd)
 
     with open(temp_file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
@@ -908,7 +923,12 @@ def engine_get_brand_kit():
 
 @app.put("/api/engine/brand_kit")
 def engine_update_brand_kit(patch: Dict[str, Any]):
-    return brand_kit_module.apply_edit(patch)
+    # Reject at write time. Unvalidated values used to persist with a 200 and only fail
+    # later inside a background render job, as a raw TypeError with no field named.
+    try:
+        return brand_kit_module.apply_edit(patch)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.post("/api/engine/brand_kit/autoseed")

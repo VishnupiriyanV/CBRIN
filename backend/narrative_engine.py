@@ -367,6 +367,12 @@ def extract_beats_with_report(
             completion_tokens += usage.get("completion_tokens", 0) or 0
         except llm_client.LLMUnavailable as e:
             errors.append(str(e))
+            # A window that exhausted its retries was still billed for every attempt. Dropping
+            # its usage here made the reported cost of a partially-failed analysis lower than
+            # a fully successful one, which is exactly backwards.
+            failed_usage = getattr(e, "usage", None) or {}
+            prompt_tokens += failed_usage.get("prompt_tokens", 0) or 0
+            completion_tokens += failed_usage.get("completion_tokens", 0) or 0
 
     report = {
         "windows_total": len(windows),
