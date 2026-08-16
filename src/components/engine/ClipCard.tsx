@@ -3,6 +3,7 @@ import { Download, Play, ThumbsDown, ThumbsUp, Loader2, Scissors } from 'lucide-
 import { BoundarySnap, ClipCandidate, RENDER_PRESETS, RenderPreset } from '../../types';
 import { engineRender, engineGetJob, engineClipFileUrl, engineSendFeedback, engineAdjustClip } from '../../services/api';
 import { ScoreBreakdown } from './ScoreBreakdown';
+import { ClipGuarantees } from './ClipGuarantees';
 
 interface ClipCardProps {
   clip: ClipCandidate;
@@ -296,6 +297,10 @@ export const ClipCard: React.FC<ClipCardProps> = ({ clip, rank, onAdjusted }) =>
       )}
 
       <ScoreBreakdown signals={clip.signals} reason={clip.reason} />
+
+      {/* Proven properties, kept separate from the scored signals above. These are not
+          weighted into the composite — they either hold or they don't. */}
+      <ClipGuarantees clip={clip} />
 
       <div className="pt-3 border-t border-hairline/60 space-y-2.5">
         <div className="flex flex-wrap gap-1.5">

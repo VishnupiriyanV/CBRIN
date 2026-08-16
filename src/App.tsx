@@ -269,7 +269,7 @@ export const App: React.FC = () => {
               </h3>
             </div>
             <p className="text-xs sm:text-sm text-ink-body max-w-md mx-auto leading-relaxed font-sans">
-              Upload local video or audio files, select an entire folder, paste a YouTube URL, or import a backup to index transcript segments and start searching.
+              Upload local video or audio files, select an entire folder, or paste a YouTube URL to index transcript segments and start searching.
             </p>
             <button
               onClick={() => setIsLibraryOpen(true)}

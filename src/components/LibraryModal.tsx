@@ -421,7 +421,7 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
             </div>
           )}
 
-          {/* Upload Progress (single-item flows: YouTube URL, import backup) */}
+          {/* Upload Progress (single-item flows: YouTube URL, single file) */}
           {uploadProgress && (
             <div className="p-3 bg-canvas border border-hairline-bright rounded-sm text-xs text-ink flex items-center gap-2 animate-fade-in font-mono">
               <Loader2 className="w-4 h-4 text-ink-body animate-spin shrink-0" />

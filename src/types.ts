@@ -153,6 +153,21 @@ export interface BoundarySnap {
   reason: string;         // per-edge outcomes, start first, joined by "; "
 }
 
+// narrative_engine._select_bounds — whether the solver moved the clip onto a sentence
+// boundary that lands on a real pause, and what that cost.
+export interface BoundarySelection {
+  pause_aligned: boolean;
+  boundary_gain: number;   // improvement in the 0..1 boundary score
+  sentences_added: number; // how much wider the clip got to earn it
+}
+
+// clip_scoring._select_diverse — how close this clip is to the nearest higher-ranked one.
+// `measured: false` means the dense model was unavailable, NOT that nothing is similar.
+export interface ClipDiversity {
+  max_similarity: number | null;
+  measured: boolean;
+}
+
 export interface ClipCandidate {
   id: string;
   video_id: string;
@@ -182,6 +197,19 @@ export interface ClipCandidate {
   timing_precise: boolean;
   // Absent on clips persisted before boundary snapping existed.
   boundary_snap?: BoundarySnap;
+
+  // Sentences inside the clip that still refer to something outside it, after the solver
+  // expanded backward as far as MAX_CLIP_SEC allowed (narrative_engine._extend_for_references).
+  //
+  // Three distinct states, and the UI must not collapse them:
+  //   []        checked, nothing escapes — the claim worth making
+  //   [1, 4]    checked, these sentences still point outside
+  //   undefined not checked (older clip, or resolve_references=False) — unknown, not clean
+  dangling_reference_indices?: number[] | null;
+  // How many sentences the in-point moved back to resolve those references.
+  references_expanded_by?: number;
+  boundary_selection?: BoundarySelection;
+  diversity?: ClipDiversity;
 }
 
 export interface BrandKit {
