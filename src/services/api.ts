@@ -199,17 +199,32 @@ export async function getJob(jobId: string): Promise<EngineJob> {
  * onProgress after every poll so the UI can render live stage/percentage instead of a bare
  * spinner.
  */
+/** Two hours. A full Whisper pass over a long podcast legitimately polls for a long time, so
+ *  this is deliberately generous — it exists only to bound the pathological case, not to
+ *  second-guess a slow job. */
+export const POLL_MAX_DURATION_MS = 2 * 60 * 60 * 1000;
+
 export async function pollJob(
   jobId: string,
   onProgress?: (job: EngineJob) => void,
-  intervalMs: number = 1200
+  intervalMs: number = 1200,
+  maxDurationMs: number = POLL_MAX_DURATION_MS
 ): Promise<EngineJob> {
+  // Bounded. This was `while (true)` with no cap and no cancellation: a job that never
+  // reaches a terminal state — a wedged worker thread, say — left the tab polling the
+  // backend once a second forever, including after the user had navigated away from it.
+  const deadline = Date.now() + maxDurationMs;
   // eslint-disable-next-line no-constant-condition
   while (true) {
     const job = await getJob(jobId);
     onProgress?.(job);
     if (job.status === 'done' || job.status === 'failed') {
       return job;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `Job ${jobId} is still "${job.status}" after ${Math.round(maxDurationMs / 60000)} minutes — giving up polling.`
+      );
     }
     await new Promise(resolve => setTimeout(resolve, intervalMs));
   }

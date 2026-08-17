@@ -147,22 +147,41 @@ export const ClipCard: React.FC<ClipCardProps> = ({ clip, rank, onAdjusted }) =>
     try {
       const { job_id } = await engineRender(clip.id, selectedPresets);
       setRenderJobId(job_id);
-      pollRef.current = setInterval(async () => {
+
+      // Stop whatever was already polling before starting a new poll. Without this a second
+      // Render click orphaned the first interval — and because the callback cleared
+      // `pollRef.current` rather than its OWN handle, when that orphan's job finished it
+      // killed the interval watching the job the user was actually waiting on. The newer
+      // render then sat at its last status forever despite having completed server-side,
+      // while the orphan kept polling and overwriting the UI with the old job's state.
+      if (pollRef.current) clearInterval(pollRef.current);
+
+      const handle = setInterval(async () => {
+        const stop = () => {
+          clearInterval(handle);
+          if (pollRef.current === handle) pollRef.current = null;
+        };
         try {
           const job = await engineGetJob(job_id);
+          // A stale interval must not write over the current job's state either.
+          if (pollRef.current !== handle) {
+            clearInterval(handle);
+            return;
+          }
           setRenderStatus(job.status);
           setRenderMessage(job.message || job.stage);
           if (job.status === 'done' || job.status === 'failed') {
-            if (pollRef.current) clearInterval(pollRef.current);
+            stop();
             if (job.status === 'done' && job.result?.presets) {
               setRenderedPresets(new Set(Object.keys(job.result.presets)));
             }
           }
         } catch (err) {
           console.error('Render job poll failed:', err);
-          if (pollRef.current) clearInterval(pollRef.current);
+          stop();
         }
       }, 1500);
+      pollRef.current = handle;
     } catch (err: any) {
       setRenderStatus('failed');
       setRenderMessage(err.message || 'Render failed to start');

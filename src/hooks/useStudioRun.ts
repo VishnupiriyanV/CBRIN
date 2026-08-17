@@ -1,16 +1,29 @@
 import { useCallback, useState } from 'react';
-import { studioRegenerate, studioRun, getJob } from '../services/api';
+import { studioRegenerate, studioRun, getJob, POLL_MAX_DURATION_MS } from '../services/api';
 import { EngineJob } from '../types';
 
 /** Same pollJob shape as api.ts's pollJob, duplicated locally only so a failed regenerate
  * can update `error` without clobbering the last-good `output` — pollJob's single return
  * value doesn't let a caller distinguish "still have old output" from "job failed". */
-async function poll(jobId: string, onProgress?: (job: EngineJob) => void, intervalMs = 1000): Promise<EngineJob> {
+async function poll(
+  jobId: string,
+  onProgress?: (job: EngineJob) => void,
+  intervalMs = 1000,
+  maxDurationMs = POLL_MAX_DURATION_MS,
+): Promise<EngineJob> {
+  // Bounded for the same reason as api.ts's pollJob — a job stuck short of a terminal state
+  // otherwise left this polling the backend indefinitely.
+  const deadline = Date.now() + maxDurationMs;
   // eslint-disable-next-line no-constant-condition
   while (true) {
     const job = await getJob(jobId);
     onProgress?.(job);
     if (job.status === 'done' || job.status === 'failed') return job;
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `Job ${jobId} is still "${job.status}" after ${Math.round(maxDurationMs / 60000)} minutes — giving up polling.`
+      );
+    }
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
 }

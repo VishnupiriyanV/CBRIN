@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { VideoItem } from '../types';
 import { X, Video, Plus, Check, ExternalLink, Upload, FolderUp, AlertCircle, Loader2, Trash2, RotateCcw, AlertTriangle, CheckCircle2, FileUp, Eye, FileText } from 'lucide-react';
 import { ingestVideoUrl, uploadLocalFile, deleteLibraryVideo, isIngestJobStart, pollJob } from '../services/api';
@@ -82,6 +82,23 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
   // and technical vocabulary, so 'small' is the default rather than the old hardcoded 'base'.
   const [modelTier, setModelTier] = useState<WhisperModelTier>('small');
 
+  // Every auto-dismiss timer below writes state seconds after the fact. Tracked so they
+  // can be cancelled on unmount and superseded by a newer one: the 8s "clear the upload
+  // queue" timer in particular could fire into a SECOND upload session — close the modal
+  // after an upload, reopen it, start another, and the old timer wipes the new queue and
+  // status message out from under it.
+  const dismissTimers = useRef<Array<ReturnType<typeof setTimeout>>>([]);
+
+  const scheduleDismiss = (fn: () => void, ms: number) => {
+    dismissTimers.current.forEach(clearTimeout);
+    dismissTimers.current = [setTimeout(fn, ms)];
+  };
+
+  useEffect(() => () => {
+    dismissTimers.current.forEach(clearTimeout);
+    dismissTimers.current = [];
+  }, []);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
 
@@ -120,7 +137,7 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
         setIngestError(started.message || 'Ingestion failed.');
       }
       onVideoIngested();
-      setTimeout(() => {
+      scheduleDismiss(() => {
         setIngestStatusMsg(null);
         setIngestError(null);
       }, 6000);
@@ -139,7 +156,7 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
 
     if (mediaFiles.length === 0) {
       setIngestError('No supported video or audio files found in selection.');
-      setTimeout(() => setIngestError(null), 5000);
+      scheduleDismiss(() => setIngestError(null), 5000);
       return;
     }
 
@@ -216,7 +233,7 @@ export const LibraryModal: React.FC<LibraryModalProps> = ({
       setIngestError(`All ${failedCount} file(s) failed to process. Ensure OPENAI_API_KEY is set or local Whisper is installed.`);
     }
 
-    setTimeout(() => {
+    scheduleDismiss(() => {
       setIngestStatusMsg(null);
       setIngestError(null);
       setUploadQueue([]);

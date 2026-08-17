@@ -50,12 +50,27 @@ export const ClipStudio: React.FC<ClipStudioProps> = ({ videos, backendOnline })
     setJob(null);
     try {
       const { job_id } = await engineAnalyze(selectedVideoId, 6);
-      pollRef.current = setInterval(async () => {
+
+      // See ClipCard.startRender: re-running Analyze (or switching video and re-running)
+      // orphaned the previous interval, and its callback cleared `pollRef.current` — the
+      // NEW interval — when the old job finished. The analysis the user was watching then
+      // hung at its last reported status forever.
+      if (pollRef.current) clearInterval(pollRef.current);
+
+      const handle = setInterval(async () => {
+        const stop = () => {
+          clearInterval(handle);
+          if (pollRef.current === handle) pollRef.current = null;
+        };
         try {
           const j = await engineGetJob(job_id);
+          if (pollRef.current !== handle) {
+            clearInterval(handle);
+            return;
+          }
           setJob(j);
           if (j.status === 'done' || j.status === 'failed') {
-            if (pollRef.current) clearInterval(pollRef.current);
+            stop();
             if (j.status === 'done') {
               const fetched = await engineGetClips(selectedVideoId);
               setClips(fetched);
@@ -63,9 +78,10 @@ export const ClipStudio: React.FC<ClipStudioProps> = ({ videos, backendOnline })
           }
         } catch (err) {
           console.error('Analyze job poll failed:', err);
-          if (pollRef.current) clearInterval(pollRef.current);
+          stop();
         }
       }, 1200);
+      pollRef.current = handle;
     } catch (err: any) {
       setError(err.message || 'Analyze failed to start');
     }
