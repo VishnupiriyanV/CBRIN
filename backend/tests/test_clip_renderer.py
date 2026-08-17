@@ -64,3 +64,65 @@ class TestPresetsShape:
         for name in ("tiktok", "shorts"):
             p = cr.PRESETS[name]
             assert p["width"] / p["height"] == pytest.approx(9 / 16, rel=0.01)
+
+
+class TestEncoderSelectionProbesBeforeCommitting:
+    """`ffmpeg -encoders` reports what the BINARY was built with, not what the machine can
+    do — and imageio-ffmpeg ships one build to every install. Proven on the dev box: the same
+    ffmpeg lists h264_nvenc, h264_amf and h264_qsv, but h264_amf fails to encode.
+
+    Selecting on presence alone therefore chose h264_nvenc everywhere, including machines with
+    no NVIDIA GPU, where every render died with "ffmpeg failed (exit N)". _BEST_ENCODER_FLAGS
+    is cached after the first call, so that was unrecoverable for the process lifetime — no
+    renders at all, on hardware this local-first tool targets."""
+
+    ALL_LISTED = "h264_nvenc h264_amf h264_qsv libx264"
+
+    def _select(self, monkeypatch, works):
+        monkeypatch.setattr(cr, "_BEST_ENCODER_FLAGS", None)
+        monkeypatch.setattr(cr.media_service, "ffmpeg_exe", lambda: "ffmpeg")
+        monkeypatch.setattr(
+            cr.subprocess, "run",
+            lambda *a, **k: type("R", (), {"stdout": self.ALL_LISTED, "returncode": 0})(),
+        )
+        monkeypatch.setattr(cr, "_encoder_actually_works", works)
+        return cr._get_video_encoder_flags()
+
+    def test_unusable_encoder_is_skipped_for_the_next_one(self, monkeypatch):
+        flags = self._select(monkeypatch, lambda exe, f: f[1] != "h264_nvenc")
+        assert flags[1] == "h264_amf"
+
+    def test_falls_back_to_libx264_when_no_hardware_encoder_works(self, monkeypatch):
+        flags = self._select(monkeypatch, lambda exe, f: False)
+        assert flags[1] == "libx264"
+
+    def test_first_working_encoder_is_chosen(self, monkeypatch):
+        flags = self._select(monkeypatch, lambda exe, f: True)
+        assert flags[1] == "h264_nvenc"
+
+    def test_a_probe_that_raises_counts_as_unusable(self, monkeypatch):
+        def boom(exe, f):
+            raise OSError("probe blew up")
+        monkeypatch.setattr(cr, "_BEST_ENCODER_FLAGS", None)
+        monkeypatch.setattr(cr.media_service, "ffmpeg_exe", lambda: "ffmpeg")
+        monkeypatch.setattr(
+            cr.subprocess, "run",
+            lambda *a, **k: type("R", (), {"stdout": self.ALL_LISTED, "returncode": 0})(),
+        )
+        monkeypatch.setattr(cr, "_encoder_actually_works", boom)
+        # The outer try/except catches it and drops to CPU rather than failing selection.
+        assert cr._get_video_encoder_flags()[1] == "libx264"
+
+    def test_selection_is_cached_so_the_probe_runs_once(self, monkeypatch):
+        calls = {"n": 0}
+
+        def counting(exe, f):
+            calls["n"] += 1
+            return True
+
+        self._select(monkeypatch, counting)
+        first = calls["n"]
+        cr._get_video_encoder_flags()
+        cr._get_video_encoder_flags()
+        assert calls["n"] == first
+        monkeypatch.setattr(cr, "_BEST_ENCODER_FLAGS", None)

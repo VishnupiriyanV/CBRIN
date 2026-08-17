@@ -55,23 +55,65 @@ def _get_video_encoder_flags() -> List[str]:
     try:
         res = subprocess.run([exe, "-encoders"], capture_output=True, text=True, timeout=5)
         stdout = res.stdout or ""
-        if "h264_nvenc" in stdout:
-            print("[clip_renderer] Selected GPU hardware encoder: h264_nvenc (NVIDIA NVENC)")
-            _BEST_ENCODER_FLAGS = ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "20"]
-            return _BEST_ENCODER_FLAGS
-        elif "h264_amf" in stdout:
-            print("[clip_renderer] Selected GPU hardware encoder: h264_amf (AMD AMF)")
-            _BEST_ENCODER_FLAGS = ["-c:v", "h264_amf", "-quality", "speed", "-rc", "cqp", "-qp_p", "20", "-qp_i", "20"]
-            return _BEST_ENCODER_FLAGS
-        elif "h264_qsv" in stdout:
-            print("[clip_renderer] Selected GPU hardware encoder: h264_qsv (Intel QSV)")
-            _BEST_ENCODER_FLAGS = ["-c:v", "h264_qsv", "-global_quality", "20"]
+        for name, label, flags in _HARDWARE_ENCODERS:
+            if name not in stdout:
+                continue
+            if not _encoder_actually_works(exe, flags):
+                print(f"[clip_renderer] {name} is listed but cannot encode on this machine — skipping.")
+                continue
+            print(f"[clip_renderer] Selected GPU hardware encoder: {name} ({label})")
+            _BEST_ENCODER_FLAGS = flags
             return _BEST_ENCODER_FLAGS
     except Exception as e:
         print(f"[clip_renderer] Could not query ffmpeg hardware encoders ({e}), using libx264.")
 
+    print("[clip_renderer] No usable hardware encoder; falling back to libx264 (CPU).")
     _BEST_ENCODER_FLAGS = ["-c:v", "libx264", "-crf", "20", "-preset", "ultrafast"]
     return _BEST_ENCODER_FLAGS
+
+
+# Tried in order. Each entry is (encoder name as ffmpeg reports it, human label, flags).
+_HARDWARE_ENCODERS = [
+    ("h264_nvenc", "NVIDIA NVENC", ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "20"]),
+    ("h264_amf", "AMD AMF",
+     ["-c:v", "h264_amf", "-quality", "speed", "-rc", "cqp", "-qp_p", "20", "-qp_i", "20"]),
+    ("h264_qsv", "Intel QSV", ["-c:v", "h264_qsv", "-global_quality", "20"]),
+]
+
+
+def _encoder_actually_works(exe: str, flags: List[str]) -> bool:
+    """
+    Encode one second of test pattern to confirm the encoder RUNS, not merely that ffmpeg
+    lists it.
+
+    `ffmpeg -encoders` reports what the BINARY was built with, not what the machine can do —
+    and imageio-ffmpeg ships the same build to every install. Proven on the development box:
+    h264_nvenc and h264_qsv encode fine there, while h264_amf is listed and fails, on the same
+    ffmpeg, at the same moment.
+
+    Selecting on presence alone therefore picked h264_nvenc on every machine, including ones
+    with no NVIDIA GPU — where every render then died with "ffmpeg failed (exit N)". Because
+    _BEST_ENCODER_FLAGS is cached after the first call, that was unrecoverable for the life of
+    the process: not one bad render, but no renders at all, on hardware this local-first tool
+    is squarely aimed at.
+
+    Costs one ~1s probe per process, behind the same cache as the selection itself.
+    """
+    out_path = os.path.join(tempfile.gettempdir(), f"cbrin_encoder_probe_{os.getpid()}.mp4")
+    try:
+        probe = subprocess.run(
+            [exe, "-y", "-f", "lavfi", "-i", "testsrc=size=320x240:rate=10:duration=1",
+             *flags, out_path],
+            capture_output=True, text=True, timeout=30,
+        )
+        return probe.returncode == 0
+    except Exception:
+        return False
+    finally:
+        try:
+            os.remove(out_path)
+        except OSError:
+            pass
 
 
 def _run_ffmpeg(args: List[str]) -> None:
