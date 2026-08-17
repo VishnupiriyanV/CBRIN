@@ -123,18 +123,46 @@ def map_strings(obj: Any, fn: Callable[[str], str]) -> Any:
 
 
 def strip_banned_words(text: str, banned_words: List[str]) -> Tuple[str, List[str]]:
-    """Case-insensitive whole-phrase removal. Returns (cleaned_text, phrases_found)."""
+    """
+    Case-insensitive WHOLE-PHRASE removal. Returns (cleaned_text, phrases_found).
+
+    The match is bounded by lookarounds, without which this was a substring removal that
+    gutted unrelated words mid-token — and it fired on the SHIPPED default list, which
+    contains "unlock" and "delve":
+
+        "She unlocked the door"        -> "She ed the door"
+        "Unlocking that insight"       -> "ing that insight"
+        "We delved into the numbers"   -> "We d into the numbers"
+
+    Every inflected form of a banned word produced nonsense in the creator's published copy,
+    on every Studio tool, by default.
+
+    Lookarounds rather than \\b because a phrase may begin or end with punctuation
+    ("game-changer", "in today's world"), where \\b's meaning flips depending on the adjacent
+    character class.
+    """
     found: List[str] = []
     cleaned = text
     for phrase in banned_words:
         if not phrase:
             continue
-        pattern = re.compile(re.escape(phrase), re.IGNORECASE)
+        pattern = re.compile(rf"(?<!\w){re.escape(phrase)}(?!\w)", re.IGNORECASE)
         if pattern.search(cleaned):
             found.append(phrase)
             cleaned = pattern.sub('', cleaned)
-    cleaned = re.sub(r'\s{2,}', ' ', cleaned).strip()
-    return cleaned, found
+    # Removal leaves a hole: "a delve into" becomes "a  into". Collapse the whitespace and
+    # tidy the punctuation left stranded against it. The sentence may still read oddly —
+    # that is inherent to deleting a word rather than rewriting around it, and
+    # guardrail_notes.banned_words_removed reports what was taken out.
+    cleaned = re.sub(r'\s{2,}', ' ', cleaned)
+    if found:
+        # Only repair punctuation when something was actually cut, so text this guardrail did
+        # not touch passes through unaltered. A removed phrase leaves the punctuation it sat
+        # against stranded — mid-sentence as " ,", and at the start of a sentence as a leading
+        # ", nobody reads."
+        cleaned = re.sub(r'\s+([,.!?;:])', r'\1', cleaned)
+        cleaned = re.sub(r'^[\s,;:]+', '', cleaned)
+    return cleaned.strip(), found
 
 
 def enforce_banned_words(output: Any, banned_words: List[str]) -> Tuple[Any, List[str]]:

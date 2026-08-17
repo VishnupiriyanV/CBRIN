@@ -208,3 +208,55 @@ class TestRegenerateBlock:
     def test_regenerate_unknown_run_raises(self):
         with pytest.raises(sr.StudioError):
             sr.regenerate_block("nonexistent-run-id", "linkedin")
+
+
+class TestBannedWordsMatchWholePhrasesOnly:
+    """strip_banned_words had no boundaries, so it removed SUBSTRINGS — and it fired on the
+    shipped default list, which contains "unlock" and "delve":
+
+        "She unlocked the door"      -> "She ed the door"
+        "Unlocking that insight"     -> "ing that insight"
+        "We delved into the numbers" -> "We d into the numbers"
+
+    Every inflected form of a banned word produced nonsense in the creator's published copy,
+    on every Studio tool, by default."""
+
+    DEFAULTS = ["delve", "unlock", "game-changer", "in today's world"]
+
+    def test_inflected_forms_are_left_alone(self):
+        for text in (
+            "She unlocked the door and walked out.",
+            "Unlocking that insight took me three years.",
+            "We delved into the numbers together.",
+            "He is delving deeper than anyone.",
+        ):
+            cleaned, found = sr.strip_banned_words(text, self.DEFAULTS)
+            assert found == [], text
+            assert cleaned == text, text
+
+    def test_exact_phrases_are_still_removed(self):
+        cleaned, found = sr.strip_banned_words("Let me unlock the door.", self.DEFAULTS)
+        assert found == ["unlock"]
+        assert "unlock" not in cleaned.lower()
+
+    def test_hyphenated_and_apostrophe_phrases_match(self):
+        _c, found = sr.strip_banned_words("It was a genuine game-changer for us.", self.DEFAULTS)
+        assert found == ["game-changer"]
+        _c, found = sr.strip_banned_words("In today's world, nobody reads.", self.DEFAULTS)
+        assert found == ["in today's world"]
+
+    def test_phrase_embedded_in_a_longer_token_is_not_matched(self):
+        text = "The pregame-changerish thing."
+        cleaned, found = sr.strip_banned_words(text, self.DEFAULTS)
+        assert found == []
+        assert cleaned == text
+
+    def test_removal_does_not_strand_punctuation(self):
+        cleaned, _found = sr.strip_banned_words("In today's world, nobody reads.", self.DEFAULTS)
+        assert not cleaned.startswith(",")
+        assert cleaned == "nobody reads."
+
+    def test_untouched_text_is_returned_unaltered(self):
+        text = "A clean sentence with  deliberate  spacing."
+        cleaned, found = sr.strip_banned_words(text, self.DEFAULTS)
+        assert found == []
